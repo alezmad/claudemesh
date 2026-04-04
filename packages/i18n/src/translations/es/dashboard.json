@@ -1,0 +1,26 @@
+{
+  "user": {
+    "home": {
+      "title": "Panel",
+      "description": "Una vista general de la actividad de tu cuenta personal en todos tus proyectos."
+    }
+  },
+  "organization": {
+    "home": {
+      "title": "Panel de la organización",
+      "description": "Una vista general de la actividad y rendimiento de tu organización en todos los proyectos."
+    }
+  },
+  "chart": {
+    "showing": "Mostrando visitantes totales del último período",
+    "trending": "Tendencia de hasta 5.2% este mes",
+    "period": "Enero - Junio 2024",
+    "bar": "Gráfico de barras",
+    "pie": "Gráfico circular",
+    "area": "Gráfico de área",
+    "line": "Gráfico de líneas",
+    "shape": "Gráfico de formas",
+    "radial": "Gráfico radial",
+    "radar": "Gráfico de radar"
+  }
+}

@@ -1,0 +1,54 @@
+---
+description: Cognitive orientation - project identity and constraints
+alwaysApply: true
+---
+
+# LiquidRender
+
+DSL-to-React rendering engine built on TurboStarter.
+
+## What This Is
+
+A system that compiles a domain-specific language into React UI components. The DSL describes interfaces declaratively; the renderer produces interactive dashboards, forms, and data visualizations.
+
+## Structure
+
+```
+packages/liquid-render/     ← Core engine
+├── src/compiler/           ← DSL → render tree
+├── src/renderer/           ← React components (47 components)
+│   └── components/         ← DataTable, Charts, Forms, Layout
+└── src/types/              ← Type definitions
+
+packages/liquid-code/       ← Code generation
+packages/liquid-survey/     ← Survey/form builder
+
+apps/web/                   ← Next.js web app
+apps/mobile/                ← Expo mobile app
+packages/db/                ← Drizzle schemas (10 tables)
+```
+
+## Core Files
+
+| What | Where |
+|------|-------|
+| Main renderer | `liquid-render/src/renderer/LiquidUI.tsx` |
+| Design tokens | `liquid-render/src/renderer/components/utils.ts` |
+| DSL types | `liquid-render/src/types/` |
+| DB schemas | `packages/db/src/schema/` |
+
+## Before Building Anything
+
+**Read `capabilities.yaml` first.** Most things already exist.
+
+## Conventions
+
+- Design tokens in `utils.ts` - never hardcode colors/spacing
+- Components need `data-liquid-type` attribute
+- Handle empty/null states in all components
+
+## Expand
+
+- Creating components → `cache/answers/how-to-create-component.md`
+- Full entity map → `knowledge.json`
+- Library docs → `libraries.json` + MCP

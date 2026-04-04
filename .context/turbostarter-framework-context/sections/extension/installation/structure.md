@@ -1,0 +1,128 @@
+---
+title: Project structure
+description: Learn about the project structure and how to navigate it.
+url: /docs/extension/installation/structure
+---
+
+# Project structure
+
+The main directories in the project are:
+
+* `apps` - the location of the main apps
+* `packages` - the location of the shared code and the API
+
+### `apps` Directory
+
+This is where the apps live. It includes web app (Next.js), mobile app (React Native - Expo), and the browser extension (WXT - Vite + React). Each app has its own directory.
+
+### `packages` Directory
+
+This is where the shared code and the API for packages live. It includes the following:
+
+* shared libraries (database, mailers, cms, billing, etc.)
+* shared features (auth, mails, billing, ai etc.)
+* UI components (buttons, forms, modals, etc.)
+
+All apps can use and reuse the API exported from the packages directory. This makes it easy to have one, or many apps in the same codebase, sharing the same code.
+
+## Repository structure
+
+By default the monorepo contains the following apps and packages:
+
+<Files>
+  <Folder name="apps" defaultOpen>
+    <Folder name="web - Web app (Next.js)" />
+
+    <Folder name="mobile - Mobile app (React Native - Expo)" />
+
+    <Folder name="extension - Browser extension (WXT - Vite + React)" />
+  </Folder>
+
+  <Folder name="packages" defaultOpen>
+    <Folder name="analytics - Analytics setup" />
+
+    <Folder name="api - API server (including all features logic)" />
+
+    <Folder name="auth - Authentication setup" />
+
+    <Folder name="billing - Billing config and providers" />
+
+    <Folder name="cms - CMS setup and providers" />
+
+    <Folder name="db - Database setup" />
+
+    <Folder name="email - Mail templates and providers" />
+
+    <Folder name="i18n - Internationalization setup" />
+
+    <Folder name="shared - Shared utilities and helpers" />
+
+    <Folder name="storage - Storage setup" />
+
+    <Folder name="ui - Atomic UI components">
+      <Folder name="shared" />
+
+      <Folder name="web" />
+
+      <Folder name="mobile" />
+    </Folder>
+  </Folder>
+
+  <Folder name="tooling" defaultOpen>
+    <Folder name="eslint - ESLint config" />
+
+    <Folder name="github - Github actions" />
+
+    <Folder name="prettier - Prettier config" />
+
+    <Folder name="typescript - TypeScript config" />
+  </Folder>
+</Files>
+
+## Browser extension application structure
+
+The browser extension application is located in the `apps/extension` folder. It contains the following folders:
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <Folder name="app" defaultOpen>
+      <Folder name="background - Background service worker" />
+
+      <Folder name="content - Content scripts" />
+
+      <Folder name="devtools - Devtools page with custom panels" />
+
+      <Folder name="newtab - New tab page" />
+
+      <Folder name="options - Options page" />
+
+      <Folder name="popup - Popup window" />
+
+      <Folder name="sidepanel - Side panel" />
+
+      <Folder name="tabs - Custom pages shipped with the extension" />
+    </Folder>
+
+    <Folder name="assets - Optimized static assets" />
+
+    <Folder name="config - App config" />
+
+    <Folder name="lib - Communication with packages" />
+
+    <Folder name="modules - Application modules" />
+  </Folder>
+
+  <File name=".env.local" />
+
+  <File name="env.config.ts" />
+
+  <File name="eslint.config.js" />
+
+  <File name="package.json" />
+
+  <File name="tsconfig.json" />
+
+  <File name="turbo.json" />
+
+  <File name="wxt.config.ts" />
+</Files>

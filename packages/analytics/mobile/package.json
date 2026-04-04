@@ -1,0 +1,34 @@
+{
+  "name": "@turbostarter/analytics-mobile",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./env": "./src/env.ts"
+  },
+  "scripts": {
+    "clean": "git clean -xdf .cache .turbo dist node_modules",
+    "format": "prettier --check . --ignore-path ../../../.gitignore",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@turbostarter/eslint-config": "workspace:*",
+    "@turbostarter/prettier-config": "workspace:*",
+    "@turbostarter/tsconfig": "workspace:*",
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:"
+  },
+  "prettier": "@turbostarter/prettier-config",
+  "dependencies": {
+    "@turbostarter/analytics": "workspace:*",
+    "@turbostarter/shared": "workspace:*",
+    "envin": "catalog:",
+    "mixpanel-react-native": "3.1.2",
+    "posthog-react-native": "4.14.3",
+    "react-native": "catalog:",
+    "zod": "catalog:"
+  }
+}

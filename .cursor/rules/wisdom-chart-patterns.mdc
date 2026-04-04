@@ -1,0 +1,340 @@
+---
+description: ---
+---
+
+---
+title: "Chart Component Patterns"
+purpose: "Creating or modifying chart components in LiquidRender"
+answers:
+  - "How do I use Recharts in LiquidRender?"
+  - "What color palette should charts use?"
+  - "How do I configure axes in chart components?"
+  - "How do I handle SSR for charts?"
+  - "How do I add legends and tooltips consistently?"
+  - "How do I transform data for Recharts?"
+  - "How do I handle empty chart states?"
+
+read_when: "You're creating, modifying, or debugging chart components"
+skip_when: "You're working on non-chart components like tables or forms"
+
+depends_on:
+  files:
+    - "packages/liquid-render/src/renderer/components/utils.ts"
+    - "packages/liquid-render/src/renderer/components/line-chart.tsx"
+    - "packages/liquid-render/src/renderer/components/bar-chart.tsx"
+    - "packages/liquid-render/src/renderer/components/pie-chart.tsx"
+    - "packages/liquid-render/src/renderer/components/area-chart.tsx"
+  entities:
+    - "chartColors"
+    - "tokens"
+    - "isBrowser"
+    - "fieldToLabel"
+    - "ResponsiveContainer"
+  concepts:
+    - "Recharts library"
+    - "SSR hydration"
+    - "Design tokens"
+
+confidence: 0.85
+verified_at: "2025-12-27"
+---
+
+# Chart Component Patterns
+
+> **Read when:** You're creating, modifying, or debugging chart components
+>
+> **Skip when:** You're working on non-chart components like tables or forms
+
+## Sections
+
+| Section | Summary |
+|---------|---------|
+| [Recharts Setup](#recharts-setup) | ResponsiveContainer and SSR handling |
+| [Color Palette](#color-palette) | chartColors array from utils.ts |
+| [Axis Configuration](#axis-configuration) | XAxis and YAxis consistent styling |
+| [Legend & Tooltip](#legend--tooltip) | Tooltip and Legend styling patterns |
+| [Data Transformation](#data-transformation) | Auto-detecting x/y fields from data |
+| [Empty State Handling](#empty-state-handling) | Placeholder UI for no-data scenarios |
+
+---
+
+## Recharts Setup
+
+> **TL;DR:** Wrap all charts in `ResponsiveContainer` and check `isBrowser` before rendering Recharts components.
+
+Charts must be responsive and handle server-side rendering gracefully. The `ResponsiveContainer` makes charts fluid, while `isBrowser` prevents hydration mismatches.
+
+### Basic Structure
+
+```tsx
+import {
+  LineChart as RechartsLineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from 'recharts';
+import { isBrowser } from './utils';
+
+// SSR fallback - always check before rendering Recharts
+if (!isBrowser) {
+  return (
+    <div data-liquid-type="line" style={styles.wrapper}>
+      {label && <div style={styles.header}>{label}</div>}
+      <div style={styles.placeholder}>
+        [Line chart - {chartData.length} points]
+      </div>
+    </div>
+  );
+}
+
+// Client-side render with ResponsiveContainer
+return (
+  <ResponsiveContainer width="100%" height={220}>
+    <RechartsLineChart data={chartData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+      {/* Chart components */}
+    </RechartsLineChart>
+  </ResponsiveContainer>
+);
+```
+
+### Key Points
+
+- **Always** use `ResponsiveContainer` with `width="100%"` and explicit `height`
+- Default chart height is `220px` across all chart types
+- Use `margin={{ top: 5, right: 20, bottom: 5, left: 0 }}` for consistent spacing
+- The SSR placeholder shows chart type and data summary in brackets
+
+---
+
+## Color Palette
+
+> **TL;DR:** Import `chartColors` from utils.ts and cycle through with modulo for multi-series charts.
+
+The color palette is defined in `utils.ts` and provides 8 harmonious colors for data visualization:
+
+```tsx
+import { chartColors } from './utils';
+
+// chartColors = [
+//   '#3b82f6', // blue
+//   '#22c55e', // green
+//   '#f59e0b', // amber
+//   '#ef4444', // red
+//   '#8b5cf6', // violet
+//   '#ec4899', // pink
+//   '#06b6d4', // cyan
+//   '#84cc16', // lime
+// ]
+
+// Single series - use first color
+<Line stroke={chartColors[0]} />
+
+// Multiple series - cycle with modulo
+{numericFields.map((field, i) => (
+  <Line
+    key={field}
+    stroke={chartColors[i % chartColors.length]}
+    fill={chartColors[i % chartColors.length]}
+  />
+))}
+```
+
+### Color Usage by Chart Type
+
+| Chart Type | Color Property | Example |
+|------------|----------------|---------|
+| Line | `stroke`, `dot.fill` | `stroke={chartColors[0]}` |
+| Bar | `fill` | `fill={chartColors[i % chartColors.length]}` |
+| Area | `stroke`, `fill` (often gradient) | `stroke={chartColors[0]}` |
+| Pie | `Cell` fill | `<Cell fill={chartColors[index % chartColors.length]} />` |
+
+---
+
+## Axis Configuration
+
+> **TL;DR:** Use `tokens.colors.mutedForeground` for tick text and `tokens.colors.border` for axis lines.
+
+All charts follow the same axis styling pattern for visual consistency:
+
+```tsx
+import { tokens } from './utils';
+
+<XAxis
+  dataKey={xKey}
+  tick={{ fontSize: 12, fill: tokens.colors.mutedForeground }}
+  stroke={tokens.colors.border}
+/>
+<YAxis
+  tick={{ fontSize: 12, fill: tokens.colors.mutedForeground }}
+  stroke={tokens.colors.border}
+/>
+<CartesianGrid strokeDasharray="3 3" stroke={tokens.colors.border} />
+```
+
+### Axis Style Reference
+
+| Property | Value | Purpose |
+|----------|-------|---------|
+| `tick.fontSize` | `12` | Readable but compact labels |
+| `tick.fill` | `tokens.colors.mutedForeground` | Subdued text color |
+| `stroke` | `tokens.colors.border` | Axis line color |
+| `strokeDasharray` | `"3 3"` | CartesianGrid dash pattern |
+
+---
+
+## Legend & Tooltip
+
+> **TL;DR:** Style tooltips with `tokens.colors.card` background and `tokens.colors.border`; use `fontSize: tokens.fontSize.sm` for legends.
+
+Consistent tooltip and legend styling across all chart types:
+
+```tsx
+import { tokens } from './utils';
+
+<Tooltip
+  contentStyle={{
+    backgroundColor: tokens.colors.card,
+    border: `1px solid ${tokens.colors.border}`,
+    borderRadius: tokens.radius.md,
+    fontSize: tokens.fontSize.sm,
+  }}
+  // Bar charts also use cursor styling:
+  cursor={{ fill: tokens.colors.muted }}
+/>
+
+<Legend wrapperStyle={{ fontSize: tokens.fontSize.sm }} />
+```
+
+### Tooltip Variations
+
+```tsx
+// Bar chart adds cursor highlight
+<Tooltip cursor={{ fill: tokens.colors.muted }} />
+
+// Pie chart has no cursor (circular)
+<Tooltip contentStyle={{...}} />
+```
+
+---
+
+## Data Transformation
+
+> **TL;DR:** Use `detectXYFields()` to auto-detect category (string) and value (numeric) fields; use `fieldToLabel()` for display names.
+
+Charts automatically detect which fields to use based on data types:
+
+```tsx
+import { fieldToLabel } from './utils';
+
+// Helper to check numeric values
+function isNumeric(value: unknown): value is number {
+  return typeof value === 'number' && !isNaN(value);
+}
+
+// Auto-detect x (category) and y (numeric) fields
+function detectXYFields(data: ChartDataPoint[]): { x: string; y: string } {
+  if (data.length === 0) return { x: 'x', y: 'y' };
+
+  const firstRow = data[0]!;
+  const keys = Object.keys(firstRow);
+
+  // Find first string-like field for x (category/date)
+  const xField = keys.find(k => {
+    const val = firstRow[k];
+    return typeof val === 'string' || val instanceof Date;
+  }) || keys[0] || 'x';
+
+  // Find first numeric field for y
+  const yField = keys.find(k => {
+    const val = firstRow[k];
+    return isNumeric(val) && k !== xField;
+  }) || keys[1] || 'y';
+
+  return { x: xField, y: yField };
+}
+
+// Detect ALL numeric fields for multi-series charts
+function detectAllNumericFields(data: ChartDataPoint[], xField: string): string[] {
+  if (data.length === 0) return [];
+  const firstRow = data[0]!;
+  return Object.keys(firstRow).filter(k =>
+    k !== xField && isNumeric(firstRow[k])
+  );
+}
+
+// Usage: convert field names to labels
+<Line
+  dataKey={field}
+  name={fieldToLabel(field)}  // "total_sales" -> "Total Sales"
+/>
+```
+
+### Explicit vs Auto-Detection
+
+```tsx
+// Allow explicit binding override
+const { x: xKey, y: yKey } = useMemo(() => {
+  const explicitX = block.binding?.x;
+  const explicitY = block.binding?.y;
+  if (explicitX && explicitY) {
+    return { x: explicitX, y: explicitY };
+  }
+  return detectXYFields(chartData);  // Fallback to auto-detect
+}, [block.binding, chartData]);
+```
+
+---
+
+## Empty State Handling
+
+> **TL;DR:** Return a styled placeholder with "No data available" message when `chartData.length === 0`.
+
+Every chart must handle empty data gracefully:
+
+```tsx
+// Empty state with consistent styling
+if (chartData.length === 0) {
+  return (
+    <div
+      data-liquid-type="line"  // Use appropriate type
+      style={styles.wrapper}
+      role="img"
+      aria-label={`${label ? label + ': ' : ''}Empty line chart - no data available`}
+    >
+      {label && <div style={styles.header}>{label}</div>}
+      <div style={styles.placeholder}>No data available</div>
+    </div>
+  );
+}
+
+// Placeholder style definition
+const styles = {
+  placeholder: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '220px',
+    color: tokens.colors.mutedForeground,
+    fontSize: tokens.fontSize.sm,
+    textAlign: 'center',
+  } as React.CSSProperties,
+};
+```
+
+### State Hierarchy
+
+1. **SSR fallback** - Check `isBrowser` first, return text placeholder
+2. **Empty state** - Check `chartData.length === 0`, return "No data available"
+3. **Normal render** - Full chart with data
+
+---
+
+## See Also
+
+- [utils.ts](/packages/liquid-render/src/renderer/components/utils.ts) - Design tokens and shared utilities
+- [COMPONENT-GUIDE.md](/packages/liquid-render/docs/COMPONENT-GUIDE.md) - General component patterns
+- [Recharts Documentation](https://recharts.org/en-US/) - Official Recharts API reference

@@ -1,0 +1,120 @@
+---
+title: Components
+description: Manage and customize your app components.
+url: /docs/web/customization/components
+---
+
+# Components
+
+For the components part, we're using [shadcn/ui](https://ui.shadcn.com) for atomic, accessible and highly customizable components.
+
+<Callout type="info" title="Why shadcn/ui?">
+  shadcn/ui is a powerful tool that allows you to generate pre-designed
+  components with a single command. It's built with Tailwind CSS and Radix UI,
+  and it's highly customizable.
+</Callout>
+
+TurboStarter defines two packages that are responsible for the UI part of your app:
+
+* `@turbostarter/ui` - shared styles, [themes](/docs/web/customization/styling#themes) and assets (e.g. icons)
+* `@turbostarter/ui-web` - pre-built UI web components, ready to use in your app
+
+## Adding a new component
+
+There are basically two ways to add a new component:
+
+<Tabs items={["Using the CLI", "Copy-pasting"]}>
+  <Tab value="Using the CLI">
+    TurboStarter is fully compatible with [shadcn CLI](https://ui.shadcn.com/docs/cli), so you can generate new components with single command.
+
+    Run the following command from the **root** of your project:
+
+    ```bash
+    pnpm --filter @turbostarter/ui-web ui:add
+    ```
+
+    This will launch an interactive command-line interface to guide you through the process of adding a new component where you can pick which component you want to add.
+
+    ```bash
+    Which components would you like to add? > Space to select. A to toggle all.
+    Enter to submit.
+
+    ◯  accordion
+    ◯  alert
+    ◯  alert-dialog
+    ◯  aspect-ratio
+    ◯  avatar
+    ◯  badge
+    ◯  button
+    ◯  calendar
+    ◯  card
+    ◯  checkbox
+    ```
+
+    Newly created components will appear in the `packages/ui/web/src` directory.
+  </Tab>
+
+  <Tab value="Copy-pasting">
+    You can always copy-paste a component from the [shadcn/ui](https://ui.shadcn.com/docs/components) website and modify it to your needs.
+
+    This is possible, because the components are headless and don't need (in most cases) any additional dependencies.
+
+    Copy code from the website, create a new file in the `packages/ui/web/src` directory and paste the code into the file.
+  </Tab>
+</Tabs>
+
+<Callout title="Keep it atomic" type="warn">
+  Keep in mind that you should always try to keep shared components as atomic as possible. This will make it easier to reuse them and to build specific views by composition.
+
+  E.g. include components like `Button`, `Input`, `Card`, `Dialog` in shared package, but keep specific components like `LoginForm` in your app directory.
+</Callout>
+
+## Using components
+
+Each component is a standalone entity which has a separate export from the package. It helps to keep things modular, avoid unnecessary dependencies and make tree-shaking possible.
+
+To import a component from the UI package, use the following syntax:
+
+```tsx title="components/my-component.tsx"
+// [!code word:card]
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardFooter,
+  CardTitle,
+  CardDescription,
+} from "@turbostarter/ui-web/card";
+```
+
+Then you can use it to build a component specific to your app:
+
+```tsx title="components/my-component.tsx"
+export function MyComponent() {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>My Component</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p>My Component Content</p>
+      </CardContent>
+      <CardFooter>
+        <Button>Click me</Button>
+      </CardFooter>
+    </Card>
+  );
+}
+```
+
+<Callout title="Recommendation: use v0 to generate layouts">
+  We recommend using [v0](https://v0.dev) to generate layouts for your app. It's a powerful tool that allows you to generate layouts from the natural language instructions.
+
+  Of course, **it won't replace a designer**, but it can be a good starting point for your layout.
+</Callout>
+
+<Cards>
+  <Card href="https://ui.shadcn.com/" title="shadcn/ui" description="ui.shadcn.com" />
+
+  <Card href="https://v0.dev/chat" title="v0 by Vercel" description="v0.dev" />
+</Cards>

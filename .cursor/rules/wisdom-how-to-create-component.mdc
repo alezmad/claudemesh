@@ -1,0 +1,386 @@
+---
+description: ---
+---
+
+---
+title: How to Create a LiquidRender Component
+purpose: Creating or modifying LiquidRender components
+answers:
+  - How should I structure a component file?
+  - How do I use design tokens?
+  - What's the difference between dynamic and static variants?
+  - How do I handle empty states?
+  - How do I format values for display?
+read_when: Creating or modifying a component
+skip_when: Just using existing components
+depends_on:
+  files:
+    - packages/liquid-render/src/renderer/components/utils.ts
+    - packages/liquid-render/docs/COMPONENT-GUIDE.md
+---
+
+# How to Create a LiquidRender Component
+
+> **Read when:** Creating or modifying a component
+
+## Sections
+
+| Section | Summary |
+|---------|---------|
+| [File Structure](#file-structure) | Types, Styles, Helpers, Sub-components, Main, Static |
+| [Design Tokens](#design-tokens) | Import from utils.ts, never hardcode values |
+| [Data Attribute](#data-attribute) | Required `data-liquid-type` on root element |
+| [Empty States](#empty-states) | Always handle null/empty data gracefully |
+| [Value Formatting](#value-formatting) | Use formatDisplayValue() and fieldToLabel() |
+| [Static Variants](#static-variants) | Provide both dynamic and static exports |
+| [SSR Handling](#ssr-handling) | Browser detection for chart components |
+| [Checklist](#checklist) | Quick validation before submitting |
+
+---
+
+## File Structure
+
+> **TL;DR:** Follow strict section order: Types, Styles, Helpers, Sub-components, Main, Static.
+
+Every component file uses section headers for organization:
+
+```tsx
+// [ComponentName] Component - Brief description
+import React from 'react';
+import type { LiquidComponentProps } from './utils';
+import { tokens, cardStyles, mergeStyles } from './utils';
+import { resolveBinding } from '../data-context';
+
+// ============================================================================
+// Types
+// ============================================================================
+
+interface ComponentSpecificType { ... }
+
+// ============================================================================
+// Styles
+// ============================================================================
+
+const styles = {
+  wrapper: { ... },
+};
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+function helperFunction() { ... }
+
+// ============================================================================
+// Sub-components (if needed)
+// ============================================================================
+
+function SubComponent() { ... }
+
+// ============================================================================
+// Main Component
+// ============================================================================
+
+export function ComponentName({ block, data }: LiquidComponentProps): React.ReactElement {
+  // 1. Resolve bindings
+  const value = resolveBinding(block.binding, data);
+
+  // 2. Extract block properties
+  const label = block.label;
+  const color = getBlockColor(block);
+
+  // 3. Render
+  return (
+    <div data-liquid-type="typename" style={styles.wrapper}>
+      {/* content */}
+    </div>
+  );
+}
+
+// ============================================================================
+// Static Component (standalone usage)
+// ============================================================================
+
+interface StaticComponentProps { ... }
+
+export function StaticComponent(props: StaticComponentProps): React.ReactElement {
+  // For use outside LiquidUI context
+}
+
+export default ComponentName;
+```
+
+---
+
+## Design Tokens
+
+> **TL;DR:** Import `tokens` from utils.ts. Never hardcode colors, spacing, or sizes.
+
+```tsx
+import { tokens } from './utils';
+
+// CORRECT
+padding: tokens.spacing.md,
+fontSize: tokens.fontSize.sm,
+color: tokens.colors.foreground,
+borderRadius: tokens.radius.lg,
+
+// INCORRECT - never hardcode
+padding: '16px',
+fontSize: '14px',
+color: '#0a0a0a',
+```
+
+### Available Token Categories
+
+| Category | Examples | Values |
+|----------|----------|--------|
+| `tokens.colors.*` | `foreground`, `border`, `success` | CSS variables with fallbacks |
+| `tokens.spacing.*` | `xs`, `sm`, `md`, `lg`, `xl`, `2xl` | 4px to 48px |
+| `tokens.radius.*` | `sm`, `md`, `lg`, `xl`, `full` | 4px to 9999px |
+| `tokens.fontSize.*` | `xs`, `sm`, `base`, `lg`, `xl` | 12px to 36px |
+| `tokens.fontWeight.*` | `normal`, `medium`, `semibold`, `bold` | 400 to 700 |
+| `tokens.shadow.*` | `none`, `sm`, `md`, `lg` | Box shadows |
+| `tokens.transition.*` | `fast`, `normal`, `slow` | 150ms to 300ms |
+
+### Style Helpers
+
+```tsx
+import { cardStyles, buttonStyles, inputStyles, mergeStyles } from './utils';
+
+// Card-like containers
+const styles = {
+  wrapper: mergeStyles(cardStyles(), {
+    padding: tokens.spacing.md,
+  }),
+};
+
+// Buttons with variants
+const btnStyle = buttonStyles('default', 'md'); // variant, size
+
+// Input fields
+const inputStyle = inputStyles({ /* overrides */ });
+```
+
+### Chart Colors
+
+```tsx
+import { chartColors } from './utils';
+
+// Consistent palette for data visualization
+stroke={chartColors[i % chartColors.length]}
+```
+
+---
+
+## Data Attribute
+
+> **TL;DR:** Every component MUST have `data-liquid-type` on its root element.
+
+```tsx
+<div data-liquid-type="kpi" style={styles.wrapper}>
+<div data-liquid-type="line" style={styles.wrapper}>
+<div data-liquid-type="table" style={styles.wrapper}>
+```
+
+This enables:
+- CSS targeting for styling overrides
+- Testing queries for component selection
+- Debug inspection in DevTools
+
+---
+
+## Empty States
+
+> **TL;DR:** Always check for null/empty data and render a graceful fallback.
+
+```tsx
+if (!data || data.length === 0) {
+  return (
+    <div style={styles.wrapper}>
+      {label && <div style={styles.header}>{label}</div>}
+      <div style={styles.empty}>No data available</div>
+    </div>
+  );
+}
+```
+
+Handle all edge cases:
+- `null` or `undefined` data
+- Empty arrays
+- Missing required fields
+
+---
+
+## Value Formatting
+
+> **TL;DR:** Use `formatDisplayValue()` for values and `fieldToLabel()` for auto-labels.
+
+### formatDisplayValue()
+
+```tsx
+import { formatDisplayValue } from './utils';
+
+<span>{formatDisplayValue(value)}</span>
+```
+
+Handles:
+- Large numbers: `1234567` becomes `1.2M`
+- Thousands: `12345` becomes `12.3K`
+- Null/undefined: displays `--`
+- Booleans: `Yes`/`No`
+- Dates: Localized format
+
+### fieldToLabel()
+
+```tsx
+import { fieldToLabel } from './utils';
+
+// Auto-generate labels from field names
+fieldToLabel('totalRevenue')  // "Total Revenue"
+fieldToLabel('order_count')   // "Order Count"
+fieldToLabel('avgValue')      // "Avg Value"
+```
+
+### Common Pattern
+
+```tsx
+const label = block.label || fieldToLabel(block.binding?.field || '');
+```
+
+---
+
+## Static Variants
+
+> **TL;DR:** Export both `ComponentName` (dynamic) and `StaticComponent` (standalone).
+
+### Dynamic Component (DSL-driven)
+
+Used by the LiquidUI renderer. Receives `LiquidComponentProps`:
+
+```tsx
+export function DataTable({ block, data }: LiquidComponentProps) {
+  const resolvedData = resolveBinding(block.binding, data);
+  // ...
+}
+```
+
+### Static Component (standalone)
+
+Used directly in React apps with explicit props:
+
+```tsx
+interface StaticTableProps {
+  data: Record<string, unknown>[];
+  columns?: string[];
+  title?: string;
+  sortable?: boolean;
+}
+
+export function StaticTable({ data, columns, title, sortable }: StaticTableProps) {
+  // No binding resolution needed
+}
+```
+
+### Export Pattern
+
+```tsx
+// In component file
+export { ComponentName, StaticComponent };
+export default ComponentName;
+
+// In index.ts - register for DSL usage
+export const liquidComponents = {
+  typename: ComponentName,
+};
+```
+
+---
+
+## SSR Handling
+
+> **TL;DR:** Use `isBrowser` check for components requiring browser APIs.
+
+```tsx
+import { isBrowser } from './utils';
+
+export function ChartComponent({ block, data }: LiquidComponentProps) {
+  if (!isBrowser) {
+    return (
+      <div style={styles.placeholder}>
+        [Chart placeholder - {data.length} points]
+      </div>
+    );
+  }
+
+  // Browser-only rendering (Recharts, etc.)
+  return (
+    <ResponsiveContainer>
+      ...
+    </ResponsiveContainer>
+  );
+}
+```
+
+---
+
+## Checklist
+
+Before submitting a new component, verify:
+
+- [ ] File follows standard structure with section headers
+- [ ] Uses `tokens` for all style values (no hardcoded colors/spacing)
+- [ ] Has `data-liquid-type` attribute on root element
+- [ ] Handles empty/null data states
+- [ ] Uses `formatDisplayValue()` for value display
+- [ ] Uses `fieldToLabel()` for auto-labels
+- [ ] Has SSR placeholder if browser-dependent
+- [ ] Includes both dynamic and static variants
+- [ ] Registered in `liquidComponents` map
+- [ ] Exported from `index.ts`
+
+---
+
+## Quick Reference
+
+### Imports
+
+```tsx
+import type { LiquidComponentProps } from './utils';
+import {
+  tokens,
+  chartColors,
+  cardStyles,
+  buttonStyles,
+  inputStyles,
+  mergeStyles,
+  getLayoutStyles,
+  getBlockColor,
+  formatDisplayValue,
+  fieldToLabel,
+  generateId,
+  isBrowser,
+} from './utils';
+import { resolveBinding } from '../data-context';
+```
+
+### Props Interface
+
+```tsx
+interface LiquidComponentProps {
+  block: Block;        // Parsed block from DSL
+  data: DataContext;   // Data for binding resolution
+  children?: ReactNode;
+  className?: string;
+}
+```
+
+### Block Properties
+
+```tsx
+const value = resolveBinding(block.binding, data);
+const label = block.label || fieldToLabel(block.binding?.field || '');
+const color = getBlockColor(block);
+const layoutStyles = getLayoutStyles(block);
+const columns = block.columns;
+```

@@ -1,0 +1,10 @@
+{
+  "name": "scripts",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev": "node ./src/dev.mjs",
+    "requirements": "node ./src/requirements.mjs",
+    "license": "node ./src/license.mjs"
+  }
+}

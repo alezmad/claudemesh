@@ -1,0 +1,887 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "turbostarter-wireframes",
+  "elements": [
+    {
+      "id": "sidebar-container",
+      "type": "rectangle",
+      "x": 0,
+      "y": 0,
+      "width": 280,
+      "height": 900,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#fafafa",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "logo-area",
+      "type": "rectangle",
+      "x": 24,
+      "y": 24,
+      "width": 160,
+      "height": 40,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#ffffff",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "logo-group"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 8
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "logo-icon",
+      "type": "rectangle",
+      "x": 36,
+      "y": 32,
+      "width": 24,
+      "height": 24,
+      "strokeColor": "#f97316",
+      "backgroundColor": "#f97316",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 30,
+      "groupIds": [
+        "sidebar-group",
+        "logo-group"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "logo-text",
+      "type": "text",
+      "x": 68,
+      "y": 34,
+      "width": 80,
+      "height": 20,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "logo-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "MCPGet",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "baseline": 14
+    },
+    {
+      "id": "admin-badge",
+      "type": "rectangle",
+      "x": 196,
+      "y": 32,
+      "width": 60,
+      "height": 24,
+      "strokeColor": "#f97316",
+      "backgroundColor": "#f97316",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 30,
+      "groupIds": [
+        "sidebar-group",
+        "logo-group"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "admin-badge-text",
+      "type": "text",
+      "x": 206,
+      "y": 36,
+      "width": 40,
+      "height": 16,
+      "strokeColor": "#f97316",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "logo-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "Admin",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "baseline": 10
+    },
+    {
+      "id": "section-divider-1",
+      "type": "line",
+      "x": 24,
+      "y": 88,
+      "width": 232,
+      "height": 0,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          232,
+          0
+        ]
+      ]
+    },
+    {
+      "id": "section-label-admin-text",
+      "type": "text",
+      "x": 24,
+      "y": 100,
+      "width": 50,
+      "height": 14,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "section-admin"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "ADMIN",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "baseline": 9
+    },
+    {
+      "id": "nav-home-active",
+      "type": "rectangle",
+      "x": 24,
+      "y": 120,
+      "width": 232,
+      "height": 40,
+      "strokeColor": "transparent",
+      "backgroundColor": "#f97316",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 8
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "nav-home-icon",
+      "type": "rectangle",
+      "x": 36,
+      "y": 130,
+      "width": 20,
+      "height": 20,
+      "strokeColor": "#ffffff",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "nav-home-text",
+      "type": "text",
+      "x": 64,
+      "y": 130,
+      "width": 60,
+      "height": 20,
+      "strokeColor": "#ffffff",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "Home",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "baseline": 12
+    },
+    {
+      "id": "nav-users",
+      "type": "rectangle",
+      "x": 24,
+      "y": 168,
+      "width": 232,
+      "height": 40,
+      "strokeColor": "transparent",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 8
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "nav-users-icon",
+      "type": "rectangle",
+      "x": 36,
+      "y": 178,
+      "width": 20,
+      "height": 20,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "nav-users-text",
+      "type": "text",
+      "x": 64,
+      "y": 178,
+      "width": 60,
+      "height": 20,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "Users",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "baseline": 12
+    },
+    {
+      "id": "nav-orgs",
+      "type": "rectangle",
+      "x": 24,
+      "y": 216,
+      "width": 232,
+      "height": 40,
+      "strokeColor": "transparent",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 8
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "nav-orgs-icon",
+      "type": "rectangle",
+      "x": 36,
+      "y": 226,
+      "width": 20,
+      "height": 20,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "nav-orgs-text",
+      "type": "text",
+      "x": 64,
+      "y": 226,
+      "width": 100,
+      "height": 20,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "Organizations",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "baseline": 12
+    },
+    {
+      "id": "nav-customers",
+      "type": "rectangle",
+      "x": 24,
+      "y": 264,
+      "width": 232,
+      "height": 40,
+      "strokeColor": "transparent",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 8
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "nav-customers-icon",
+      "type": "rectangle",
+      "x": 36,
+      "y": 274,
+      "width": 20,
+      "height": 20,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "nav-customers-text",
+      "type": "text",
+      "x": 64,
+      "y": 274,
+      "width": 80,
+      "height": 20,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-admin"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "Customers",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "baseline": 12
+    },
+    {
+      "id": "section-divider-2",
+      "type": "line",
+      "x": 24,
+      "y": 324,
+      "width": 232,
+      "height": 0,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          232,
+          0
+        ]
+      ]
+    },
+    {
+      "id": "nav-back",
+      "type": "rectangle",
+      "x": 24,
+      "y": 344,
+      "width": 232,
+      "height": 40,
+      "strokeColor": "transparent",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-back"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 8
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "nav-back-arrow",
+      "type": "text",
+      "x": 36,
+      "y": 354,
+      "width": 20,
+      "height": 20,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-back"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "<-",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "baseline": 12
+    },
+    {
+      "id": "nav-back-text",
+      "type": "text",
+      "x": 64,
+      "y": 354,
+      "width": 140,
+      "height": 20,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "nav-back"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "Back to Dashboard",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "left",
+      "verticalAlign": "middle",
+      "baseline": 12
+    },
+    {
+      "id": "section-divider-footer",
+      "type": "line",
+      "x": 24,
+      "y": 812,
+      "width": 232,
+      "height": 0,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          232,
+          0
+        ]
+      ]
+    },
+    {
+      "id": "user-footer",
+      "type": "rectangle",
+      "x": 24,
+      "y": 824,
+      "width": 232,
+      "height": 64,
+      "strokeColor": "transparent",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "user-group"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 8
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "user-avatar",
+      "type": "ellipse",
+      "x": 24,
+      "y": 836,
+      "width": 40,
+      "height": 40,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#f5f5f5",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "user-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "user-avatar-initials",
+      "type": "text",
+      "x": 32,
+      "y": 848,
+      "width": 24,
+      "height": 16,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "user-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "AU",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "baseline": 10
+    },
+    {
+      "id": "user-name",
+      "type": "text",
+      "x": 76,
+      "y": 838,
+      "width": 100,
+      "height": 16,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "user-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "Admin User",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "left",
+      "verticalAlign": "top",
+      "baseline": 12
+    },
+    {
+      "id": "role-badge",
+      "type": "rectangle",
+      "x": 76,
+      "y": 858,
+      "width": 50,
+      "height": 18,
+      "strokeColor": "#ef4444",
+      "backgroundColor": "#ef4444",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 30,
+      "groupIds": [
+        "sidebar-group",
+        "user-group"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "role-badge-text",
+      "type": "text",
+      "x": 84,
+      "y": 860,
+      "width": 34,
+      "height": 14,
+      "strokeColor": "#ef4444",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "user-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "text": "admin",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "verticalAlign": "middle",
+      "baseline": 9
+    },
+    {
+      "id": "dropdown-indicator",
+      "type": "rectangle",
+      "x": 224,
+      "y": 848,
+      "width": 16,
+      "height": 16,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "sidebar-group",
+        "user-group"
+      ],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    }
+  ],
+  "appState": {
+    "gridSize": 20,
+    "viewBackgroundColor": "$background"
+  }
+}

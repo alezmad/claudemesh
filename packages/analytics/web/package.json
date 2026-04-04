@@ -1,0 +1,39 @@
+{
+  "name": "@turbostarter/analytics-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./env": "./src/env.ts",
+    "./server": "./src/server.ts"
+  },
+  "scripts": {
+    "clean": "git clean -xdf .cache .turbo dist node_modules",
+    "format": "prettier --check . --ignore-path ../../../.gitignore",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@turbostarter/eslint-config": "workspace:*",
+    "@turbostarter/prettier-config": "workspace:*",
+    "@turbostarter/tsconfig": "workspace:*",
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:"
+  },
+  "prettier": "@turbostarter/prettier-config",
+  "dependencies": {
+    "@openpanel/nextjs": "1.0.9",
+    "@turbostarter/analytics": "workspace:*",
+    "@turbostarter/shared": "workspace:*",
+    "@vemetric/node": "0.2.0",
+    "@vemetric/react": "0.6.1",
+    "@vercel/analytics": "1.5.0",
+    "mixpanel": "0.18.1",
+    "mixpanel-browser": "2.71.1",
+    "posthog-js": "1.283.0",
+    "posthog-node": "5.11.0",
+    "zod": "catalog:"
+  }
+}

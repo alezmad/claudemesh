@@ -1,0 +1,209 @@
+{
+  "chat": {
+    "title": "Chat",
+    "description": "Ask questions and get responses from popular AI models with web search and deep thinking.",
+    "headline": "How can I help you today?",
+    "composer": {
+      "placeholder": "What do you want to know?",
+      "files": {
+        "add": "Add files",
+        "remove": "Remove",
+        "preview": "Preview",
+        "dropzone": {
+          "title": "Drop your files here",
+          "description": "Drop your files here to add them to the conversation"
+        }
+      }
+    },
+    "new": "Create new chat",
+    "command": {
+      "search": "Type a command or search...",
+      "empty": "No results found."
+    },
+    "example": {
+      "summarize": {
+        "label": "Summarize",
+        "prompt": "Please provide a concise summary of the following text, highlighting the key points and main ideas while maintaining the core message. Please ensure the summary is clear and well-structured: The Industrial Revolution was a period of major industrialization and innovation during the late 18th and early 19th centuries. The Industrial Revolution began in Great Britain and quickly spread throughout Western Europe and North America. This period saw the mechanization of manufacturing, development of factory systems, and significant technological innovations in areas like textile production, steam power, and transportation. It led to major social changes including urbanization, the rise of a new working class, and eventual improvements in living standards. However, it also brought challenges like poor working conditions, child labor, and environmental pollution."
+      },
+      "analyze": {
+        "label": "Analyze",
+        "prompt": "Please analyze this dataset and provide key statistical insights, trends, and patterns. Include relevant metrics, correlations, and any notable outliers: Year,GDP,Population,Life_Expectancy\n1960,543.3,179.3,69.7\n1970,1073.3,203.3,70.8\n1980,2862.5,226.5,73.7\n1990,5980.3,248.7,75.4\n2000,10284.8,281.4,76.8\n2010,14964.4,308.7,78.7\n2020,20893.7,329.5,77.3"
+      },
+      "code": {
+        "label": "Code",
+        "prompt": "Write a function that takes a list of numbers and returns the sum of all the numbers in the list. The function should be written in Python."
+      },
+      "brainstorm": {
+        "label": "Brainstorm",
+        "prompt": "Generate a list of 10 creative ideas for a new product or service. Each idea should be unique, innovative, and have a clear market opportunity. Please provide a brief explanation for each idea."
+      },
+      "surprise": {
+        "label": "Surprise me",
+        "prompt": "Please surprise me with a random fact or interesting tidbit. I'm curious about anything and everything!"
+      }
+    }
+  },
+  "agent": {
+    "title": "Agents",
+    "description": "Personalizable AI agents that operates on your knowledge base and helps with complex tasks.",
+    "headline": {
+      "title": "Agents are coming soon!",
+      "subtitle": "We're working hard to bring you the best AI agents experience. Stay tuned for updates!"
+    }
+  },
+  "image": {
+    "title": "Image generation",
+    "description": "Create visuals from text descriptions using different models like SDXL or Midjourney.",
+    "headline": {
+      "title": "Describe what you imagine 🖼️",
+      "subtitle": "And let's make it live."
+    },
+    "composer": {
+      "placeholder": "A cat shipping its startup in minutes, not hours..."
+    },
+    "history": {
+      "title": "History",
+      "description": "View your image generation history, and see how your images have evolved over time."
+    },
+    "generation": {
+      "new": "Create new",
+      "goTo": "Go to generation",
+      "status": {
+        "idle": "Idle",
+        "created": "Created",
+        "loading": "Loading...",
+        "success": "Completed",
+        "error": "Failed"
+      },
+      "empty": {
+        "title": "No images yet",
+        "description": "There are no images generated, start by describing what you want to see."
+      }
+    },
+    "example": {
+      "fox": {
+        "label": "Mystic Fox",
+        "prompt": "A silver fox with glowing eyes emerging from a misty enchanted forest at twilight, surrounded by floating lanterns"
+      },
+      "penguin": {
+        "label": "Dapper Penguin",
+        "prompt": "A penguin in a tuxedo and monocle sipping tea at an ice bar, with northern lights dancing in the background"
+      },
+      "raccoon": {
+        "label": "Tech Raccoon",
+        "prompt": "A raccoon wearing glasses and a hoodie, coding on multiple screens in a cozy treehouse office filled with snacks"
+      },
+      "elephant": {
+        "label": "Zen Elephant",
+        "prompt": "A baby elephant meditating under a giant baobab tree at sunrise, with butterflies landing on its trunk and ears"
+      },
+      "dolphin": {
+        "label": "Cosmic Dolphin",
+        "prompt": "A dolphin leaping through space, leaving a trail of stardust and nebula colors, with distant planets visible in the background"
+      }
+    }
+  },
+  "pdf": {
+    "title": "Chat with PDF",
+    "description": "Extract insights and answers by chatting directly with your PDF documents.",
+    "new": "Upload new PDF document",
+    "recent": "Recent documents",
+    "command": {
+      "search": "Type a command or search for a document...",
+      "empty": "No results found."
+    },
+    "upload": {
+      "description": "Upload a PDF file by dragging and dropping it here, from url or by selecting a file. Let's chat!",
+      "fromDevice": "Select file from device",
+      "fromUrl": {
+        "placeholder": "Enter PDF url...",
+        "cta": "Chat!"
+      },
+      "example": {
+        "cta": "Try with example PDF"
+      },
+      "error": {
+        "api": "Failed to upload the PDF file. Please try again.",
+        "notFound": "Could not access the PDF file. Please check the URL and try again.",
+        "unauthorized": "Please sign in to upload PDF files."
+      },
+      "signIn": {
+        "title": "Sign in required",
+        "description": "Create a free account or sign in to upload and chat with your PDF documents.",
+        "cta": "Sign in"
+      },
+      "success": "The PDF file has been uploaded successfully!",
+      "confirm": {
+        "title": "Confirm document details",
+        "description": "Please confirm the details of the document you are uploading."
+      },
+      "loading": {
+        "title": "Bear with us...",
+        "description": "We're processing your document, this may take a few seconds."
+      }
+    },
+    "preview": {
+      "zoom": {
+        "options": "Zoom options",
+        "fit": "Page fit",
+        "in": "Zoom in",
+        "out": "Zoom out"
+      },
+      "navigation": {
+        "previous": "Previous page",
+        "next": "Next page"
+      },
+      "toggle": "Toggle preview",
+      "noDocuments": "No documents found to preview, please upload a document or try again later."
+    },
+    "composer": {
+      "placeholder": "Ask me anything about this document...",
+      "empty": "Start by asking a question. You can also preview the document by clicking on the preview button."
+    },
+    "download": {
+      "success": "The PDF file has been downloaded!"
+    },
+    "processing": {
+      "indexing": "Indexing document...",
+      "indexingDescription": "We're analyzing your document to enable intelligent search and Q&A. This usually takes a few seconds."
+    },
+    "suggestions": {
+      "title": "Try asking...",
+      "summarize": "Summarize this document",
+      "keyPoints": "What are the key points?",
+      "explain": "Explain the main concepts",
+      "find": "Find specific information"
+    },
+    "followUp": {
+      "moreDetail": "Tell me more about this",
+      "clarify": "Can you clarify that?",
+      "continue": "What else should I know?"
+    },
+    "selection": {
+      "askAbout": "Ask about this"
+    }
+  },
+  "tts": {
+    "title": "Text to speech",
+    "description": "Convert text to natural-sounding speech with customizable AI voices.",
+    "composer": {
+      "placeholder": "Start typing here or paste any text you want to turn into lifelike speech...",
+      "settings": {
+        "voice": {
+          "speed": {
+            "description": "Controls the speed of the generated speech. Values below 1.0 will slow down the speech, while values above 1.0 will speed it up. Extreme values may affect the quality of the generated speech."
+          },
+          "stability": {
+            "description": "Increasing stability will make the voice more consistent between re-generations, but it can also make it sounds a bit monotone. On longer text fragments we recommend lowering this value."
+          },
+          "similarity": {
+            "description": "High enhancement boosts overall voice clarity and target speaker similarity. Very high values can cause artifacts, so adjusting this setting to find the optimal value is encouraged."
+          },
+          "speakerBoost": {
+            "description": "Boost the similarity of the synthesized speech and the voice at the cost of some generation speed."
+          }
+        }
+      }
+    }
+  }
+}

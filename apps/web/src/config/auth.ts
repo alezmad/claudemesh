@@ -1,0 +1,23 @@
+import env from "env.config";
+
+import { SocialProvider, authConfigSchema } from "@turbostarter/auth";
+
+import type { AuthConfig } from "@turbostarter/auth";
+
+/** Coerce env value to boolean (handles both parsed booleans and raw strings) */
+const toBool = (val: unknown, fallback: boolean): boolean => {
+  if (typeof val === "boolean") return val;
+  if (val === "true" || val === "1") return true;
+  if (val === "false" || val === "0") return false;
+  return fallback;
+};
+
+export const authConfig = authConfigSchema.parse({
+  providers: {
+    password: toBool(env.NEXT_PUBLIC_AUTH_PASSWORD, true),
+    magicLink: toBool(env.NEXT_PUBLIC_AUTH_MAGIC_LINK, false),
+    passkey: toBool(env.NEXT_PUBLIC_AUTH_PASSKEY, true),
+    anonymous: toBool(env.NEXT_PUBLIC_AUTH_ANONYMOUS, true),
+    oAuth: [SocialProvider.APPLE, SocialProvider.GOOGLE, SocialProvider.GITHUB],
+  },
+}) satisfies AuthConfig;

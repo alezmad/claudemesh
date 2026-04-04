@@ -1,0 +1,3 @@
+import baseConfig from "@turbostarter/vitest-config/base";
+
+export default baseConfig;

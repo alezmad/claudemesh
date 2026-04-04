@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Code Usage Statistics</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            min-height: 100vh;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .subtitle {
+            text-align: center;
+            color: #888;
+            margin-bottom: 30px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 24px;
+            text-align: center;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: transform 0.2s;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .stat-label {
+            color: #888;
+            margin-top: 8px;
+            font-size: 0.9rem;
+        }
+        .chart-container {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 30px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .chart-title {
+            font-size: 1.3rem;
+            margin-bottom: 20px;
+            color: #fff;
+        }
+        canvas {
+            max-height: 400px;
+        }
+        .footer {
+            text-align: center;
+            color: #666;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useEffect, useRef } = React;
+
+        const USAGE_DATA = [{"date": "2025-09-27", "count": 52}, {"date": "2025-09-28", "count": 135}, {"date": "2025-09-29", "count": 87}, {"date": "2025-09-30", "count": 2}, {"date": "2025-10-02", "count": 20}, {"date": "2025-10-13", "count": 108}, {"date": "2025-10-14", "count": 99}, {"date": "2025-10-15", "count": 3}, {"date": "2025-10-16", "count": 10}, {"date": "2025-10-17", "count": 4}, {"date": "2025-10-21", "count": 4}, {"date": "2025-10-22", "count": 1}, {"date": "2025-10-23", "count": 2}, {"date": "2025-10-24", "count": 12}, {"date": "2025-10-28", "count": 10}, {"date": "2025-10-29", "count": 7}, {"date": "2025-11-03", "count": 10}, {"date": "2025-11-11", "count": 34}, {"date": "2025-11-12", "count": 16}, {"date": "2025-11-23", "count": 3}, {"date": "2025-12-23", "count": 67}, {"date": "2025-12-24", "count": 120}, {"date": "2025-12-25", "count": 272}, {"date": "2025-12-26", "count": 40}, {"date": "2025-12-27", "count": 382}, {"date": "2025-12-28", "count": 244}, {"date": "2025-12-29", "count": 396}, {"date": "2025-12-30", "count": 223}, {"date": "2025-12-31", "count": 215}, {"date": "2026-01-01", "count": 156}, {"date": "2026-01-02", "count": 182}, {"date": "2026-01-03", "count": 141}, {"date": "2026-01-04", "count": 448}, {"date": "2026-01-05", "count": 60}, {"date": "2026-01-06", "count": 160}, {"date": "2026-01-07", "count": 90}, {"date": "2026-01-08", "count": 51}, {"date": "2026-01-09", "count": 1}, {"date": "2026-01-13", "count": 59}, {"date": "2026-01-14", "count": 132}, {"date": "2026-01-15", "count": 4}, {"date": "2026-01-16", "count": 142}, {"date": "2026-01-17", "count": 386}, {"date": "2026-01-18", "count": 649}, {"date": "2026-01-19", "count": 99}, {"date": "2026-01-20", "count": 15}, {"date": "2026-01-21", "count": 160}, {"date": "2026-01-22", "count": 202}, {"date": "2026-01-23", "count": 161}, {"date": "2026-01-24", "count": 433}, {"date": "2026-01-25", "count": 252}, {"date": "2026-01-27", "count": 11}, {"date": "2026-01-28", "count": 177}, {"date": "2026-01-29", "count": 452}, {"date": "2026-01-30", "count": 325}, {"date": "2026-01-31", "count": 484}, {"date": "2026-02-01", "count": 614}, {"date": "2026-02-02", "count": 182}];
+
+        function LineChartComponent({ data }) {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+
+                const ctx = chartRef.current.getContext('2d');
+                chartInstance.current = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.map(d => d.date),
+                        datasets: [{
+                            label: 'Prompts',
+                            data: data.map(d => d.count),
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.2)',
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 3,
+                            pointBackgroundColor: '#667eea'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            x: {
+                                ticks: { color: '#888', maxRotation: 45 },
+                                grid: { color: 'rgba(255,255,255,0.1)' }
+                            },
+                            y: {
+                                ticks: { color: '#888' },
+                                grid: { color: 'rgba(255,255,255,0.1)' }
+                            }
+                        }
+                    }
+                });
+
+                return () => {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+                };
+            }, [data]);
+
+            return <canvas ref={chartRef} height="400"></canvas>;
+        }
+
+        function BarChartComponent({ data }) {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+
+                const ctx = chartRef.current.getContext('2d');
+                chartInstance.current = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: data.map(d => d.week),
+                        datasets: [{
+                            label: 'Prompts',
+                            data: data.map(d => d.count),
+                            backgroundColor: 'rgba(118, 75, 162, 0.7)',
+                            borderColor: '#764ba2',
+                            borderWidth: 1,
+                            borderRadius: 4
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: { display: false }
+                        },
+                        scales: {
+                            x: {
+                                ticks: { color: '#888' },
+                                grid: { color: 'rgba(255,255,255,0.1)' }
+                            },
+                            y: {
+                                ticks: { color: '#888' },
+                                grid: { color: 'rgba(255,255,255,0.1)' }
+                            }
+                        }
+                    }
+                });
+
+                return () => {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+                };
+            }, [data]);
+
+            return <canvas ref={chartRef} height="300"></canvas>;
+        }
+
+        function App() {
+            const data = USAGE_DATA;
+            const totalPrompts = data.reduce((sum, d) => sum + d.count, 0);
+            const avgPerDay = Math.round(totalPrompts / data.length);
+            const maxDay = data.reduce((max, d) => d.count > max.count ? d : max, data[0]);
+            const activeDays = data.filter(d => d.count > 0).length;
+
+            // Calculate weekly data
+            const weeklyData = [];
+            for (let i = 0; i < data.length; i += 7) {
+                const weekSlice = data.slice(i, i + 7);
+                const weekTotal = weekSlice.reduce((sum, d) => sum + d.count, 0);
+                weeklyData.push({
+                    week: `Week ${Math.floor(i / 7) + 1}`,
+                    count: weekTotal
+                });
+            }
+
+            return (
+                <div className="container">
+                    <h1>Claude Code Usage Statistics</h1>
+                    <p className="subtitle">Tracking your AI-assisted development journey</p>
+
+                    <div className="stats-grid">
+                        <div className="stat-card">
+                            <div className="stat-value">{totalPrompts.toLocaleString()}</div>
+                            <div className="stat-label">Total Prompts</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-value">{activeDays}</div>
+                            <div className="stat-label">Active Days</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-value">{avgPerDay}</div>
+                            <div className="stat-label">Avg Per Day</div>
+                        </div>
+                        <div className="stat-card">
+                            <div className="stat-value">{maxDay.count}</div>
+                            <div className="stat-label">Peak Day ({maxDay.date})</div>
+                        </div>
+                    </div>
+
+                    <div className="chart-container">
+                        <h2 className="chart-title">Daily Usage Over Time</h2>
+                        <div style={{height: '400px'}}>
+                            <LineChartComponent data={data} />
+                        </div>
+                    </div>
+
+                    <div className="chart-container">
+                        <h2 className="chart-title">Weekly Summary</h2>
+                        <div style={{height: '300px'}}>
+                            <BarChartComponent data={weeklyData} />
+                        </div>
+                    </div>
+
+                    <div className="footer">
+                        Generated on {new Date().toLocaleDateString()} • Data from ~/.claude/history.jsonl
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>

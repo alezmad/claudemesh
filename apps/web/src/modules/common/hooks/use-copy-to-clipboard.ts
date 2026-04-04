@@ -1,0 +1,32 @@
+import { useCallback, useState } from "react";
+
+import { logger } from "@turbostarter/shared/logger";
+
+type CopiedValue = string | null;
+
+type CopyFn = (text: string) => Promise<boolean>;
+
+export function useCopyToClipboard(): [CopiedValue, CopyFn] {
+  const [copiedText, setCopiedText] = useState<CopiedValue>(null);
+
+  const copy: CopyFn = useCallback(async (text) => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    if (!navigator?.clipboard) {
+      logger.warn("Clipboard not supported");
+      return false;
+    }
+
+    // Try to save to clipboard then save it in the state if worked
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedText(text);
+      return true;
+    } catch (error) {
+      logger.warn("Copy failed", error);
+      setCopiedText(null);
+      return false;
+    }
+  }, []);
+
+  return [copiedText, copy];
+}

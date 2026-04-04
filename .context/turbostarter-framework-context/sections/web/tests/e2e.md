@@ -1,0 +1,15 @@
+---
+title: E2E tests
+description: Simulate real user scenarios across the entire stack with automated end-to-end test tools and examples.
+url: /docs/web/tests/e2e
+---
+
+# E2E tests
+
+<Callout title="E2E testing is coming soon">
+  End-to-end (E2E) tests will be available soon, allowing you to automate testing of real user flows and interactions across your application.
+
+  Stay tuned for updates as we roll out robust E2E testing resources and examples.
+
+  [See roadmap](https://github.com/orgs/turbostarter/projects/1)
+</Callout>

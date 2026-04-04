@@ -1,0 +1,514 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "turbostarter-wireframes",
+  "elements": [
+    {
+      "id": "form-container",
+      "type": "rectangle",
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 500,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#ffffff",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 12
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "form-title",
+      "type": "rectangle",
+      "x": 24,
+      "y": 24,
+      "width": 352,
+      "height": 28,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "#1a1a1a",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "form-description",
+      "type": "rectangle",
+      "x": 24,
+      "y": 60,
+      "width": 352,
+      "height": 20,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#e5e5e5",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 60,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "label-1",
+      "type": "rectangle",
+      "x": 24,
+      "y": 100,
+      "width": 80,
+      "height": 16,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "#1a1a1a",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 80,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 2
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "input-1",
+      "type": "rectangle",
+      "x": 24,
+      "y": 120,
+      "width": 352,
+      "height": 40,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#ffffff",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 6
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "label-2",
+      "type": "rectangle",
+      "x": 24,
+      "y": 172,
+      "width": 80,
+      "height": 16,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "#1a1a1a",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 80,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 2
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "input-2",
+      "type": "rectangle",
+      "x": 24,
+      "y": 192,
+      "width": 352,
+      "height": 40,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#ffffff",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 6
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "label-3",
+      "type": "rectangle",
+      "x": 24,
+      "y": 244,
+      "width": 80,
+      "height": 16,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "#1a1a1a",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 80,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 2
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "input-3",
+      "type": "rectangle",
+      "x": 24,
+      "y": 264,
+      "width": 352,
+      "height": 40,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#ffffff",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 6
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "eye-icon",
+      "type": "rectangle",
+      "x": 340,
+      "y": 276,
+      "width": 20,
+      "height": 16,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#e5e5e5",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 60,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 2
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "checkbox",
+      "type": "rectangle",
+      "x": 24,
+      "y": 316,
+      "width": 20,
+      "height": 20,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 4
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "checkbox-label",
+      "type": "rectangle",
+      "x": 52,
+      "y": 318,
+      "width": 100,
+      "height": 16,
+      "strokeColor": "#1a1a1a",
+      "backgroundColor": "#1a1a1a",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 80,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 2
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "forgot-link",
+      "type": "rectangle",
+      "x": 276,
+      "y": 318,
+      "width": 100,
+      "height": 16,
+      "strokeColor": "#f97316",
+      "backgroundColor": "#f97316",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 80,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 2
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "primary-button",
+      "type": "rectangle",
+      "x": 24,
+      "y": 352,
+      "width": 352,
+      "height": 44,
+      "strokeColor": "#f97316",
+      "backgroundColor": "#f97316",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 6
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "secondary-button",
+      "type": "rectangle",
+      "x": 24,
+      "y": 404,
+      "width": 352,
+      "height": 44,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 6
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "divider-left",
+      "type": "line",
+      "x": 24,
+      "y": 468,
+      "width": 140,
+      "height": 0,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          140,
+          0
+        ]
+      ]
+    },
+    {
+      "id": "divider-text",
+      "type": "rectangle",
+      "x": 172,
+      "y": 460,
+      "width": 56,
+      "height": 16,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "#e5e5e5",
+      "fillStyle": "solid",
+      "strokeWidth": 0,
+      "roughness": 0,
+      "opacity": 60,
+      "groupIds": [],
+      "roundness": {
+        "type": 3,
+        "value": 2
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "divider-right",
+      "type": "line",
+      "x": 236,
+      "y": 468,
+      "width": 140,
+      "height": 0,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [],
+      "roundness": null,
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          140,
+          0
+        ]
+      ]
+    },
+    {
+      "id": "oauth-google",
+      "type": "rectangle",
+      "x": 100,
+      "y": 484,
+      "width": 60,
+      "height": 44,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "oauth-group"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 6
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "oauth-github",
+      "type": "rectangle",
+      "x": 170,
+      "y": 484,
+      "width": 60,
+      "height": 44,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "oauth-group"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 6
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    },
+    {
+      "id": "oauth-apple",
+      "type": "rectangle",
+      "x": 240,
+      "y": 484,
+      "width": 60,
+      "height": 44,
+      "strokeColor": "#e5e5e5",
+      "backgroundColor": "transparent",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "opacity": 100,
+      "groupIds": [
+        "oauth-group"
+      ],
+      "roundness": {
+        "type": 3,
+        "value": 6
+      },
+      "isDeleted": false,
+      "boundElements": null,
+      "link": null,
+      "locked": false
+    }
+  ],
+  "appState": {
+    "gridSize": 20,
+    "viewBackgroundColor": "$background"
+  }
+}

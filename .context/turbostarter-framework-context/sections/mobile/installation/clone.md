@@ -1,0 +1,65 @@
+---
+title: Cloning repository
+description: Get the code to your local machine and start developing your app.
+url: /docs/mobile/installation/clone
+---
+
+# Cloning repository
+
+<Callout type="info" title="Prerequisite: Git installed">
+  Ensure you have Git installed on your local machine before proceeding. You can download Git from [here](https://git-scm.com).
+</Callout>
+
+## Git clone
+
+Clone the repository using the following command:
+
+```bash
+git clone git@github.com:turbostarter/core
+```
+
+By default, we're using [SSH](https://docs.github.com/en/authentication/connecting-to-github-with-ssh) for all Git commands. If you don't have it configured, please refer to the [official documentation](https://docs.github.com/en/authentication/connecting-to-github-with-ssh) to set it up.
+
+Alternatively, you can use HTTPS to clone the repository:
+
+```bash
+git clone https://github.com/turbostarter/core
+```
+
+Another alternative could be to use the [Github CLI](https://cli.github.com/) or [Github Desktop](https://desktop.github.com/) for Git operations.
+
+<Card title="Git clone" description="git-scm.com" href="https://git-scm.com/docs/git-clone" />
+
+## Git remote
+
+After cloning the repository, remove the original origin remote:
+
+```bash
+git remote rm origin
+```
+
+Add the upstream remote pointing to the original repository to pull updates:
+
+```bash
+git remote add upstream git@github.com:turbostarter/core
+```
+
+Once you have your own repository set up, add your repository as the origin:
+
+```bash
+git remote add origin <your-repository-url>
+```
+
+<Card title="Git remote" description="git-scm.com" href="https://git-scm.com/docs/git-remote" />
+
+## Staying up to date
+
+To pull updates from the upstream repository, run the following command daily (preferably with your morning coffee ☕):
+
+```bash
+git pull upstream main
+```
+
+This ensures your repository stays up to date with the latest changes.
+
+Check [Updating codebase](/docs/web/installation/update) for more details on updating your codebase.

@@ -1,0 +1,59 @@
+{
+  "name": "claudemesh",
+  "private": true,
+  "scripts": {
+    "build": "pnpm with-env turbo build",
+    "clean": "turbo clean && git clean -xdf .turbo .cache node_modules",
+    "dev": "pnpm with-env turbo dev",
+    "format": "turbo format --continue -- --cache --cache-location .cache/.prettiercache",
+    "format:fix": "turbo format --continue -- --write --cache --cache-location .cache/.prettiercache",
+    "postinstall": "pnpm lint:ws",
+    "lint": "turbo lint --continue -- --cache --cache-location .cache/.eslintcache",
+    "lint:fix": "turbo lint --continue -- --fix --cache --cache-location .cache/.eslintcache",
+    "lint:ws": "pnpm dlx sherif@latest -r packages-without-package-json",
+    "prepare": "husky",
+    "auth:seed": "set -a && source apps/web/.env.local && set +a && pnpm --filter @turbostarter/auth db:seed",
+    "services:logs": "docker compose logs -f",
+    "services:setup": "pnpm services:start && pnpm with-env turbo setup",
+    "services:start": "docker compose up -d --wait",
+    "services:status": "docker compose ps",
+    "services:stop": "docker compose down",
+    "test": "turbo run test",
+    "test:projects": "vitest run",
+    "test:projects:watch": "vitest --watch",
+    "typecheck": "turbo typecheck",
+    "with-env": "dotenv -c --"
+  },
+  "prettier": "@turbostarter/prettier-config",
+  "devDependencies": {
+    "@commitlint/cli": "20.1.0",
+    "@commitlint/config-conventional": "20.0.0",
+    "@commitlint/types": "20.0.0",
+    "@turbo/gen": "2.6.3",
+    "@turbostarter/prettier-config": "workspace:*",
+    "cross-env": "10.1.0",
+    "dotenv-cli": "11.0.0",
+    "husky": "^9.1.7",
+    "prettier": "catalog:",
+    "turbo": "2.6.3",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "packageManager": "pnpm@10.25.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "duckdb"
+    ],
+    "overrides": {
+      "csstype": "3.1.3",
+      "@types/react": "19.2.7"
+    }
+  },
+  "engines": {
+    "node": ">=22.17.0"
+  },
+  "dependencies": {
+    "react": "19.2.3"
+  }
+}

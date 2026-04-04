@@ -1,0 +1,108 @@
+{
+  "currency": "eur",
+  "pricing": {
+    "label": "Precios",
+    "title": "Planes simples para todos",
+    "description": "Elige el plan que se adapte a tus necesidades y comienza tu camino hacia el éxito."
+  },
+  "manage": {
+    "plan": {
+      "title": "Gestionar plan",
+      "description": "Revisa los detalles de tu plan actual. Puedes cambiar tu plan o cancelar tu suscripción en cualquier momento."
+    },
+    "billing": {
+      "title": "Gestionar facturación",
+      "description": "Visita el Portal de Facturación para gestionar tu suscripción y facturación. Puedes actualizar tu método de pago, cancelar tu suscripción, descargar facturas y más.",
+      "visitPortal": "Visitar Portal de Facturación"
+    },
+    "description": "Gestiona tu facturación y suscripción."
+  },
+  "subscribe": "Suscribirse ahora",
+  "updatePlan": "Actualizar plan",
+  "getLifetimeAccess": "Obtener acceso de por vida",
+  "interval": {
+    "day": "día",
+    "week": "semana",
+    "month": "mes",
+    "year": "año",
+    "lifetime": "de por vida"
+  },
+  "trial": {
+    "cta": "Comenzar gratis",
+    "period": "Prueba con {{period}} días gratis"
+  },
+  "discount": {
+    "specialOffer": "OFERTA ESPECIAL: <bold>-{{discount}} de descuento</bold>"
+  },
+  "plan": {
+    "starter": {
+      "name": "Inicial",
+      "description": "Para pequeños proyectos que están comenzando",
+      "features": {
+        "sync": "Sincronización perfecta",
+        "basicSupport": "Soporte básico",
+        "limitedStorage": "Almacenamiento limitado",
+        "emailNotifications": "Notificaciones por correo",
+        "basicReports": "Informes básicos"
+      }
+    },
+    "premium": {
+      "name": "Premium",
+      "description": "Perfecto para equipos en crecimiento con funciones avanzadas",
+      "badge": "Más vendido",
+      "features": {
+        "advancedSync": "Sincronización avanzada",
+        "prioritySupport": "Soporte prioritario",
+        "moreStorage": "Más almacenamiento",
+        "teamCollaboration": "Colaboración en equipo",
+        "smsNotifications": "Notificaciones SMS",
+        "advancedReports": "Informes avanzados"
+      }
+    },
+    "enterprise": {
+      "name": "Empresarial",
+      "description": "Diseñado para organizaciones y grandes equipos",
+      "features": {
+        "unlimitedStorage": "Almacenamiento ilimitado",
+        "customBranding": "Marca personalizada",
+        "dedicatedSupport": "Soporte dedicado",
+        "apiAccess": "Acceso a API",
+        "userRoles": "Gestión de roles de usuario",
+        "auditLogs": "Registros de auditoría",
+        "singleSignOn": "Inicio de sesión único",
+        "advancedAnalytics": "Análisis avanzado"
+      }
+    }
+  },
+  "error": {
+    "checkout": "Ocurrió un error durante el proceso de pago.",
+    "checkoutRetrieve": "Ocurrió un error al recuperar la sesión de pago.",
+    "portal": "Ocurrió un error al obtener la URL del portal.",
+    "invalidProvider": "¡Proveedor de facturación inválido!",
+    "lemonSqueezy": "¡Error interno de la API de Lemon Squeezy!",
+    "priceNotFound": "¡Precio no encontrado!",
+    "customerNotFound": "¡Cliente no encontrado!",
+    "orderNotFound": "¡Pedido no encontrado!",
+    "subscriptionNotFound": "¡Suscripción no encontrada!",
+    "webhook": {
+      "signatureNotFound": "¡Firma del webhook no encontrada!",
+      "signatureInvalid": "Firma del webhook inválida.",
+      "metaInvalid": "Meta del webhook inválido.",
+      "dataInvalid": "Datos del webhook inválidos.",
+      "unsupportedEvent": "Evento de webhook no soportado.",
+      "unhandledEvent": "Evento de webhook no manejado."
+    },
+    "customerCreation": "Error al crear el cliente.",
+    "promotionCodeRetrieve": "No se pudo recuperar el código de promoción."
+  },
+  "status": {
+    "active": "Activo",
+    "canceled": "Cancelado",
+    "incomplete": "Incompleto",
+    "incompleteExpired": "Incompleto expirado",
+    "pastDue": "Vencido",
+    "paused": "Pausado",
+    "trialing": "En prueba",
+    "unpaid": "Sin pagar"
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "name": "@turbostarter/auth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./env": "./src/env.ts",
+    "./server": "./src/server.ts",
+    "./client/*": "./src/client/*.ts"
+  },
+  "scripts": {
+    "clean": "git clean -xdf .cache .turbo dist node_modules",
+    "db:generate": "cross-env SKIP_ENV_VALIDATION=1 pnpm dlx @better-auth/cli@1.4.3 generate --config src/server.ts --output ../db/src/schema/auth.ts --y",
+    "db:seed": "cross-env SKIP_ENV_VALIDATION=1 pnpm dlx tsx ./src/scripts/seed.ts",
+    "format": "prettier --check . --ignore-path ../../.gitignore",
+    "lint": "eslint",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "prettier": "@turbostarter/prettier-config",
+  "dependencies": {
+    "@better-auth/expo": "1.4.6",
+    "@better-auth/passkey": "1.4.6",
+    "@turbostarter/db": "workspace:*",
+    "@turbostarter/email": "workspace:*",
+    "@turbostarter/i18n": "workspace:*",
+    "@turbostarter/shared": "workspace:*",
+    "better-auth": "1.4.6",
+    "envin": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@turbostarter/eslint-config": "workspace:*",
+    "@turbostarter/prettier-config": "workspace:*",
+    "@turbostarter/tsconfig": "workspace:*",
+    "@turbostarter/vitest-config": "workspace:*",
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

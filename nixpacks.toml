@@ -1,0 +1,20 @@
+# Nixpacks configuration for Turbostarter
+# Removes chromium and browser dependencies to speed up builds
+
+[phases.setup]
+# Only include essential packages - no browser dependencies
+nixPkgs = ["nodejs_22", "pnpm-10_x", "openssl"]
+# Remove all browser-related apt packages
+aptPkgs = ["curl", "wget"]
+
+[phases.install]
+cmds = [
+  "npm install -g corepack@0.24.1 && corepack enable",
+  "pnpm i --frozen-lockfile"
+]
+
+[phases.build]
+cmds = ["SKIP_ENV_VALIDATION=1 npx turbo run build"]
+
+[start]
+cmd = "node apps/web/.next/standalone/apps/web/server.js"

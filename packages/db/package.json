@@ -1,0 +1,47 @@
+{
+  "name": "@turbostarter/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server.ts",
+    "./schema": "./src/schema/index.ts",
+    "./schema/*": "./src/schema/*.ts",
+    "./env": "./src/env.ts"
+  },
+  "scripts": {
+    "clean": "git clean -xdf .cache .turbo dist node_modules",
+    "db:check": "drizzle-kit check",
+    "db:generate": "drizzle-kit generate && eslint --fix && prettier --write . --ignore-path ../../.gitignore",
+    "db:seed": "pnpm dlx tsx ./src/scripts/seed.ts",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "db:status": "pnpm dlx tsx ./src/scripts/status.ts",
+    "db:setup": "turbo db:migrate && turbo db:seed",
+    "db:reset": "pnpm dlx tsx ./src/scripts/reset.ts",
+    "db:studio": "drizzle-kit studio",
+    "format": "prettier --check . --ignore-path ../../.gitignore",
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit"
+  },
+  "prettier": "@turbostarter/prettier-config",
+  "dependencies": {
+    "@turbostarter/shared": "workspace:*",
+    "drizzle-orm": "0.44.7",
+    "drizzle-zod": "0.8.3",
+    "envin": "catalog:",
+    "postgres": "3.4.7",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@turbostarter/eslint-config": "workspace:*",
+    "@turbostarter/prettier-config": "workspace:*",
+    "@turbostarter/tsconfig": "workspace:*",
+    "drizzle-kit": "0.31.7",
+    "drizzle-seed": "0.3.1",
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:"
+  }
+}

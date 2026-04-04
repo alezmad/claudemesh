@@ -1,0 +1,77 @@
+# =============================================================================
+# Local Development
+# =============================================================================
+# Start:    docker compose up -d
+# Stop:     docker compose down
+# Logs:     docker compose logs -f
+#
+# DEV LOGIN CREDENTIALS (run: pnpm auth:seed):
+#   User:  me+user@turbostarter.dev  / Pa$$w0rd
+#   Admin: me+admin@turbostarter.dev / Pa$$w0rd
+#
+# SERVICE URLS:
+#   Web App:       http://localhost:3000
+#   PostgreSQL:    localhost:5440
+#   MinIO API:     http://localhost:9000
+#   MinIO Console: http://localhost:9001 (minioadmin/minioadmin)
+# =============================================================================
+
+name: turbostarter
+
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-turbostarter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-turbostarter}
+      POSTGRES_DB: ${POSTGRES_DB:-core}
+    ports:
+      - "${POSTGRES_PORT:-5440}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER:-turbostarter}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    restart: always
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER:-minioadmin} $${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb myminio/$${MINIO_BUCKET:-uploads} --ignore-existing;
+      mc anonymous set download myminio/$${MINIO_BUCKET:-uploads};
+      echo 'MinIO bucket created and configured';
+      exit 0;
+      "
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      MINIO_BUCKET: ${MINIO_BUCKET:-uploads}
+
+volumes:
+  postgres_data:
+  minio_data:
