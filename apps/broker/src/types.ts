@@ -55,8 +55,11 @@ export interface WSHelloMessage {
   sessionId: string;
   pid: number;
   cwd: string;
-  signature: string; // ed25519 over (meshId||memberId||sessionId||nonce)
-  nonce: string;
+  /** ms epoch; broker rejects if outside ±60s of its own clock. */
+  timestamp: number;
+  /** ed25519 signature (hex) over the canonical hello bytes:
+   *    `${meshId}|${memberId}|${pubkey}|${timestamp}` */
+  signature: string;
 }
 
 /** Client → broker: send an E2E-encrypted envelope to a target. */

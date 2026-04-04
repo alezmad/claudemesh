@@ -8,12 +8,13 @@
  */
 
 import { readFileSync } from "node:fs";
+import sodium from "libsodium-wrappers";
 import WebSocket from "ws";
 
 const seed = JSON.parse(readFileSync("/tmp/smoke-seed.json", "utf-8")) as {
   meshId: string;
-  peerA: { memberId: string; pubkey: string };
-  peerB: { memberId: string; pubkey: string };
+  peerA: { memberId: string; pubkey: string; secretKey: string };
+  peerB: { memberId: string; pubkey: string; secretKey: string };
 };
 
 const BROKER = process.env.BROKER_WS_URL ?? "ws://localhost:7900/ws";
@@ -21,8 +22,17 @@ const ws = new WebSocket(BROKER);
 
 let helloAcked = false;
 
-ws.on("open", () => {
-  console.log("[peer-a] connected, sending hello");
+ws.on("open", async () => {
+  await sodium.ready;
+  const timestamp = Date.now();
+  const canonical = `${seed.meshId}|${seed.peerA.memberId}|${seed.peerA.pubkey}|${timestamp}`;
+  const signature = sodium.to_hex(
+    sodium.crypto_sign_detached(
+      sodium.from_string(canonical),
+      sodium.from_hex(seed.peerA.secretKey),
+    ),
+  );
+  console.log("[peer-a] connected, sending signed hello");
   ws.send(
     JSON.stringify({
       type: "hello",
@@ -32,8 +42,8 @@ ws.on("open", () => {
       sessionId: "peer-a-session",
       pid: process.pid,
       cwd: "/tmp/peer-a",
-      signature: "stub",
-      nonce: "stub",
+      timestamp,
+      signature,
     }),
   );
 });

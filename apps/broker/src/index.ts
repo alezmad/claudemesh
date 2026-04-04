@@ -42,6 +42,7 @@ import { metrics, metricsToText } from "./metrics";
 import { TokenBucket } from "./rate-limit";
 import { isDbHealthy, startDbHealth, stopDbHealth } from "./db-health";
 import { buildInfo } from "./build-info";
+import { verifyHelloSignature } from "./crypto";
 
 const PORT = env.BROKER_PORT;
 const WS_PATH = "/ws";
@@ -362,6 +363,26 @@ async function handleHello(
     });
     sendError(ws, "capacity", "mesh at connection capacity");
     ws.close(1008, "capacity");
+    return null;
+  }
+  // Signature + skew check. Proves the client holds the secret key
+  // for the pubkey they're claiming as identity.
+  const sig = await verifyHelloSignature({
+    meshId: hello.meshId,
+    memberId: hello.memberId,
+    pubkey: hello.pubkey,
+    timestamp: hello.timestamp,
+    signature: hello.signature,
+  });
+  if (!sig.ok) {
+    metrics.connectionsRejected.inc({ reason: sig.reason });
+    log.warn("hello sig rejected", {
+      reason: sig.reason,
+      mesh_id: hello.meshId,
+      pubkey: hello.pubkey?.slice(0, 12),
+    });
+    sendError(ws, sig.reason, `hello rejected: ${sig.reason}`);
+    ws.close(1008, sig.reason);
     return null;
   }
   const member = await findMemberByPubkey(hello.meshId, hello.pubkey);

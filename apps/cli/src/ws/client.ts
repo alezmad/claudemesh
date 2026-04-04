@@ -20,6 +20,7 @@ import {
   encryptDirect,
   isDirectTarget,
 } from "../crypto/envelope";
+import { signHello } from "../crypto/hello-sig";
 
 export type Priority = "now" | "next" | "low";
 export type ConnStatus = "connecting" | "open" | "closed" | "reconnecting";
@@ -97,21 +98,36 @@ export class BrokerClient {
     this.ws = ws;
 
     return new Promise<void>((resolve, reject) => {
-      const onOpen = (): void => {
-        this.debug("ws open → sending hello");
-        ws.send(
-          JSON.stringify({
-            type: "hello",
-            meshId: this.mesh.meshId,
-            memberId: this.mesh.memberId,
-            pubkey: this.mesh.pubkey,
-            sessionId: `${process.pid}-${Date.now()}`,
-            pid: process.pid,
-            cwd: process.cwd(),
-            signature: "stub", // libsodium sign_detached lands in Step 18
-            nonce: randomNonce(),
-          }),
-        );
+      const onOpen = async (): Promise<void> => {
+        this.debug("ws open → signing + sending hello");
+        try {
+          const { timestamp, signature } = await signHello(
+            this.mesh.meshId,
+            this.mesh.memberId,
+            this.mesh.pubkey,
+            this.mesh.secretKey,
+          );
+          ws.send(
+            JSON.stringify({
+              type: "hello",
+              meshId: this.mesh.meshId,
+              memberId: this.mesh.memberId,
+              pubkey: this.mesh.pubkey,
+              sessionId: `${process.pid}-${Date.now()}`,
+              pid: process.pid,
+              cwd: process.cwd(),
+              timestamp,
+              signature,
+            }),
+          );
+        } catch (e) {
+          reject(
+            new Error(
+              `hello sign failed: ${e instanceof Error ? e.message : e}`,
+            ),
+          );
+          return;
+        }
         // Arm the hello_ack timeout.
         this.helloTimer = setTimeout(() => {
           this.debug("hello_ack timeout");
