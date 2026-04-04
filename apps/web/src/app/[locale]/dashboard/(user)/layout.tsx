@@ -21,9 +21,14 @@ const menu = [
         icon: Icons.Home,
       },
       {
-        title: "aiTools",
-        href: pathsConfig.apps.chat.index,
-        icon: Icons.Sparkles,
+        title: "meshes",
+        href: pathsConfig.dashboard.user.meshes.index,
+        icon: Icons.Share,
+      },
+      {
+        title: "invites",
+        href: pathsConfig.dashboard.user.invites,
+        icon: Icons.Link,
       },
     ],
   },

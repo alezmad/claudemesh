@@ -90,6 +90,13 @@ const pathsConfig = {
       index: DASHBOARD_PREFIX,
       ai: `${DASHBOARD_PREFIX}/ai`,
       vocabulary: `${DASHBOARD_PREFIX}/vocabulary`,
+      meshes: {
+        index: `${DASHBOARD_PREFIX}/meshes`,
+        new: `${DASHBOARD_PREFIX}/meshes/new`,
+        mesh: (id: string) => `${DASHBOARD_PREFIX}/meshes/${id}`,
+        invite: (id: string) => `${DASHBOARD_PREFIX}/meshes/${id}/invite`,
+      },
+      invites: `${DASHBOARD_PREFIX}/invites`,
       settings: {
         index: `${DASHBOARD_PREFIX}/settings`,
         security: `${DASHBOARD_PREFIX}/settings/security`,
