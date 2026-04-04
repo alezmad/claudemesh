@@ -48,7 +48,7 @@ async function main(): Promise<void> {
       runInstall();
       return;
     case "join":
-      runJoin(args);
+      await runJoin(args);
       return;
     case "list":
       runList();

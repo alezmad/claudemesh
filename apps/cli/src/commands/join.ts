@@ -1,30 +1,90 @@
 /**
- * `claudemesh join <invite-link>` — parse a mesh invite link and
- * join the mesh.
+ * `claudemesh join <invite-link>` — full join flow.
  *
- * STUB: real invite-link parsing + keypair generation + broker
- * enrollment lands in Step 17. For now this just validates the link
- * shape and tells the user what's coming.
+ * 1. Parse + validate the ic://join/... link
+ * 2. Generate a fresh ed25519 keypair (libsodium)
+ * 3. POST /join to the broker → get member_id
+ * 4. Persist the mesh + keypair to ~/.claudemesh/config.json (0600)
+ * 5. Print success
+ *
+ * Signature verification + invite-token one-time-use land in Step 18.
  */
 
-export function runJoin(args: string[]): void {
+import { parseInviteLink } from "../invite/parse";
+import { enrollWithBroker } from "../invite/enroll";
+import { generateKeypair } from "../crypto/keypair";
+import { loadConfig, saveConfig, getConfigPath } from "../state/config";
+import { hostname } from "node:os";
+
+export async function runJoin(args: string[]): Promise<void> {
   const link = args[0];
   if (!link) {
     console.error("Usage: claudemesh join <invite-link>");
     console.error("");
-    console.error("Example: claudemesh join ic://join/BASE64URL...");
+    console.error("Example: claudemesh join ic://join/eyJ2IjoxLC4uLn0");
     process.exit(1);
   }
-  if (!link.startsWith("ic://join/")) {
+
+  // 1. Parse.
+  let invite;
+  try {
+    invite = parseInviteLink(link);
+  } catch (e) {
     console.error(
-      `claudemesh: invalid invite link. Expected ic://join/... got "${link}"`,
+      `claudemesh: ${e instanceof Error ? e.message : String(e)}`,
     );
     process.exit(1);
   }
-  console.log("claudemesh: join not yet implemented (Step 17).");
-  console.log(`  Invite link parsed: ${link.slice(0, 40)}...`);
-  console.log(
-    "  Real flow will: verify sig, generate keypair, enroll member, persist to ~/.claudemesh/config.json",
+  const { payload } = invite;
+  console.log(`Joining mesh "${payload.mesh_slug}" (${payload.mesh_id})…`);
+
+  // 2. Generate keypair.
+  const keypair = await generateKeypair();
+
+  // 3. Enroll with broker.
+  const displayName = `${hostname()}-${process.pid}`;
+  let enroll;
+  try {
+    enroll = await enrollWithBroker({
+      brokerWsUrl: payload.broker_url,
+      meshId: payload.mesh_id,
+      peerPubkey: keypair.publicKey,
+      displayName,
+      role: payload.role,
+    });
+  } catch (e) {
+    console.error(
+      `claudemesh: broker enrollment failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+    process.exit(1);
+  }
+
+  // 4. Persist.
+  const config = loadConfig();
+  config.meshes = config.meshes.filter(
+    (m) => m.slug !== payload.mesh_slug,
   );
-  process.exit(0);
+  config.meshes.push({
+    meshId: payload.mesh_id,
+    memberId: enroll.memberId,
+    slug: payload.mesh_slug,
+    name: payload.mesh_slug,
+    pubkey: keypair.publicKey,
+    secretKey: keypair.secretKey,
+    brokerUrl: payload.broker_url,
+    joinedAt: new Date().toISOString(),
+  });
+  saveConfig(config);
+
+  // 5. Report.
+  console.log("");
+  console.log(
+    `✓ Joined "${payload.mesh_slug}" as ${displayName}${enroll.alreadyMember ? " (already a member — re-enrolled with same pubkey)" : ""}`,
+  );
+  console.log(`  member id: ${enroll.memberId}`);
+  console.log(`  pubkey:    ${keypair.publicKey.slice(0, 16)}…`);
+  console.log(`  broker:    ${payload.broker_url}`);
+  console.log(`  config:    ${getConfigPath()}`);
+  console.log("");
+  console.log("Restart Claude Code to pick up the new mesh.");
 }

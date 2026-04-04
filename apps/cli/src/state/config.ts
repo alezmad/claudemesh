@@ -6,7 +6,13 @@
  * and on every join/leave.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import {
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  mkdirSync,
+  chmodSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { z } from "zod";
@@ -51,6 +57,12 @@ export function loadConfig(): Config {
 export function saveConfig(config: Config): void {
   mkdirSync(dirname(CONFIG_PATH), { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n", "utf-8");
+  // Config holds ed25519 secret keys — restrict to owner read/write.
+  try {
+    chmodSync(CONFIG_PATH, 0o600);
+  } catch {
+    // Windows filesystems ignore chmod; that's fine.
+  }
 }
 
 export function getConfigPath(): string {
