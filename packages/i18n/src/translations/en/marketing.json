@@ -1,7 +1,7 @@
 {
   "product": {
     "title": "This could be your very own $1M startup",
-    "description": "A fully customizable TurboStarter application. Swap in your content and launch your product faster than ever.",
+    "description": "A fully customizable claudemesh application. Swap in your content and launch your product faster than ever.",
     "mobile": {
       "ios": {
         "title": "iOS App",
@@ -37,7 +37,7 @@
       "description": "Purchase to unlock full access to the codebase and start shipping your product today. On all platforms.",
       "button": "Get access",
       "join": {
-        "description": "Join other founders customizing TurboStarter, share launch tactics, and stay close to new drops.",
+        "description": "Join other founders customizing claudemesh, share launch tactics, and stay close to new drops.",
         "button": "Join the community"
       }
     }
@@ -111,7 +111,7 @@
     "question": {
       "whatDoesOurPlatformDo": {
         "question": "What does our platform do?",
-        "answer": "TurboStarter gives you a full-stack SaaS foundation—marketing site, web app, mobile apps, and extensions—so you can focus on your unique customer experience."
+        "answer": "claudemesh gives you a full-stack SaaS foundation—marketing site, web app, mobile apps, and extensions—so you can focus on your unique customer experience."
       },
       "howWillThisBenefitMyBusiness": {
         "question": "How will this benefit my business?",
@@ -123,7 +123,7 @@
       },
       "whatKindOfIntegrationsAreAvailable": {
         "question": "What kind of integrations are available?",
-        "answer": "TurboStarter ships with popular SaaS integrations out of the box, and the modular architecture makes adding your stack straightforward."
+        "answer": "claudemesh ships with popular SaaS integrations out of the box, and the modular architecture makes adding your stack straightforward."
       },
       "howEasyIsItToOnboardMyTeam": {
         "question": "How easy is it to onboard my team?",
@@ -131,7 +131,7 @@
       },
       "whatTypesOfBusinessesCanUseThis": {
         "question": "What types of businesses can use this?",
-        "answer": "From solo founders to enterprise innovation teams, TurboStarter adapts to any SaaS use case that needs a head start."
+        "answer": "From solo founders to enterprise innovation teams, claudemesh adapts to any SaaS use case that needs a head start."
       },
       "canICustomizeThisToFitMyBusinessNeeds": {
         "question": "Can I customize this to fit my business needs?",
@@ -190,10 +190,10 @@
   },
   "docs": {
     "title": "Docs",
-    "description": "Learn how to use TurboStarter"
+    "description": "Learn how to use claudemesh"
   },
   "ai": {
-    "description": "Unlock productivity and innovation with TurboStarter's AI assistant. Get instant answers, automate tasks, and boost your workflow using advanced artificial intelligence—secure, reliable, and designed for modern teams.",
+    "description": "Unlock productivity and innovation with claudemesh's AI assistant. Get instant answers, automate tasks, and boost your workflow using advanced artificial intelligence—secure, reliable, and designed for modern teams.",
     "prompt": {
       "history": "Tell the history of the internet",
       "capitals": "Quiz me on the world capitals",
