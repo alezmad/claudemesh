@@ -18,6 +18,7 @@ export const authConfig = authConfigSchema.parse({
     magicLink: toBool(env.NEXT_PUBLIC_AUTH_MAGIC_LINK, false),
     passkey: toBool(env.NEXT_PUBLIC_AUTH_PASSKEY, true),
     anonymous: toBool(env.NEXT_PUBLIC_AUTH_ANONYMOUS, true),
-    oAuth: [SocialProvider.APPLE, SocialProvider.GOOGLE, SocialProvider.GITHUB],
+    // v0.1.0: GitHub + Google. Apple deferred until we need it.
+    oAuth: [SocialProvider.GOOGLE, SocialProvider.GITHUB],
   },
 }) satisfies AuthConfig;
