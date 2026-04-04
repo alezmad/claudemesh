@@ -369,13 +369,17 @@ function deliverablePriorities(status: PeerStatus): Priority[] {
 
 /**
  * Drain deliverable messages addressed to a specific member in a mesh.
- * Marks them delivered and returns the envelopes for the caller to
- * push over WebSocket. Does NOT handle targetSpec routing — that's the
- * responsibility of the ingress fanout (see queueForTargets).
+ * Joins mesh.member so each envelope carries the sender's pubkey, which
+ * the receiving client needs to identify who sent it. Marks drained
+ * rows as delivered and returns the envelopes for WS push.
+ *
+ * targetSpec routing: matches either the member's pubkey directly or
+ * the broadcast wildcard ("*"). Channel/tag resolution is per-mesh
+ * config that lives outside this function.
  */
 export async function drainForMember(
   meshId: string,
-  memberId: string,
+  _memberId: string,
   memberPubkey: string,
   status: PeerStatus,
 ): Promise<
@@ -386,13 +390,10 @@ export async function drainForMember(
     ciphertext: string;
     createdAt: Date;
     senderMemberId: string;
+    senderPubkey: string;
   }>
 > {
   const priorities = deliverablePriorities(status);
-
-  // A message is deliverable to this member if its targetSpec
-  // addresses them directly (pubkey match) or is a broadcast.
-  // Channel/tag resolution is a per-mesh concern layered on top.
   const targetFilter = or(
     eq(messageQueue.targetSpec, memberPubkey),
     eq(messageQueue.targetSpec, "*"),
@@ -406,8 +407,10 @@ export async function drainForMember(
       ciphertext: messageQueue.ciphertext,
       createdAt: messageQueue.createdAt,
       senderMemberId: messageQueue.senderMemberId,
+      senderPubkey: memberTable.peerPubkey,
     })
     .from(messageQueue)
+    .innerJoin(memberTable, eq(memberTable.id, messageQueue.senderMemberId))
     .where(
       and(
         eq(messageQueue.meshId, meshId),
@@ -432,6 +435,7 @@ export async function drainForMember(
     ciphertext: r.ciphertext,
     createdAt: r.createdAt,
     senderMemberId: r.senderMemberId,
+    senderPubkey: r.senderPubkey,
   }));
 }
 

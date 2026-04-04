@@ -23,10 +23,18 @@ pnpm --filter=@claudemesh/broker start   # production
 
 | Var                          | Default | Purpose                                             |
 | ---------------------------- | ------- | --------------------------------------------------- |
-| `BROKER_PORT`                | `7899`  | Port the WS server listens on                       |
+| `BROKER_PORT`                | `7899`  | Single port for HTTP routes + WebSocket upgrade     |
 | `DATABASE_URL`               | —       | Postgres connection string (shared with apps/web)   |
 | `STATUS_TTL_SECONDS`         | `60`    | Flip stuck-"working" peers to idle after this TTL   |
 | `HOOK_FRESH_WINDOW_SECONDS`  | `30`    | How long a hook signal beats JSONL inference        |
+
+## Routes (single port)
+
+| Path                 | Protocol  | Purpose                                   |
+| -------------------- | --------- | ----------------------------------------- |
+| `/ws`                | WebSocket | Authenticated peer connections            |
+| `/hook/set-status`   | HTTP POST | Claude Code hook scripts report status    |
+| `/health`            | HTTP GET  | Liveness probe                            |
 
 ## Depends on
 
