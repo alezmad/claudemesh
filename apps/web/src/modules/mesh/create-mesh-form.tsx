@@ -40,7 +40,9 @@ const slugify = (s: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
 
-export const CreateMeshForm = () => {
+export const CreateMeshForm = ({
+  onboarding = false,
+}: { onboarding?: boolean } = {}) => {
   const router = useRouter();
   const form = useForm<CreateMyMeshInput>({
     resolver: zodResolver(createMyMeshInputSchema),
@@ -70,7 +72,11 @@ export const CreateMeshForm = () => {
         form.setError("slug", { message: res.error });
         return;
       }
-      router.push(pathsConfig.dashboard.user.meshes.mesh(res.id));
+      router.push(
+        onboarding
+          ? `${pathsConfig.dashboard.user.meshes.invite(res.id)}?onboarding=1`
+          : pathsConfig.dashboard.user.meshes.mesh(res.id),
+      );
     } catch (e) {
       form.setError("root", {
         message: e instanceof Error ? e.message : "Failed to create mesh.",
