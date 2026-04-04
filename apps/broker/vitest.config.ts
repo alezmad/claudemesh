@@ -18,8 +18,9 @@ export default mergeConfig(
     test: {
       testTimeout: 10_000,
       hookTimeout: 10_000,
-      // Keep sequential initially — can flip to parallel once
-      // per-test isolation is proven.
+      // Test files share a Postgres schema and use cleanupAllTestMeshes
+      // in afterAll, so run them serially to avoid cross-file races.
+      fileParallelism: false,
       sequence: {
         concurrent: false,
       },

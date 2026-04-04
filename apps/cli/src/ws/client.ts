@@ -15,6 +15,11 @@
 import WebSocket from "ws";
 import { randomBytes } from "node:crypto";
 import type { JoinedMesh } from "../state/config";
+import {
+  decryptDirect,
+  encryptDirect,
+  isDirectTarget,
+} from "../crypto/envelope";
 
 export type Priority = "now" | "next" | "low";
 export type ConnStatus = "connecting" | "open" | "closed" | "reconnecting";
@@ -28,6 +33,12 @@ export interface InboundPush {
   ciphertext: string;
   createdAt: string;
   receivedAt: string;
+  /** Decrypted plaintext (if encryption succeeded). null = broadcast
+   *  or channel (no per-recipient crypto yet), or decryption failed. */
+  plaintext: string | null;
+  /** Hint for UI: "direct" (crypto_box), "channel"/"broadcast"
+   *  (plaintext for now). */
+  kind: "direct" | "broadcast" | "channel" | "unknown";
 }
 
 type PushHandler = (msg: InboundPush) => void;
@@ -157,8 +168,22 @@ export class BrokerClient {
     priority: Priority = "next",
   ): Promise<{ ok: boolean; messageId?: string; error?: string }> {
     const id = randomId();
-    const nonce = randomNonce();
-    const ciphertext = Buffer.from(message, "utf-8").toString("base64");
+    // Direct messages get crypto_box encryption; broadcasts + channels
+    // still pass through as base64 plaintext until channel crypto lands.
+    let nonce: string;
+    let ciphertext: string;
+    if (isDirectTarget(targetSpec)) {
+      const env = await encryptDirect(
+        message,
+        targetSpec,
+        this.mesh.secretKey,
+      );
+      nonce = env.nonce;
+      ciphertext = env.ciphertext;
+    } else {
+      nonce = randomNonce();
+      ciphertext = Buffer.from(message, "utf-8").toString("base64");
+    }
 
     return new Promise((resolve) => {
       if (this.pendingSends.size >= MAX_QUEUED) {
@@ -254,26 +279,55 @@ export class BrokerClient {
       return;
     }
     if (msg.type === "push") {
-      const push: InboundPush = {
-        messageId: String(msg.messageId ?? ""),
-        meshId: String(msg.meshId ?? ""),
-        senderPubkey: String(msg.senderPubkey ?? ""),
-        priority: (msg.priority as Priority) ?? "next",
-        nonce: String(msg.nonce ?? ""),
-        ciphertext: String(msg.ciphertext ?? ""),
-        createdAt: String(msg.createdAt ?? ""),
-        receivedAt: new Date().toISOString(),
-      };
-      this.pushBuffer.push(push);
-      // Cap buffer at 500 entries to avoid unbounded growth.
-      if (this.pushBuffer.length > 500) this.pushBuffer.shift();
-      for (const h of this.pushHandlers) {
-        try {
-          h(push);
-        } catch {
-          /* handler errors are not the transport's problem */
+      const nonce = String(msg.nonce ?? "");
+      const ciphertext = String(msg.ciphertext ?? "");
+      const senderPubkey = String(msg.senderPubkey ?? "");
+      // Decrypt asynchronously, then enqueue. Ordering within the
+      // buffer is preserved by awaiting before push.
+      void (async (): Promise<void> => {
+        const kind: InboundPush["kind"] = senderPubkey
+          ? "direct"
+          : "unknown";
+        let plaintext: string | null = null;
+        if (senderPubkey && nonce && ciphertext) {
+          plaintext = await decryptDirect(
+            { nonce, ciphertext },
+            senderPubkey,
+            this.mesh.secretKey,
+          );
         }
-      }
+        // If decryption failed, fall back to base64 UTF-8 unwrap —
+        // this covers the legacy plaintext path for broadcasts/channels
+        // until channel crypto lands.
+        if (plaintext === null && ciphertext) {
+          try {
+            plaintext = Buffer.from(ciphertext, "base64").toString("utf-8");
+          } catch {
+            plaintext = null;
+          }
+        }
+        const push: InboundPush = {
+          messageId: String(msg.messageId ?? ""),
+          meshId: String(msg.meshId ?? ""),
+          senderPubkey,
+          priority: (msg.priority as Priority) ?? "next",
+          nonce,
+          ciphertext,
+          createdAt: String(msg.createdAt ?? ""),
+          receivedAt: new Date().toISOString(),
+          plaintext,
+          kind,
+        };
+        this.pushBuffer.push(push);
+        if (this.pushBuffer.length > 500) this.pushBuffer.shift();
+        for (const h of this.pushHandlers) {
+          try {
+            h(push);
+          } catch {
+            /* handler errors are not the transport's problem */
+          }
+        }
+      })();
       return;
     }
     if (msg.type === "error") {

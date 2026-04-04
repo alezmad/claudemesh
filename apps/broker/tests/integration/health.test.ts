@@ -26,7 +26,6 @@ async function waitHealthyOrAny(port: number, maxMs = 5000): Promise<void> {
       const r = await fetch(`http://localhost:${port}/health`, {
         signal: AbortSignal.timeout(500),
       });
-      // Any response (even 503) means the HTTP server is up.
       if (r.status === 200 || r.status === 503) return;
     } catch {
       /* not yet */
@@ -34,6 +33,23 @@ async function waitHealthyOrAny(port: number, maxMs = 5000): Promise<void> {
     await new Promise((r) => setTimeout(r, 100));
   }
   throw new Error(`broker on :${port} did not come up`);
+}
+
+/** Wait until /health returns 200 (HTTP + DB ping both completed). */
+async function waitFullyHealthy(port: number, maxMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try {
+      const r = await fetch(`http://localhost:${port}/health`, {
+        signal: AbortSignal.timeout(500),
+      });
+      if (r.status === 200) return;
+    } catch {
+      /* not yet */
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  throw new Error(`broker on :${port} did not become fully healthy`);
 }
 
 function spawnBroker(env: Record<string, string>): BrokerProc {
@@ -73,7 +89,7 @@ describe("/health endpoint", () => {
         process.env.DATABASE_URL ??
         "postgresql://turbostarter:turbostarter@127.0.0.1:5440/claudemesh_test",
     });
-    await waitHealthyOrAny(broker.port);
+    await waitFullyHealthy(broker.port);
   });
   afterAll(() => broker?.kill());
 

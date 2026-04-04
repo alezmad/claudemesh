@@ -423,34 +423,39 @@ export async function drainForMember(
     priorities.map((p) => `'${p}'`).join(","),
   );
 
-  // Atomic claim: inner SELECT locks candidate rows (skipping any
-  // already locked by a concurrent drain), outer UPDATE marks them
-  // delivered, the FROM join fetches the sender's pubkey, RETURNING
-  // gives us everything we need to push in one round-trip.
+  // Atomic claim with SQL-side ordering. The CTE claims rows via
+  // UPDATE...RETURNING; the outer SELECT re-orders by created_at
+  // (with id as tiebreaker so equal-timestamp rows stay deterministic).
+  // Sorting in SQL avoids JS Date's millisecond-precision collapse of
+  // Postgres microsecond timestamps.
   const result = await db.execute<{
     id: string;
     priority: string;
     nonce: string;
     ciphertext: string;
-    created_at: Date;
+    created_at: string | Date;
     sender_member_id: string;
     sender_pubkey: string;
   }>(sql`
-    UPDATE mesh.message_queue AS mq
-    SET delivered_at = NOW()
-    FROM mesh.member AS m
-    WHERE mq.id IN (
-      SELECT id FROM mesh.message_queue
-      WHERE mesh_id = ${meshId}
-        AND delivered_at IS NULL
-        AND priority::text IN (${priorityList})
-        AND (target_spec = ${memberPubkey} OR target_spec = '*')
-      ORDER BY created_at ASC
-      FOR UPDATE SKIP LOCKED
+    WITH claimed AS (
+      UPDATE mesh.message_queue AS mq
+      SET delivered_at = NOW()
+      FROM mesh.member AS m
+      WHERE mq.id IN (
+        SELECT id FROM mesh.message_queue
+        WHERE mesh_id = ${meshId}
+          AND delivered_at IS NULL
+          AND priority::text IN (${priorityList})
+          AND (target_spec = ${memberPubkey} OR target_spec = '*')
+        ORDER BY created_at ASC, id ASC
+        FOR UPDATE SKIP LOCKED
+      )
+      AND m.id = mq.sender_member_id
+      RETURNING mq.id, mq.priority, mq.nonce, mq.ciphertext,
+               mq.created_at, mq.sender_member_id,
+               m.peer_pubkey AS sender_pubkey
     )
-    AND m.id = mq.sender_member_id
-    RETURNING mq.id, mq.priority, mq.nonce, mq.ciphertext,
-             mq.created_at, mq.sender_member_id, m.peer_pubkey AS sender_pubkey
+    SELECT * FROM claimed ORDER BY created_at ASC, id ASC
   `);
 
   const rows = (result.rows ?? result) as Array<{
@@ -463,23 +468,13 @@ export async function drainForMember(
     sender_pubkey: string;
   }>;
   if (!rows || rows.length === 0) return [];
-  // Normalize created_at to Date (pg driver sometimes returns ISO
-  // strings for raw sql results).
-  const normalized = rows.map((r) => ({
-    ...r,
-    created_at:
-      r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
-  }));
-  // RETURNING order may not match the inner SELECT's ORDER BY — re-sort.
-  normalized.sort(
-    (a, b) => a.created_at.getTime() - b.created_at.getTime(),
-  );
-  return normalized.map((r) => ({
+  return rows.map((r) => ({
     id: r.id,
     priority: r.priority as Priority,
     nonce: r.nonce,
     ciphertext: r.ciphertext,
-    createdAt: r.created_at,
+    createdAt:
+      r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
     senderMemberId: r.sender_member_id,
     senderPubkey: r.sender_pubkey,
   }));

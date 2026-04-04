@@ -14,8 +14,8 @@ import type { JoinedMesh } from "../src/state/config";
 
 const seed = JSON.parse(readFileSync("/tmp/cli-seed.json", "utf-8")) as {
   meshId: string;
-  peerA: { memberId: string; pubkey: string };
-  peerB: { memberId: string; pubkey: string };
+  peerA: { memberId: string; pubkey: string; secretKey: string };
+  peerB: { memberId: string; pubkey: string; secretKey: string };
 };
 
 const brokerUrl = process.env.BROKER_WS_URL ?? "ws://localhost:7900/ws";
@@ -25,11 +25,17 @@ const meshA: JoinedMesh = {
   slug: "rt-a",
   name: "roundtrip-a",
   pubkey: seed.peerA.pubkey,
-  secretKey: "stub",
+  secretKey: seed.peerA.secretKey,
   brokerUrl,
   joinedAt: new Date().toISOString(),
 };
-const meshB: JoinedMesh = { ...meshA, memberId: seed.peerB.memberId, slug: "rt-b", pubkey: seed.peerB.pubkey };
+const meshB: JoinedMesh = {
+  ...meshA,
+  memberId: seed.peerB.memberId,
+  slug: "rt-b",
+  pubkey: seed.peerB.pubkey,
+  secretKey: seed.peerB.secretKey,
+};
 
 async function main(): Promise<void> {
   const a = new BrokerClient(meshA, { debug: true });
@@ -38,9 +44,9 @@ async function main(): Promise<void> {
   let received: string | null = null;
   let receivedSender: string | null = null;
   b.onPush((msg) => {
-    received = Buffer.from(msg.ciphertext, "base64").toString("utf-8");
+    received = msg.plaintext;
     receivedSender = msg.senderPubkey;
-    console.log(`[b] push: "${received}" from ${receivedSender}`);
+    console.log(`[b] push (kind=${msg.kind}): "${received}" from ${receivedSender?.slice(0, 16)}…`);
   });
 
   console.log("[rt] connecting A + B…");

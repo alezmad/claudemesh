@@ -10,16 +10,25 @@
  */
 
 import { eq } from "drizzle-orm";
+import sodium from "libsodium-wrappers";
 import { db } from "../src/db";
 import { mesh, meshMember } from "@turbostarter/db/schema/mesh";
 import { user } from "@turbostarter/db/schema/auth";
 
 const USER_ID = "test-user-smoke";
 const MESH_SLUG = "smoke-test";
-const PEER_A_PUBKEY = "a".repeat(64);
-const PEER_B_PUBKEY = "b".repeat(64);
 
 async function main() {
+  // Generate real ed25519 keypairs so crypto_box (via ed25519→X25519
+  // conversion) works in Step 18+ round-trip tests.
+  await sodium.ready;
+  const kpA = sodium.crypto_sign_keypair();
+  const kpB = sodium.crypto_sign_keypair();
+  const PEER_A_PUBKEY = sodium.to_hex(kpA.publicKey);
+  const PEER_A_SECRET = sodium.to_hex(kpA.privateKey);
+  const PEER_B_PUBKEY = sodium.to_hex(kpB.publicKey);
+  const PEER_B_SECRET = sodium.to_hex(kpB.privateKey);
+
   // Ensure the test user exists (re-usable across runs).
   const [existingUser] = await db
     .select({ id: user.id })
@@ -75,8 +84,16 @@ async function main() {
 
   const seed = {
     meshId: m.id,
-    peerA: { memberId: peerA.id, pubkey: PEER_A_PUBKEY },
-    peerB: { memberId: peerB.id, pubkey: PEER_B_PUBKEY },
+    peerA: {
+      memberId: peerA.id,
+      pubkey: PEER_A_PUBKEY,
+      secretKey: PEER_A_SECRET,
+    },
+    peerB: {
+      memberId: peerB.id,
+      pubkey: PEER_B_PUBKEY,
+      secretKey: PEER_B_SECRET,
+    },
   };
   console.log(JSON.stringify(seed, null, 2));
   process.exit(0);

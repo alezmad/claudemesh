@@ -29,7 +29,7 @@ execSync(`rm -rf "${process.env.CLAUDEMESH_CONFIG_DIR}"`, {
 
 const seed = JSON.parse(readFileSync("/tmp/cli-seed.json", "utf-8")) as {
   meshId: string;
-  peerB: { memberId: string; pubkey: string };
+  peerB: { memberId: string; pubkey: string; secretKey: string };
 };
 
 async function main(): Promise<void> {
@@ -65,18 +65,20 @@ async function main(): Promise<void> {
   );
 
   // 4. Connect also as peer-B (the target) so we can observe receipt.
+  //    Uses the real keypair from the seed (needed for crypto_box decrypt).
   const targetMesh: JoinedMesh = {
     ...joinedMesh,
     memberId: seed.peerB.memberId,
     slug: "rt-join-b",
     pubkey: seed.peerB.pubkey,
+    secretKey: seed.peerB.secretKey,
   };
   const joiner = new BrokerClient(joinedMesh);
   const target = new BrokerClient(targetMesh);
 
   let received = "";
   target.onPush((m) => {
-    received = Buffer.from(m.ciphertext, "base64").toString("utf-8");
+    received = m.plaintext ?? "";
     console.log(`[rt] target got: "${received}"`);
   });
 

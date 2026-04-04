@@ -74,13 +74,7 @@ function resolveClient(to: string): {
 }
 
 function formatPush(p: InboundPush, meshSlug: string): string {
-  const body = (() => {
-    try {
-      return Buffer.from(p.ciphertext, "base64").toString("utf-8");
-    } catch {
-      return "(invalid base64 ciphertext)";
-    }
-  })();
+  const body = p.plaintext ?? "(decryption failed)";
   return `[${meshSlug}] from ${p.senderPubkey.slice(0, 12)}… (${p.priority}, ${p.createdAt}):\n${body}`;
 }
 
