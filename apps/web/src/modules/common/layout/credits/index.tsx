@@ -2,16 +2,21 @@ import NumberFlow from "@number-flow/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "motion/react";
 
-import {
-  getCreditsLevel,
-  getCreditsProgress,
-} from "@turbostarter/ai/credits/utils";
 import { useTranslation } from "@turbostarter/i18n";
 import { cn } from "@turbostarter/ui";
 
 import { authClient } from "~/lib/auth/client";
 
 import { credits } from "./api";
+
+// Local replacements — @turbostarter/ai package removed in claudemesh fork.
+// claudemesh does not meter AI credits (not an AI consumption product), but
+// the surrounding UI still calls these with a number.
+type CreditsLevel = "high" | "medium" | "low";
+const getCreditsLevel = (n: number): CreditsLevel =>
+  n > 500 ? "high" : n > 100 ? "medium" : "low";
+const getCreditsProgress = (n: number): number =>
+  Math.max(0, Math.min(1, n / 1000));
 
 export const useCredits = () => {
   const queryClient = useQueryClient();

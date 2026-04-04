@@ -1,11 +1,9 @@
-import { handle } from "@turbostarter/api/utils";
-
-import { api } from "~/lib/api/client";
-
+// AI credits were backed by the removed @turbostarter/ai package.
+// claudemesh does not meter AI credits, so this stubs the query to return null.
 export const queries = {
   get: (params: { id: string }) => ({
     queryKey: ["credits", params.id],
-    queryFn: () => handle(api.ai.credits.$get)(),
+    queryFn: () => Promise.resolve(null as number | null),
   }),
 };
 

@@ -228,7 +228,7 @@ export const meshRelations = relations(mesh, ({ one, many }) => ({
   messageQueue: many(messageQueue),
 }));
 
-export const memberRelations = relations(meshMember, ({ one, many }) => ({
+export const meshMemberRelations = relations(meshMember, ({ one, many }) => ({
   mesh: one(mesh, {
     fields: [meshMember.meshId],
     references: [mesh.id],

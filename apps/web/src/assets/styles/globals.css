@@ -2,3 +2,102 @@
 @import "@turbostarter/ui-web/globals.css";
 
 @source "../../../../../packages/ui";
+
+/* ============================================================
+   claudemesh — Anthropic design system
+   Fonts, tokens, and primitives extracted from claude.com
+   ============================================================ */
+
+@font-face {
+  font-family: "Anthropic Sans";
+  src: url("/fonts/AnthropicSans-Roman.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Sans";
+  src: url("/fonts/AnthropicSans-Italic.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Serif";
+  src: url("/fonts/AnthropicSerif-Roman.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Serif";
+  src: url("/fonts/AnthropicSerif-Italic.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Mono";
+  src: url("/fonts/AnthropicMono-Roman.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Anthropic Mono";
+  src: url("/fonts/AnthropicMono-Italic.woff2") format("woff2");
+  font-weight: 300 800;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  /* --- Anthropic swatch palette (extracted from claude.com) --- */
+  --cm-clay: #d97757;
+  --cm-clay-hover: #c96442;
+  --cm-fig: #c46686;
+  --cm-oat: #e3dacc;
+  --cm-cactus: #bcd1ca;
+
+  --cm-gray-000: #ffffff;
+  --cm-gray-050: #faf9f5;
+  --cm-gray-150: #f0eee6;
+  --cm-gray-350: #c2c0b6;
+  --cm-gray-450: #9c9a92;
+  --cm-gray-800: #262624;
+  --cm-gray-850: #1f1e1d;
+  --cm-gray-900: #141413;
+
+  --cm-bg: var(--cm-gray-900);
+  --cm-bg-elevated: var(--cm-gray-850);
+  --cm-bg-hover: var(--cm-gray-800);
+  --cm-fg: var(--cm-gray-050);
+  --cm-fg-secondary: #c2c0b6;
+  --cm-fg-tertiary: #87867f;
+  --cm-border: rgba(217, 119, 87, 0.2);
+  --cm-border-hover: rgba(217, 119, 87, 0.5);
+
+  /* --- Type families --- */
+  --cm-font-sans: "Anthropic Sans", -apple-system, system-ui, Arial, sans-serif;
+  --cm-font-serif: "Anthropic Serif", Georgia, "Times New Roman", serif;
+  --cm-font-mono: "Anthropic Mono", "JetBrains Mono", ui-monospace, monospace;
+
+  /* --- Type scale (fluid, from Anthropic clamps) --- */
+  --cm-text-h1: clamp(2.125rem, 1.8rem + 2.6vw, 3.25rem);
+  --cm-text-h2: clamp(1.875rem, 1.625rem + 1.95vw, 2.75rem);
+  --cm-text-h3: clamp(1.75rem, 1.607rem + 1.12vw, 2.25rem);
+  --cm-text-body-lg: clamp(1.1875rem, 1.17rem + 0.14vw, 1.25rem);
+
+  /* --- Spacing --- */
+  --cm-gutter: 2rem;
+  --cm-max-w: 90rem;
+
+  /* --- Radii --- */
+  --cm-radius-xs: 0.25rem;
+  --cm-radius-md: 0.5rem;
+  --cm-radius-lg: 1rem;
+
+  /* --- Motion --- */
+  --cm-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --cm-dur: 300ms;
+}

@@ -10,7 +10,7 @@ import { matchesPattern } from "@turbostarter/shared/utils";
 
 import { localize, delay } from "./middleware";
 import { adminRouter } from "./modules/admin/router";
-import { aiRouter } from "./modules/ai/router";
+// import { aiRouter } from "./modules/ai/router"; // disabled: @turbostarter/ai package removed in claudemesh
 import { authRouter } from "./modules/auth/router";
 import { billingRouter } from "./modules/billing/router";
 import { organizationRouter } from "./modules/organization/router";
@@ -45,7 +45,7 @@ const appRouter = new Hono()
   .use(localize)
   .get("/health", (c) => c.json({ status: "ok" }))
   .route("/admin", adminRouter)
-  .route("/ai", aiRouter)
+  // .route("/ai", aiRouter) // disabled: @turbostarter/ai package removed in claudemesh
   .route("/auth", authRouter)
   .route("/billing", billingRouter)
   .route("/organizations", organizationRouter)
