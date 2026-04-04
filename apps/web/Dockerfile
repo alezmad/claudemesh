@@ -25,7 +25,7 @@ ENV NEXT_PUBLIC_URL=$NEXT_PUBLIC_URL
 ENV NEXT_PUBLIC_PRODUCT_NAME=$NEXT_PUBLIC_PRODUCT_NAME
 ENV NEXT_PUBLIC_DEFAULT_LOCALE=$NEXT_PUBLIC_DEFAULT_LOCALE
 
-RUN npx turbo run build --filter=@claudemesh/web... --filter=web...
+RUN npx turbo run build --filter=web...
 
 # Stage 2: runtime — standalone output only
 FROM node:22-slim AS runner
