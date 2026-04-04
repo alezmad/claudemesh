@@ -36,7 +36,7 @@ const menu = [
     label: "manage",
     items: [
       {
-        title: "settings",
+        title: "account",
         href: pathsConfig.dashboard.user.settings.index,
         icon: Icons.Settings,
       },

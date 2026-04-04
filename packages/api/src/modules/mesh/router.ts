@@ -16,6 +16,7 @@ import {
   leaveMyMesh,
 } from "./mutations";
 import {
+  getMyExport,
   getMyInvitesSent,
   getMyMeshById,
   getMyMeshes,
@@ -111,4 +112,17 @@ export const myRouter = new Hono<Env>()
   .get("/invites", async (c) => {
     const user = c.var.user;
     return c.json({ sent: await getMyInvitesSent({ userId: user.id }) });
+  })
+  .get("/export", async (c) => {
+    const user = c.var.user;
+    const data = await getMyExport({ userId: user.id });
+    return c.json({
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        createdAt: user.createdAt,
+      },
+      ...data,
+    });
   });

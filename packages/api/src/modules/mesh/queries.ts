@@ -10,7 +10,7 @@ import {
   or,
   sql,
 } from "@turbostarter/db";
-import { invite, mesh, meshMember } from "@turbostarter/db/schema";
+import { auditLog, invite, mesh, meshMember } from "@turbostarter/db/schema";
 import { db } from "@turbostarter/db/server";
 
 import type { GetMyMeshesInput } from "../../schema";
@@ -160,6 +160,87 @@ export const getMyMeshById = async ({
       isMe: mem.userId === userId,
     })),
     invites,
+  };
+};
+
+export const getMyExport = async ({ userId }: { userId: string }) => {
+  const meshesOwned = await db
+    .select({
+      id: mesh.id,
+      name: mesh.name,
+      slug: mesh.slug,
+      visibility: mesh.visibility,
+      transport: mesh.transport,
+      tier: mesh.tier,
+      createdAt: mesh.createdAt,
+      archivedAt: mesh.archivedAt,
+    })
+    .from(mesh)
+    .where(eq(mesh.ownerUserId, userId));
+
+  const memberships = await db
+    .select({
+      meshId: meshMember.meshId,
+      meshName: mesh.name,
+      meshSlug: mesh.slug,
+      memberId: meshMember.id,
+      displayName: meshMember.displayName,
+      role: meshMember.role,
+      joinedAt: meshMember.joinedAt,
+      revokedAt: meshMember.revokedAt,
+    })
+    .from(meshMember)
+    .leftJoin(mesh, eq(meshMember.meshId, mesh.id))
+    .where(eq(meshMember.userId, userId));
+
+  const invitesSent = await db
+    .select({
+      id: invite.id,
+      meshId: invite.meshId,
+      meshSlug: mesh.slug,
+      role: invite.role,
+      maxUses: invite.maxUses,
+      usedCount: invite.usedCount,
+      expiresAt: invite.expiresAt,
+      createdAt: invite.createdAt,
+      revokedAt: invite.revokedAt,
+    })
+    .from(invite)
+    .leftJoin(mesh, eq(invite.meshId, mesh.id))
+    .where(eq(invite.createdBy, userId));
+
+  // Audit events for the user's owned meshes only (privacy: don't leak
+  // events from meshes the user merely joined)
+  const meshIds = meshesOwned.map((m) => m.id);
+  const auditEvents =
+    meshIds.length > 0
+      ? await db
+          .select({
+            id: auditLog.id,
+            meshId: auditLog.meshId,
+            eventType: auditLog.eventType,
+            actorPeerId: auditLog.actorPeerId,
+            targetPeerId: auditLog.targetPeerId,
+            metadata: sql<Record<string, unknown>>`${auditLog.metadata}`,
+            createdAt: auditLog.createdAt,
+          })
+          .from(auditLog)
+          .where(
+            sql`${auditLog.meshId} = ANY(ARRAY[${sql.join(
+              meshIds.map((id) => sql`${id}`),
+              sql`, `,
+            )}]::text[])`,
+          )
+          .orderBy(desc(auditLog.createdAt))
+          .limit(5000)
+      : [];
+
+  return {
+    exportedAt: new Date().toISOString(),
+    meshesOwned,
+    memberships,
+    invitesSent,
+    auditEvents,
   };
 };
 
