@@ -89,6 +89,23 @@ export const mesh = meshSchema.table("mesh", {
    * rows; required for new meshes.
    */
   ownerPubkey: text(),
+  /**
+   * ed25519 secret key (hex, 64 bytes) that signs invites server-side.
+   *
+   * v0.1.0: stored plaintext-at-rest. Acceptable trade-off for a
+   * managed-broker SaaS launch — the operator controls the key.
+   * v0.2.0 will either (a) encrypt-at-rest with a column-level KEK,
+   * or (b) migrate to client-held keys so the server never holds
+   * admin material.
+   */
+  ownerSecretKey: text(),
+  /**
+   * 32-byte shared key (base64url) used by channels/broadcasts in the
+   * mesh. Embedded in invites so joiners can encrypt/decrypt channel
+   * traffic. Not used by 1:1 direct messages (those use crypto_box
+   * with recipient's ed25519 pubkey).
+   */
+  rootKey: text(),
   createdAt: timestamp().defaultNow().notNull(),
   archivedAt: timestamp(),
 });
