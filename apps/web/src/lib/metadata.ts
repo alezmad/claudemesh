@@ -49,7 +49,7 @@ export const getMetadata =
   (
     {
       title,
-      description = "common:product.description",
+      description = "Connect your Claude Code sessions to each other. Zero config. End-to-end encrypted. Peer mesh for Claude Code teams.",
       url,
       canonical,
       images = [DEFAULT_IMAGE],
