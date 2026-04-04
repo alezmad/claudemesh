@@ -25,17 +25,17 @@ export async function runJoin(args: string[]): Promise<void> {
     process.exit(1);
   }
 
-  // 1. Parse.
+  // 1. Parse + verify signature client-side.
   let invite;
   try {
-    invite = parseInviteLink(link);
+    invite = await parseInviteLink(link);
   } catch (e) {
     console.error(
       `claudemesh: ${e instanceof Error ? e.message : String(e)}`,
     );
     process.exit(1);
   }
-  const { payload } = invite;
+  const { payload, token } = invite;
   console.log(`Joining mesh "${payload.mesh_slug}" (${payload.mesh_id})…`);
 
   // 2. Generate keypair.
@@ -47,10 +47,10 @@ export async function runJoin(args: string[]): Promise<void> {
   try {
     enroll = await enrollWithBroker({
       brokerWsUrl: payload.broker_url,
-      meshId: payload.mesh_id,
+      inviteToken: token,
+      invitePayload: payload,
       peerPubkey: keypair.publicKey,
       displayName,
-      role: payload.role,
     });
   } catch (e) {
     console.error(

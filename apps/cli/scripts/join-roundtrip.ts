@@ -57,8 +57,8 @@ async function main(): Promise<void> {
   console.log(`[rt] loading config from: ${getConfigPath()}`);
   const config = loadConfig();
   console.log(`[rt] loaded ${config.meshes.length} mesh(es)`);
-  const joined = config.meshes.find((m) => m.slug === "rt-join");
-  if (!joined) throw new Error("rt-join mesh not found in config");
+  const joined = config.meshes.find((m) => m.slug === "smoke-test");
+  if (!joined) throw new Error("smoke-test mesh not found in config");
   const joinedMesh: JoinedMesh = joined;
   console.log(
     `[rt] joined member_id=${joinedMesh.memberId} pubkey=${joinedMesh.pubkey.slice(0, 16)}…`,

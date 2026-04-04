@@ -19,22 +19,24 @@ function wsToHttp(wsUrl: string): string {
   return `${httpScheme}//${u.host}`;
 }
 
+import type { InvitePayload } from "./parse";
+
 export async function enrollWithBroker(args: {
   brokerWsUrl: string;
-  meshId: string;
+  inviteToken: string;
+  invitePayload: InvitePayload;
   peerPubkey: string;
   displayName: string;
-  role: "admin" | "member";
 }): Promise<EnrollResult> {
   const base = wsToHttp(args.brokerWsUrl);
   const res = await fetch(`${base}/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      mesh_id: args.meshId,
+      invite_token: args.inviteToken,
+      invite_payload: args.invitePayload,
       peer_pubkey: args.peerPubkey,
       display_name: args.displayName,
-      role: args.role,
     }),
     signal: AbortSignal.timeout(10_000),
   });

@@ -28,6 +28,47 @@ export function canonicalHello(
   return `${meshId}|${memberId}|${pubkey}|${timestamp}`;
 }
 
+/** Canonical invite bytes — everything in the payload except the signature. */
+export function canonicalInvite(fields: {
+  v: number;
+  mesh_id: string;
+  mesh_slug: string;
+  broker_url: string;
+  expires_at: number;
+  mesh_root_key: string;
+  role: "admin" | "member";
+  owner_pubkey: string;
+}): string {
+  return `${fields.v}|${fields.mesh_id}|${fields.mesh_slug}|${fields.broker_url}|${fields.expires_at}|${fields.mesh_root_key}|${fields.role}|${fields.owner_pubkey}`;
+}
+
+/**
+ * Verify an ed25519 signature over arbitrary canonical bytes.
+ * Used by invite verification + (future) any other signed payload.
+ */
+export async function verifyEd25519(
+  canonicalText: string,
+  signatureHex: string,
+  pubkeyHex: string,
+): Promise<boolean> {
+  if (
+    !/^[0-9a-f]{64}$/i.test(pubkeyHex) ||
+    !/^[0-9a-f]{128}$/i.test(signatureHex)
+  ) {
+    return false;
+  }
+  const s = await ensureSodium();
+  try {
+    return s.crypto_sign_verify_detached(
+      s.from_hex(signatureHex),
+      s.from_string(canonicalText),
+      s.from_hex(pubkeyHex),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export const HELLO_SKEW_MS = 60_000;
 
 /**

@@ -12,18 +12,23 @@
 import { eq } from "drizzle-orm";
 import sodium from "libsodium-wrappers";
 import { db } from "../src/db";
-import { mesh, meshMember } from "@turbostarter/db/schema/mesh";
+import { invite, mesh, meshMember } from "@turbostarter/db/schema/mesh";
 import { user } from "@turbostarter/db/schema/auth";
+import { canonicalInvite } from "../src/crypto";
 
 const USER_ID = "test-user-smoke";
 const MESH_SLUG = "smoke-test";
+const BROKER_URL = process.env.BROKER_WS_URL ?? "ws://localhost:7900/ws";
 
 async function main() {
   // Generate real ed25519 keypairs so crypto_box (via ed25519→X25519
   // conversion) works in Step 18+ round-trip tests.
   await sodium.ready;
+  const kpOwner = sodium.crypto_sign_keypair();
   const kpA = sodium.crypto_sign_keypair();
   const kpB = sodium.crypto_sign_keypair();
+  const OWNER_PUBKEY = sodium.to_hex(kpOwner.publicKey);
+  const OWNER_SECRET = sodium.to_hex(kpOwner.privateKey);
   const PEER_A_PUBKEY = sodium.to_hex(kpA.publicKey);
   const PEER_A_SECRET = sodium.to_hex(kpA.privateKey);
   const PEER_B_PUBKEY = sodium.to_hex(kpB.publicKey);
@@ -53,12 +58,47 @@ async function main() {
       name: "Smoke Test",
       slug: MESH_SLUG,
       ownerUserId: USER_ID,
+      ownerPubkey: OWNER_PUBKEY,
       visibility: "private",
       transport: "managed",
       tier: "free",
     })
     .returning({ id: mesh.id });
   if (!m) throw new Error("mesh insert failed");
+
+  // Build + sign an invite, store it so /join can verify.
+  const expiresAtSec = Math.floor(Date.now() / 1000) + 3600;
+  const invitePayload = {
+    v: 1 as const,
+    mesh_id: m.id,
+    mesh_slug: MESH_SLUG,
+    broker_url: BROKER_URL,
+    expires_at: expiresAtSec,
+    mesh_root_key: "c21va2UtdGVzdC1tZXNoLXJvb3Qta2V5LWRldg",
+    role: "member" as const,
+    owner_pubkey: OWNER_PUBKEY,
+  };
+  const canonical = canonicalInvite(invitePayload);
+  const signature = sodium.to_hex(
+    sodium.crypto_sign_detached(
+      sodium.from_string(canonical),
+      kpOwner.privateKey,
+    ),
+  );
+  const fullPayload = { ...invitePayload, signature };
+  const token = Buffer.from(JSON.stringify(fullPayload), "utf-8").toString(
+    "base64url",
+  );
+  await db.insert(invite).values({
+    meshId: m.id,
+    token,
+    tokenBytes: canonical,
+    maxUses: 5,
+    usedCount: 0,
+    role: "member",
+    expiresAt: new Date(expiresAtSec * 1000),
+    createdBy: USER_ID,
+  });
 
   const [peerA] = await db
     .insert(meshMember)
@@ -84,6 +124,10 @@ async function main() {
 
   const seed = {
     meshId: m.id,
+    ownerPubkey: OWNER_PUBKEY,
+    ownerSecretKey: OWNER_SECRET,
+    inviteToken: token,
+    inviteLink: `ic://join/${token}`,
     peerA: {
       memberId: peerA.id,
       pubkey: PEER_A_PUBKEY,

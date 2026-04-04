@@ -251,21 +251,21 @@ function handleJoinPost(
     if (aborted) return;
     try {
       const payload = JSON.parse(Buffer.concat(chunks).toString()) as {
-        mesh_id?: string;
+        invite_token?: string;
+        invite_payload?: unknown;
         peer_pubkey?: string;
         display_name?: string;
-        role?: "admin" | "member";
       };
-      // Minimal shape validation.
       if (
-        !payload.mesh_id ||
+        !payload.invite_token ||
+        !payload.invite_payload ||
         !payload.peer_pubkey ||
-        !payload.display_name ||
-        !payload.role
+        !payload.display_name
       ) {
         writeJson(res, 400, {
           ok: false,
-          error: "mesh_id, peer_pubkey, display_name, role required",
+          error:
+            "invite_token, invite_payload, peer_pubkey, display_name required",
         });
         return;
       }
@@ -277,18 +277,21 @@ function handleJoinPost(
         return;
       }
       const result = await joinMesh({
-        meshId: payload.mesh_id,
+        inviteToken: payload.invite_token,
+        invitePayload: payload.invite_payload as Parameters<
+          typeof joinMesh
+        >[0]["invitePayload"],
         peerPubkey: payload.peer_pubkey,
         displayName: payload.display_name,
-        role: payload.role,
       });
       writeJson(res, result.ok ? 200 : 400, result);
       log.info("join", {
         route: "POST /join",
-        mesh_id: payload.mesh_id,
         pubkey: payload.peer_pubkey.slice(0, 12),
         ok: result.ok,
-        already_member: "alreadyMember" in result ? result.alreadyMember : false,
+        error: !result.ok ? result.error : undefined,
+        already_member:
+          "alreadyMember" in result ? result.alreadyMember : false,
         latency_ms: Date.now() - started,
       });
     } catch (e) {

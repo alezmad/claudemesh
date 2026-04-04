@@ -82,6 +82,13 @@ export const mesh = meshSchema.table("mesh", {
   transport: meshTransportEnum().notNull().default("managed"),
   maxPeers: integer(),
   tier: meshTierEnum().notNull().default("free"),
+  /**
+   * ed25519 public key (hex) of the mesh owner / admin signer.
+   * Invites are signed by the corresponding secret key and verified
+   * by the broker on /join against this column. Nullable for existing
+   * rows; required for new meshes.
+   */
+  ownerPubkey: text(),
   createdAt: timestamp().defaultNow().notNull(),
   archivedAt: timestamp(),
 });
@@ -116,6 +123,10 @@ export const meshMember = meshSchema.table("member", {
 
 /**
  * Invite tokens used to join a mesh via shareable URL.
+ *
+ * `token`       — opaque DB lookup key (the ic:// link's payload)
+ * `tokenBytes`  — canonical signed bytes that the broker re-verifies
+ *                 against mesh.ownerPubkey on every /join call
  */
 export const invite = meshSchema.table("invite", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
@@ -123,6 +134,7 @@ export const invite = meshSchema.table("invite", {
     .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),
   token: text().notNull().unique(),
+  tokenBytes: text(),
   maxUses: integer().notNull().default(1),
   usedCount: integer().notNull().default(0),
   role: meshRoleEnum().notNull().default("member"),

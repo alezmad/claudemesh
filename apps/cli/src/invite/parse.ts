@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { ensureSodium } from "../crypto/keypair";
 
 const invitePayloadSchema = z.object({
   v: z.literal(1),
@@ -15,7 +16,8 @@ const invitePayloadSchema = z.object({
   expires_at: z.number().int().positive(),
   mesh_root_key: z.string().min(1),
   role: z.enum(["admin", "member"]),
-  signature: z.string().optional(), // ed25519 b64, validated in Step 18
+  owner_pubkey: z.string().regex(/^[0-9a-f]{64}$/i),
+  signature: z.string().regex(/^[0-9a-f]{128}$/i),
 });
 
 export type InvitePayload = z.infer<typeof invitePayloadSchema>;
@@ -23,9 +25,24 @@ export type InvitePayload = z.infer<typeof invitePayloadSchema>;
 export interface ParsedInvite {
   payload: InvitePayload;
   raw: string; // the original ic://join/... string
+  token: string; // base64url(JSON) — DB lookup key (everything after ic://join/)
 }
 
-export function parseInviteLink(link: string): ParsedInvite {
+/** Canonical invite bytes — must match broker's canonicalInvite(). */
+export function canonicalInvite(p: {
+  v: number;
+  mesh_id: string;
+  mesh_slug: string;
+  broker_url: string;
+  expires_at: number;
+  mesh_root_key: string;
+  role: "admin" | "member";
+  owner_pubkey: string;
+}): string {
+  return `${p.v}|${p.mesh_id}|${p.mesh_slug}|${p.broker_url}|${p.expires_at}|${p.mesh_root_key}|${p.role}|${p.owner_pubkey}`;
+}
+
+export async function parseInviteLink(link: string): Promise<ParsedInvite> {
   if (!link.startsWith("ic://join/")) {
     throw new Error(
       `invalid invite link: expected prefix "ic://join/", got "${link.slice(0, 20)}…"`,
@@ -67,7 +84,36 @@ export function parseInviteLink(link: string): ParsedInvite {
     );
   }
 
-  return { payload: parsed.data, raw: link };
+  // Verify the ed25519 signature against the embedded owner_pubkey.
+  // Client-side verification gives immediate feedback on tampered
+  // links; broker re-verifies authoritatively on /join.
+  const s = await ensureSodium();
+  const canonical = canonicalInvite({
+    v: parsed.data.v,
+    mesh_id: parsed.data.mesh_id,
+    mesh_slug: parsed.data.mesh_slug,
+    broker_url: parsed.data.broker_url,
+    expires_at: parsed.data.expires_at,
+    mesh_root_key: parsed.data.mesh_root_key,
+    role: parsed.data.role,
+    owner_pubkey: parsed.data.owner_pubkey,
+  });
+  const sigOk = (() => {
+    try {
+      return s.crypto_sign_verify_detached(
+        s.from_hex(parsed.data.signature),
+        s.from_string(canonical),
+        s.from_hex(parsed.data.owner_pubkey),
+      );
+    } catch {
+      return false;
+    }
+  })();
+  if (!sigOk) {
+    throw new Error("invite signature invalid (link tampered?)");
+  }
+
+  return { payload: parsed.data, raw: link, token: encoded };
 }
 
 /**
@@ -78,4 +124,53 @@ export function encodeInviteLink(payload: InvitePayload): string {
   const json = JSON.stringify(payload);
   const encoded = Buffer.from(json, "utf-8").toString("base64url");
   return `ic://join/${encoded}`;
+}
+
+/**
+ * Sign and assemble an invite payload → ic://join/... link.
+ * The canonical bytes (everything except signature) are signed with
+ * the mesh owner's ed25519 secret key.
+ */
+export async function buildSignedInvite(args: {
+  v: 1;
+  mesh_id: string;
+  mesh_slug: string;
+  broker_url: string;
+  expires_at: number;
+  mesh_root_key: string;
+  role: "admin" | "member";
+  owner_pubkey: string;
+  owner_secret_key: string;
+}): Promise<{ link: string; token: string; payload: InvitePayload }> {
+  const s = await ensureSodium();
+  const canonical = canonicalInvite({
+    v: args.v,
+    mesh_id: args.mesh_id,
+    mesh_slug: args.mesh_slug,
+    broker_url: args.broker_url,
+    expires_at: args.expires_at,
+    mesh_root_key: args.mesh_root_key,
+    role: args.role,
+    owner_pubkey: args.owner_pubkey,
+  });
+  const signature = s.to_hex(
+    s.crypto_sign_detached(
+      s.from_string(canonical),
+      s.from_hex(args.owner_secret_key),
+    ),
+  );
+  const payload: InvitePayload = {
+    v: args.v,
+    mesh_id: args.mesh_id,
+    mesh_slug: args.mesh_slug,
+    broker_url: args.broker_url,
+    expires_at: args.expires_at,
+    mesh_root_key: args.mesh_root_key,
+    role: args.role,
+    owner_pubkey: args.owner_pubkey,
+    signature,
+  };
+  const json = JSON.stringify(payload);
+  const token = Buffer.from(json, "utf-8").toString("base64url");
+  return { link: `ic://join/${token}`, token, payload };
 }

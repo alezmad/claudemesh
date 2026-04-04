@@ -8,10 +8,12 @@
  */
 
 import { eq, inArray } from "drizzle-orm";
+import sodium from "libsodium-wrappers";
 import { db } from "../src/db";
-import { mesh, meshMember } from "@turbostarter/db/schema/mesh";
+import { invite, mesh, meshMember } from "@turbostarter/db/schema/mesh";
 import { user } from "@turbostarter/db/schema/auth";
 import { randomBytes } from "node:crypto";
+import { canonicalInvite } from "../src/crypto";
 
 const TEST_USER_ID = "test-user-integration";
 
@@ -37,9 +39,27 @@ export async function ensureTestUser(): Promise<string> {
 
 export interface TestMesh {
   meshId: string;
+  ownerPubkey: string;
+  ownerSecretKey: string;
   peerA: { memberId: string; pubkey: string };
   peerB: { memberId: string; pubkey: string };
   cleanup: () => Promise<void>;
+}
+
+export interface TestInvite {
+  token: string;
+  payload: {
+    v: 1;
+    mesh_id: string;
+    mesh_slug: string;
+    broker_url: string;
+    expires_at: number;
+    mesh_root_key: string;
+    role: "admin" | "member";
+    owner_pubkey: string;
+    signature: string;
+  };
+  inviteId: string;
 }
 
 /**
@@ -51,12 +71,18 @@ export async function setupTestMesh(label: string): Promise<TestMesh> {
   const userId = await ensureTestUser();
   const slug = `t-${label}-${randomBytes(4).toString("hex")}`;
 
+  await sodium.ready;
+  const kpOwner = sodium.crypto_sign_keypair();
+  const ownerPubkey = sodium.to_hex(kpOwner.publicKey);
+  const ownerSecretKey = sodium.to_hex(kpOwner.privateKey);
+
   const [m] = await db
     .insert(mesh)
     .values({
       name: `Test ${label}`,
       slug,
       ownerUserId: userId,
+      ownerPubkey,
       visibility: "private",
       transport: "managed",
       tier: "free",
@@ -91,12 +117,82 @@ export async function setupTestMesh(label: string): Promise<TestMesh> {
 
   return {
     meshId: m.id,
+    ownerPubkey,
+    ownerSecretKey,
     peerA: { memberId: mA.id, pubkey: pubkeyA },
     peerB: { memberId: mB.id, pubkey: pubkeyB },
     cleanup: async () => {
       // Cascade delete takes care of members, presences, message_queue.
       await db.delete(mesh).where(eq(mesh.id, m.id));
     },
+  };
+}
+
+/**
+ * Create a signed invite row for an existing test mesh. Returns the
+ * token + full payload + DB invite id. Defaults: 1-hour expiry, max
+ * uses = 1, role = "member".
+ */
+export async function createTestInvite(
+  m: TestMesh,
+  opts: {
+    maxUses?: number;
+    expiresInSec?: number;
+    role?: "admin" | "member";
+    slug?: string;
+    brokerUrl?: string;
+  } = {},
+): Promise<TestInvite> {
+  await sodium.ready;
+  const now = Math.floor(Date.now() / 1000);
+  const expiresAt = now + (opts.expiresInSec ?? 3600);
+  const payload = {
+    v: 1 as const,
+    mesh_id: m.meshId,
+    mesh_slug: opts.slug ?? "test-slug",
+    broker_url: opts.brokerUrl ?? "ws://localhost:7900/ws",
+    expires_at: expiresAt,
+    mesh_root_key: "dGVzdC1tZXNoLXJvb3Qta2V5",
+    role: opts.role ?? ("member" as const),
+    owner_pubkey: m.ownerPubkey,
+  };
+  const canonical = canonicalInvite(payload);
+  const signature = sodium.to_hex(
+    sodium.crypto_sign_detached(
+      sodium.from_string(canonical),
+      sodium.from_hex(m.ownerSecretKey),
+    ),
+  );
+  const full = { ...payload, signature };
+  const token = Buffer.from(JSON.stringify(full), "utf-8").toString(
+    "base64url",
+  );
+  const [row] = await db
+    .insert(invite)
+    .values({
+      meshId: m.meshId,
+      token,
+      tokenBytes: canonical,
+      maxUses: opts.maxUses ?? 1,
+      usedCount: 0,
+      role: opts.role ?? "member",
+      expiresAt: new Date(expiresAt * 1000),
+      createdBy: "test-user-integration",
+    })
+    .returning({ id: invite.id });
+  if (!row) throw new Error("invite insert failed");
+  return { token, payload: full, inviteId: row.id };
+}
+
+export async function generateRawKeypair(): Promise<{
+  publicKey: string;
+  secretKey: string;
+}> {
+  await sodium.ready;
+  const kp = sodium.crypto_sign_keypair();
+  return {
+    publicKey: sodium.to_hex(kp.publicKey),
+    secretKey: sodium.to_hex(kp.privateKey),
   };
 }
 

@@ -30,12 +30,17 @@ import {
 } from "drizzle-orm";
 import { db } from "./db";
 import {
+  invite as inviteTable,
   mesh,
   meshMember as memberTable,
   messageQueue,
   pendingStatus,
   presence,
 } from "@turbostarter/db/schema/mesh";
+import {
+  canonicalInvite,
+  verifyEd25519,
+} from "./crypto";
 import { env } from "./env";
 import { metrics } from "./metrics";
 import { inferStatusFromJsonl } from "./paths";
@@ -510,37 +515,108 @@ export async function stopSweepers(): Promise<void> {
     .where(isNull(presence.disconnectedAt));
 }
 
+export type JoinError =
+  | "mesh_not_found"
+  | "mesh_missing_owner_key"
+  | "invite_not_found"
+  | "invite_expired"
+  | "invite_exhausted"
+  | "invite_revoked"
+  | "invite_bad_signature"
+  | "invite_mesh_mismatch"
+  | "invite_owner_mismatch"
+  | "member_insert_failed";
+
+export interface InvitePayload {
+  v: number;
+  mesh_id: string;
+  mesh_slug: string;
+  broker_url: string;
+  expires_at: number;
+  mesh_root_key: string;
+  role: "admin" | "member";
+  owner_pubkey: string;
+  signature: string;
+}
+
 /**
- * Enroll a new member in an existing mesh. Called by the CLI join
- * flow after invite-link parsing + keypair generation client-side.
+ * Enroll a new member in an existing mesh.
  *
- * v0.1.0: trusts the request. Signature verification + invite-token
- * one-time-use tracking land in Step 18.
+ * Requires a signed invite payload. Verifies:
+ *   - invite row exists (looked up by token = base64 link payload)
+ *   - not expired, not revoked, used_count < max_uses
+ *   - payload's signature matches payload's owner_pubkey
+ *   - payload's owner_pubkey matches mesh.owner_pubkey (prevents a
+ *     malicious admin from substituting their own owner key)
+ *   - payload's mesh_id matches the row's mesh_id (belt + braces)
+ *
+ * Then atomically increments used_count (CAS guarded by max_uses) and
+ * inserts the member. Idempotent: same pubkey enrolling twice returns
+ * the existing memberId WITHOUT burning an invite use.
  */
 export async function joinMesh(args: {
-  meshId: string;
+  inviteToken: string;
+  invitePayload: InvitePayload;
   peerPubkey: string;
   displayName: string;
-  role: "admin" | "member";
 }): Promise<
   | { ok: true; memberId: string; alreadyMember?: boolean }
-  | { ok: false; error: string }
+  | { ok: false; error: JoinError }
 > {
-  // Validate the mesh exists.
-  const [m] = await db
-    .select({ id: mesh.id })
-    .from(mesh)
-    .where(and(eq(mesh.id, args.meshId), isNull(mesh.archivedAt)));
-  if (!m) return { ok: false, error: "mesh not found or archived" };
+  const { inviteToken, invitePayload, peerPubkey, displayName } = args;
 
-  // Idempotency: same pubkey already a member → return existing id.
+  // 1. Verify invite signature.
+  const canonical = canonicalInvite({
+    v: invitePayload.v,
+    mesh_id: invitePayload.mesh_id,
+    mesh_slug: invitePayload.mesh_slug,
+    broker_url: invitePayload.broker_url,
+    expires_at: invitePayload.expires_at,
+    mesh_root_key: invitePayload.mesh_root_key,
+    role: invitePayload.role,
+    owner_pubkey: invitePayload.owner_pubkey,
+  });
+  const sigValid = await verifyEd25519(
+    canonical,
+    invitePayload.signature,
+    invitePayload.owner_pubkey,
+  );
+  if (!sigValid) return { ok: false, error: "invite_bad_signature" };
+
+  // 2. Load the mesh. Require owner_pubkey is set and matches payload.
+  const [m] = await db
+    .select({ id: mesh.id, ownerPubkey: mesh.ownerPubkey })
+    .from(mesh)
+    .where(and(eq(mesh.id, invitePayload.mesh_id), isNull(mesh.archivedAt)));
+  if (!m) return { ok: false, error: "mesh_not_found" };
+  if (!m.ownerPubkey) return { ok: false, error: "mesh_missing_owner_key" };
+  if (m.ownerPubkey !== invitePayload.owner_pubkey) {
+    return { ok: false, error: "invite_owner_mismatch" };
+  }
+
+  // 3. Load the invite row. Must belong to this mesh.
+  const [inv] = await db
+    .select()
+    .from(inviteTable)
+    .where(eq(inviteTable.token, inviteToken));
+  if (!inv) return { ok: false, error: "invite_not_found" };
+  if (inv.meshId !== invitePayload.mesh_id) {
+    return { ok: false, error: "invite_mesh_mismatch" };
+  }
+  if (inv.revokedAt) return { ok: false, error: "invite_revoked" };
+  if (inv.expiresAt.getTime() < Date.now()) {
+    return { ok: false, error: "invite_expired" };
+  }
+
+  // 4. Idempotency: if this pubkey is already a member, short-circuit
+  //    without consuming an invite use.
   const [existing] = await db
     .select({ id: memberTable.id })
     .from(memberTable)
     .where(
       and(
-        eq(memberTable.meshId, args.meshId),
-        eq(memberTable.peerPubkey, args.peerPubkey),
+        eq(memberTable.meshId, invitePayload.mesh_id),
+        eq(memberTable.peerPubkey, peerPubkey),
         isNull(memberTable.revokedAt),
       ),
     );
@@ -548,16 +624,30 @@ export async function joinMesh(args: {
     return { ok: true, memberId: existing.id, alreadyMember: true };
   }
 
+  // 5. Atomic claim: increment used_count iff under max_uses.
+  const [claimed] = await db
+    .update(inviteTable)
+    .set({ usedCount: sql`${inviteTable.usedCount} + 1` })
+    .where(
+      and(
+        eq(inviteTable.id, inv.id),
+        lt(inviteTable.usedCount, inv.maxUses),
+      ),
+    )
+    .returning({ id: inviteTable.id, usedCount: inviteTable.usedCount });
+  if (!claimed) return { ok: false, error: "invite_exhausted" };
+
+  // 6. Insert the member with the role from the payload.
   const [row] = await db
     .insert(memberTable)
     .values({
-      meshId: args.meshId,
-      peerPubkey: args.peerPubkey,
-      displayName: args.displayName,
-      role: args.role,
+      meshId: invitePayload.mesh_id,
+      peerPubkey,
+      displayName,
+      role: invitePayload.role,
     })
     .returning({ id: memberTable.id });
-  if (!row) return { ok: false, error: "member insert failed" };
+  if (!row) return { ok: false, error: "member_insert_failed" };
   return { ok: true, memberId: row.id };
 }
 
