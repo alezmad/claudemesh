@@ -77,7 +77,7 @@ export const mesh = schema.table("mesh", {
  * A member is a peer that has joined a mesh. user_id is nullable to
  * allow anonymous/invite-only peers (identity is the ed25519 pubkey).
  */
-export const member = schema.table("member", {
+export const meshMember = schema.table("member", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   meshId: text()
     .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
@@ -140,7 +140,7 @@ export const auditLog = schema.table("audit_log", {
 export const presence = schema.table("presence", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   memberId: text()
-    .references(() => member.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),
   sessionId: text().notNull(),
   pid: integer().notNull(),
@@ -168,7 +168,7 @@ export const messageQueue = schema.table("message_queue", {
     .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),
   senderMemberId: text()
-    .references(() => member.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),
   targetSpec: text().notNull(),
   priority: messagePriorityEnum().notNull().default("next"),
@@ -202,19 +202,19 @@ export const meshRelations = relations(mesh, ({ one, many }) => ({
     fields: [mesh.ownerUserId],
     references: [user.id],
   }),
-  members: many(member),
+  members: many(meshMember),
   invites: many(invite),
   auditLogs: many(auditLog),
   messageQueue: many(messageQueue),
 }));
 
-export const memberRelations = relations(member, ({ one, many }) => ({
+export const memberRelations = relations(meshMember, ({ one, many }) => ({
   mesh: one(mesh, {
-    fields: [member.meshId],
+    fields: [meshMember.meshId],
     references: [mesh.id],
   }),
   user: one(user, {
-    fields: [member.userId],
+    fields: [meshMember.userId],
     references: [user.id],
   }),
   presences: many(presence),
@@ -222,9 +222,9 @@ export const memberRelations = relations(member, ({ one, many }) => ({
 }));
 
 export const presenceRelations = relations(presence, ({ one }) => ({
-  member: one(member, {
+  member: one(meshMember, {
     fields: [presence.memberId],
-    references: [member.id],
+    references: [meshMember.id],
   }),
 }));
 
@@ -233,9 +233,9 @@ export const messageQueueRelations = relations(messageQueue, ({ one }) => ({
     fields: [messageQueue.meshId],
     references: [mesh.id],
   }),
-  sender: one(member, {
+  sender: one(meshMember, {
     fields: [messageQueue.senderMemberId],
-    references: [member.id],
+    references: [meshMember.id],
   }),
 }));
 
@@ -259,8 +259,8 @@ export const auditLogRelations = relations(auditLog, ({ one }) => ({
 
 export const selectMeshSchema = createSelectSchema(mesh);
 export const insertMeshSchema = createInsertSchema(mesh);
-export const selectMemberSchema = createSelectSchema(member);
-export const insertMemberSchema = createInsertSchema(member);
+export const selectMemberSchema = createSelectSchema(meshMember);
+export const insertMemberSchema = createInsertSchema(meshMember);
 export const selectInviteSchema = createSelectSchema(invite);
 export const insertInviteSchema = createInsertSchema(invite);
 export const selectAuditLogSchema = createSelectSchema(auditLog);
@@ -274,8 +274,8 @@ export const insertPendingStatusSchema = createInsertSchema(pendingStatus);
 
 export type SelectMesh = typeof mesh.$inferSelect;
 export type InsertMesh = typeof mesh.$inferInsert;
-export type SelectMember = typeof member.$inferSelect;
-export type InsertMember = typeof member.$inferInsert;
+export type SelectMember = typeof meshMember.$inferSelect;
+export type InsertMember = typeof meshMember.$inferInsert;
 export type SelectInvite = typeof invite.$inferSelect;
 export type InsertInvite = typeof invite.$inferInsert;
 export type SelectAuditLog = typeof auditLog.$inferSelect;

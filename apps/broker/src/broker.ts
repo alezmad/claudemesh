@@ -17,7 +17,7 @@
 import { and, asc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { db } from "./db";
 import {
-  member as memberTable,
+  meshMember as memberTable,
   messageQueue,
   pendingStatus,
   presence,
