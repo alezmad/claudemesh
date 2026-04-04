@@ -4,18 +4,26 @@ import { z } from "zod";
  * Broker environment config.
  *
  * Validated at startup with Zod. Fails fast with a useful error if any
- * required var is missing or malformed. Defaults mirror the values
- * proven out in the claude-intercom prototype so local dev works
- * without a .env file.
+ * required var is missing or malformed.
  */
 const envSchema = z.object({
   BROKER_PORT: z.coerce.number().int().positive().default(7900),
-  DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  DATABASE_URL: z
+    .string()
+    .min(1, "DATABASE_URL is required")
+    .refine(
+      (u) => /^postgres(ql)?:\/\//.test(u),
+      "DATABASE_URL must be a postgres:// or postgresql:// connection string",
+    ),
   STATUS_TTL_SECONDS: z.coerce.number().int().positive().default(60),
   HOOK_FRESH_WINDOW_SECONDS: z.coerce.number().int().positive().default(30),
+  MAX_CONNECTIONS_PER_MESH: z.coerce.number().int().positive().default(100),
+  MAX_MESSAGE_BYTES: z.coerce.number().int().positive().default(65_536),
+  HOOK_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(30),
   NODE_ENV: z
     .enum(["development", "production", "test"])
     .default("development"),
+  GIT_SHA: z.string().optional(),
 });
 
 export type BrokerEnv = z.infer<typeof envSchema>;

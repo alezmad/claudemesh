@@ -17,6 +17,7 @@
 import {
   and,
   asc,
+  count,
   desc,
   eq,
   gte,
@@ -34,6 +35,7 @@ import {
   presence,
 } from "@turbostarter/db/schema/mesh";
 import { env } from "./env";
+import { metrics } from "./metrics";
 import { inferStatusFromJsonl } from "./paths";
 import type {
   HookSetStatusRequest,
@@ -244,6 +246,16 @@ export async function sweepStuckWorking(): Promise<void> {
   for (const row of stuck) {
     await writeStatus(row.id, "idle", "jsonl", now);
   }
+  metrics.ttlSweepsTotal.inc({ flipped: String(stuck.length) });
+}
+
+/** Update the queue_depth gauge from a single COUNT query. */
+export async function refreshQueueDepth(): Promise<void> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(messageQueue)
+    .where(isNull(messageQueue.deliveredAt));
+  metrics.queueDepth.set(Number(row?.n ?? 0));
 }
 
 /** Sweep expired pending_status entries. */
