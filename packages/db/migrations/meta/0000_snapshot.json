@@ -1,5 +1,5 @@
 {
-  "id": "f8d7bddc-1efc-4f4a-8ebb-e8278508656e",
+  "id": "a1b0192f-d300-48eb-8f1d-e76c65b030dc",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -2792,7 +2792,10 @@
     }
   },
   "schemas": {
-    "pdf": "pdf"
+    "chat": "chat",
+    "pdf": "pdf",
+    "image": "image",
+    "mesh": "mesh"
   },
   "sequences": {},
   "roles": {},

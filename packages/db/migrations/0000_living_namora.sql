@@ -1,4 +1,11 @@
+CREATE EXTENSION IF NOT EXISTS vector;--> statement-breakpoint
+CREATE SCHEMA "chat";
+--> statement-breakpoint
 CREATE SCHEMA "pdf";
+--> statement-breakpoint
+CREATE SCHEMA "image";
+--> statement-breakpoint
+CREATE SCHEMA "mesh";
 --> statement-breakpoint
 CREATE TYPE "public"."credit_transaction_type" AS ENUM('signup', 'purchase', 'usage', 'admin_grant', 'admin_deduct', 'refund', 'promo', 'referral', 'expiry');--> statement-breakpoint
 CREATE TYPE "public"."status" AS ENUM('active', 'canceled', 'incomplete', 'incomplete_expired', 'past_due', 'paused', 'trialing', 'unpaid');--> statement-breakpoint

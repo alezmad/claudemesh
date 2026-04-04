@@ -13,41 +13,54 @@ import { createInsertSchema, createSelectSchema } from "../utils/drizzle-zod";
 
 import { user } from "./auth";
 
-export const schema = pgSchema("mesh");
+/**
+ * pgSchema namespace for all mesh/broker tables.
+ *
+ * Exported under a UNIQUE name (not generic `schema`) to avoid being
+ * shadowed by `export * from` barrel merging when another module
+ * (chat, image) exports its own `schema` pgSchema. Without this, the
+ * TS ambiguous-re-export rule silently drops the `schema` binding,
+ * drizzle-kit can't introspect the pgSchema, and `CREATE SCHEMA
+ * "mesh"` is never emitted in the generated migration — producing
+ * broken migrations for fresh databases.
+ *
+ * See: pdf.ts for the same pattern (pdfSchema).
+ */
+export const meshSchema = pgSchema("mesh");
 
-export const meshVisibilityEnum = schema.enum("visibility", [
+export const meshVisibilityEnum = meshSchema.enum("visibility", [
   "private",
   "public",
 ]);
 
-export const meshTransportEnum = schema.enum("transport", [
+export const meshTransportEnum = meshSchema.enum("transport", [
   "managed",
   "tailscale",
   "self_hosted",
 ]);
 
-export const meshTierEnum = schema.enum("tier", [
+export const meshTierEnum = meshSchema.enum("tier", [
   "free",
   "pro",
   "team",
   "enterprise",
 ]);
 
-export const meshRoleEnum = schema.enum("role", ["admin", "member"]);
+export const meshRoleEnum = meshSchema.enum("role", ["admin", "member"]);
 
-export const presenceStatusEnum = schema.enum("presence_status", [
+export const presenceStatusEnum = meshSchema.enum("presence_status", [
   "idle",
   "working",
   "dnd",
 ]);
 
-export const presenceStatusSourceEnum = schema.enum("presence_status_source", [
+export const presenceStatusSourceEnum = meshSchema.enum("presence_status_source", [
   "hook",
   "manual",
   "jsonl",
 ]);
 
-export const messagePriorityEnum = schema.enum("message_priority", [
+export const messagePriorityEnum = meshSchema.enum("message_priority", [
   "now",
   "next",
   "low",
@@ -58,7 +71,7 @@ export const messagePriorityEnum = schema.enum("message_priority", [
  * other via the broker. Ownership is tied to a user; transport/tier
  * describe how it's hosted and billed.
  */
-export const mesh = schema.table("mesh", {
+export const mesh = meshSchema.table("mesh", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   name: text().notNull(),
   slug: text().notNull().unique(),
@@ -76,8 +89,15 @@ export const mesh = schema.table("mesh", {
 /**
  * A member is a peer that has joined a mesh. user_id is nullable to
  * allow anonymous/invite-only peers (identity is the ed25519 pubkey).
+ *
+ * Note on asymmetric naming: the DB table is `mesh.member` (short,
+ * lives in the `mesh` pgSchema) but the TS export is `meshMember`.
+ * This is deliberate — `auth.member` also exports a `member` binding,
+ * and the schema barrel uses `export *`, which would silently drop
+ * one of the two on collision. Unique TS name + short DB name is the
+ * cleanest trade-off.
  */
-export const meshMember = schema.table("member", {
+export const meshMember = meshSchema.table("member", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   meshId: text()
     .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
@@ -97,7 +117,7 @@ export const meshMember = schema.table("member", {
 /**
  * Invite tokens used to join a mesh via shareable URL.
  */
-export const invite = schema.table("invite", {
+export const invite = meshSchema.table("invite", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   meshId: text()
     .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
@@ -119,7 +139,7 @@ export const invite = schema.table("invite", {
  * payload between peers is E2E encrypted client-side (libsodium), so
  * the broker/DB only ever see ciphertext + routing events.
  */
-export const auditLog = schema.table("audit_log", {
+export const auditLog = meshSchema.table("audit_log", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   meshId: text()
     .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
@@ -137,7 +157,7 @@ export const auditLog = schema.table("audit_log", {
  * heartbeat/hook signal, closed out (disconnectedAt set) on disconnect.
  * Persisted so the broker can resume state after a restart.
  */
-export const presence = schema.table("presence", {
+export const presence = meshSchema.table("presence", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   memberId: text()
     .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
@@ -162,7 +182,7 @@ export const presence = schema.table("presence", {
  * pubkey (direct message), a channel (`#general`), a tag (`tag:admins`),
  * or a broadcast (`*`). Resolution happens in broker logic, not SQL.
  */
-export const messageQueue = schema.table("message_queue", {
+export const messageQueue = meshSchema.table("message_queue", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   meshId: text()
     .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
@@ -187,7 +207,7 @@ export const messageQueue = schema.table("message_queue", {
  * Intentionally NOT linked to member/mesh via FK — the whole point is
  * that no member row exists yet when the hook fires.
  */
-export const pendingStatus = schema.table("pending_status", {
+export const pendingStatus = meshSchema.table("pending_status", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   pid: integer().notNull(),
   cwd: text().notNull(),

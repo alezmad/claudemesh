@@ -7,15 +7,18 @@ import { createInsertSchema, createSelectSchema } from "../utils/drizzle-zod";
 
 import { user } from "./auth";
 
-export const schema = pgSchema("chat");
+// Uniquely-named pgSchema export (not `schema`) so drizzle-kit can
+// introspect it through the `export * from "./chat"` barrel. See
+// mesh.ts for the full rationale.
+export const chatSchema = pgSchema("chat");
 
-export const messageRoleEnum = schema.enum("role", [
+export const messageRoleEnum = chatSchema.enum("role", [
   "system",
   "assistant",
   "user",
 ]);
 
-export const chat = schema.table("chat", {
+export const chat = chatSchema.table("chat", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   name: text(),
   userId: text()
@@ -27,7 +30,7 @@ export const chat = schema.table("chat", {
   createdAt: timestamp().defaultNow(),
 });
 
-export const message = schema.table("message", {
+export const message = chatSchema.table("message", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   chatId: text()
     .references(() => chat.id, { onDelete: "cascade", onUpdate: "cascade" })
@@ -40,7 +43,7 @@ export const messageRelations = relations(message, ({ many }) => ({
   part: many(part),
 }));
 
-export const part = schema.table("part", {
+export const part = chatSchema.table("part", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   messageId: text()
     .references(() => message.id, { onDelete: "cascade", onUpdate: "cascade" })

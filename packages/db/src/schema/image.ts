@@ -7,16 +7,17 @@ import { createInsertSchema, createSelectSchema } from "../utils/drizzle-zod";
 
 import { user } from "./auth";
 
-export const schema = pgSchema("image");
+// Uniquely-named pgSchema export — see mesh.ts for rationale.
+export const imageSchema = pgSchema("image");
 
-export const aspectRatioEnum = schema.enum("aspect_ratio", [
+export const aspectRatioEnum = imageSchema.enum("aspect_ratio", [
   "square",
   "standard",
   "landscape",
   "portrait",
 ]);
 
-export const generation = schema.table("generation", {
+export const generation = imageSchema.table("generation", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   prompt: text().notNull(),
   model: text().notNull(),
@@ -36,7 +37,7 @@ export const generationRelations = relations(generation, ({ many }) => ({
   image: many(image),
 }));
 
-export const image = schema.table("image", {
+export const image = imageSchema.table("image", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   generationId: text()
     .references(() => generation.id, {
