@@ -17,7 +17,7 @@
     "@turbostarter/shared": "workspace:*",
     "drizzle-orm": "0.44.7",
     "libsodium-wrappers": "0.7.15",
-    "ws": "8.19.1",
+    "ws": "8.20.0",
     "zod": "catalog:"
   },
   "devDependencies": {
