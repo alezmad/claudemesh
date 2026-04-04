@@ -1,9 +1,10 @@
 /**
- * Broker protocol types.
+ * Broker types.
  *
- * Wire format for WebSocket messages between peers and broker. Kept
- * minimal here — the concrete schema lands in step 8 when we port the
- * claude-intercom logic into this workspace.
+ * Wire format for WebSocket messages between peers and broker, plus the
+ * internal status/priority enums that govern delivery. The status model
+ * is ported verbatim from claude-intercom and reflects the proven
+ * hook > manual > jsonl priority design.
  */
 
 export type Priority = "now" | "next" | "low";
@@ -12,24 +13,99 @@ export type PeerStatus = "idle" | "working" | "dnd";
 
 export type StatusSource = "hook" | "manual" | "jsonl";
 
-/** Runtime view of a connected peer. */
-export interface Peer {
-  id: string; // broker-assigned short id
+/** Runtime view of a connected peer (derived from mesh.presence + mesh.member). */
+export interface ConnectedPeer {
+  presenceId: string;
+  memberId: string;
   meshId: string;
-  pubkey: string; // ed25519 hex
+  pubkey: string; // ed25519 hex, from mesh.member
   displayName: string;
+  sessionId: string;
+  pid: number;
+  cwd: string;
   status: PeerStatus;
   statusSource: StatusSource;
   statusUpdatedAt: Date;
   connectedAt: Date;
 }
 
-/**
- * Generic WS message envelope. Concrete variants (hello, send, ack,
- * presence, channel_push) are defined in step 8.
- */
-export interface WSMessage<T = unknown> {
-  type: string;
-  payload: T;
+/** Hook-driven status update (received via HTTP POST /hook/set-status). */
+export interface HookSetStatusRequest {
+  cwd: string;
+  pid?: number;
+  status: PeerStatus;
+  session_id?: string;
+}
+
+export interface HookSetStatusResponse {
+  ok: boolean;
+  presence_id?: string;
+  pending?: boolean;
+  error?: string;
+}
+
+// --- WebSocket protocol envelopes ---
+
+/** Sent by client on connect to authenticate. */
+export interface WSHelloMessage {
+  type: "hello";
+  meshId: string;
+  memberId: string;
+  pubkey: string; // must match mesh.member.peerPubkey
+  sessionId: string;
+  pid: number;
+  cwd: string;
+  signature: string; // ed25519 over (meshId||memberId||sessionId||nonce)
+  nonce: string;
+}
+
+/** Client → broker: send an E2E-encrypted envelope to a target. */
+export interface WSSendMessage {
+  type: "send";
+  targetSpec: string; // member pubkey | "#channel" | "tag:xyz" | "*"
+  priority: Priority;
+  nonce: string; // base64
+  ciphertext: string; // base64
+  id?: string; // client-side correlation id
+}
+
+/** Broker → client: an envelope addressed to this peer. */
+export interface WSPushMessage {
+  type: "push";
+  messageId: string;
+  meshId: string;
+  senderPubkey: string;
+  priority: Priority;
+  nonce: string;
+  ciphertext: string;
+  createdAt: string;
+}
+
+/** Client → broker: manual status override (dnd, forced idle). */
+export interface WSSetStatusMessage {
+  type: "set_status";
+  status: PeerStatus;
+}
+
+/** Broker → client: acknowledgement for a send. */
+export interface WSAckMessage {
+  type: "ack";
+  id: string; // echoes client-side correlation id
+  messageId: string;
+  queued: boolean;
+}
+
+/** Broker → client: structured error. */
+export interface WSErrorMessage {
+  type: "error";
+  code: string;
+  message: string;
   id?: string;
 }
+
+export type WSClientMessage =
+  | WSHelloMessage
+  | WSSendMessage
+  | WSSetStatusMessage;
+
+export type WSServerMessage = WSPushMessage | WSAckMessage | WSErrorMessage;
