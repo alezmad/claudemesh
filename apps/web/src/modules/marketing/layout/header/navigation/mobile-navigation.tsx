@@ -45,7 +45,14 @@ export const MobileNavigation = ({ links }: NavigationProps) => {
     <>
       <Hamburger open={open} onOpenChange={setOpen} className="lg:hidden" />
 
-      <div className="pointer-events-none fixed top-14 left-0 z-10 flex h-[calc(100vh-3.5rem)] w-full flex-col gap-7 overflow-auto lg:hidden">
+      {/*
+        NOTE: do NOT put `overflow-auto`/`overflow-y-auto` on THIS container.
+        It's `fixed` + full-viewport + `pointer-events-none`, but a scroll
+        container on top of the page still steals wheel events on hover in
+        some browsers (Chrome/Safari inconsistently), breaking page scroll.
+        Move any needed scroll behavior to the inner panel below.
+      */}
+      <div className="pointer-events-none fixed top-14 left-0 z-10 flex h-[calc(100vh-3.5rem)] w-full flex-col gap-7 lg:hidden">
         <div
           className={cn(
             "absolute inset-0 bg-black/80 opacity-0 transition-opacity duration-500 ease-out",
@@ -57,7 +64,7 @@ export const MobileNavigation = ({ links }: NavigationProps) => {
         ></div>
         <div
           className={cn(
-            "bg-background flex w-full -translate-y-full flex-col gap-2 rounded-b-md px-[1.7rem] pb-6 transition-transform duration-500 ease-out sm:px-8",
+            "bg-background flex max-h-full w-full -translate-y-full flex-col gap-2 overflow-y-auto rounded-b-md px-[1.7rem] pb-6 transition-transform duration-500 ease-out sm:px-8",
             {
               "pointer-events-auto translate-y-0": open,
             },
