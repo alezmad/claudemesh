@@ -42,11 +42,16 @@ export default async function JoinPage({
   const invitation = await getInvitation({ id: invitationId });
 
   if (invitation) {
-    const { organization } = await handle(api.organizations[":id"].$get)({
+    // tactical typecast: Hono RPC inference loses the response shape on this
+    // route (no zod validator on the response). Proper fix is to add a
+    // getOrganizationResponseSchema to packages/api and wire it into the
+    // route's c.json() call.
+    const res = (await handle(api.organizations[":id"].$get)({
       param: {
         id: invitation.organizationId,
       },
-    });
+    })) as { organization: Parameters<typeof Invitation>[0]["organization"] | null };
+    const { organization } = res;
 
     if (!organization) {
       return notFound();
