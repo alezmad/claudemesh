@@ -35,12 +35,65 @@ export default async function AdminPage() {
     organizations: z.number(),
     customers: z.number(),
   });
+  const meshSummarySchema = z.object({
+    meshes: z.number(),
+    activeMeshes: z.number(),
+    totalPresences: z.number(),
+    activePresences: z.number(),
+    messages24h: z.number(),
+  });
 
-  const data = await handle(api.admin.summary.$get, {
-    schema: adminSummarySchema,
-  })();
+  const [base, mesh] = await Promise.all([
+    handle(api.admin.summary.$get, { schema: adminSummarySchema })(),
+    handle(api.admin.summary.mesh.$get, { schema: meshSummarySchema })(),
+  ]);
 
-  const cards = ["users", "organizations", "customers"] as const;
+  const nf = new Intl.NumberFormat(i18n.language);
+
+  const cards = [
+    {
+      key: "users" as const,
+      title: t("common:users"),
+      description: t("home.summary.users"),
+      href: pathsConfig.admin.users.index,
+      value: base.users,
+    },
+    {
+      key: "organizations" as const,
+      title: t("common:organizations"),
+      description: t("home.summary.organizations"),
+      href: pathsConfig.admin.organizations.index,
+      value: base.organizations,
+    },
+    {
+      key: "customers" as const,
+      title: t("common:customers"),
+      description: t("home.summary.customers"),
+      href: pathsConfig.admin.customers.index,
+      value: base.customers,
+    },
+    {
+      key: "meshes" as const,
+      title: "Meshes",
+      description: `${nf.format(mesh.activeMeshes)} active`,
+      href: pathsConfig.admin.meshes.index,
+      value: mesh.meshes,
+    },
+    {
+      key: "sessions" as const,
+      title: "Sessions",
+      description: `${nf.format(mesh.activePresences)} live now`,
+      href: pathsConfig.admin.sessions.index,
+      value: mesh.totalPresences,
+    },
+    {
+      key: "messages" as const,
+      title: "Messages (24h)",
+      description: "Routed through the broker",
+      href: pathsConfig.admin.audit.index,
+      value: mesh.messages24h,
+    },
+  ];
 
   return (
     <>
@@ -57,10 +110,10 @@ export default async function AdminPage() {
 
       <nav className="@container/stats w-full">
         <ul className="grid grid-cols-1 gap-4 @lg/stats:grid-cols-2 @2xl/stats:grid-cols-3">
-          {cards.map((key) => (
-            <li key={key}>
+          {cards.map((card) => (
+            <li key={card.key}>
               <TurboLink
-                href={pathsConfig.admin[key].index}
+                href={card.href}
                 className={cn(
                   buttonVariants({ variant: "outline" }),
                   "text-muted-foreground h-full w-full flex-col items-start justify-between gap-3 p-0",
@@ -69,18 +122,17 @@ export default async function AdminPage() {
                 <CardHeader className="w-full">
                   <div className="flex w-full items-center justify-between gap-3">
                     <CardTitle className="text-foreground truncate">
-                      {t(`common:${key}`)}
+                      {card.title}
                     </CardTitle>
                     <Icons.ChevronRight className="mt-0.5 size-4" />
                   </div>
                   <CardDescription className="whitespace-normal">
-                    {t(`home.summary.${key}`)}
+                    {card.description}
                   </CardDescription>
                 </CardHeader>
-
                 <CardFooter>
                   <span className="text-foreground font-mono text-4xl font-bold tracking-tight">
-                    {new Intl.NumberFormat(i18n.language).format(data[key])}
+                    {nf.format(card.value)}
                   </span>
                 </CardFooter>
               </TurboLink>

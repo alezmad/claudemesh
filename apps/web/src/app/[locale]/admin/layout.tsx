@@ -35,6 +35,31 @@ const menu = [
       },
     ],
   },
+  {
+    label: "mesh",
+    items: [
+      {
+        title: "meshes",
+        href: pathsConfig.admin.meshes.index,
+        icon: Icons.Share,
+      },
+      {
+        title: "sessions",
+        href: pathsConfig.admin.sessions.index,
+        icon: Icons.Activity,
+      },
+      {
+        title: "invites",
+        href: pathsConfig.admin.invites.index,
+        icon: Icons.Link,
+      },
+      {
+        title: "audit",
+        href: pathsConfig.admin.audit.index,
+        icon: Icons.ScrollText,
+      },
+    ],
+  },
 ];
 
 export default async function AdminLayout({

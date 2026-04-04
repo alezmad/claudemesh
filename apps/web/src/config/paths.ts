@@ -54,6 +54,19 @@ const pathsConfig = {
       index: `${ADMIN_PREFIX}/customers`,
       customer: (id: string) => `${ADMIN_PREFIX}/customers/${id}`,
     },
+    meshes: {
+      index: `${ADMIN_PREFIX}/meshes`,
+      mesh: (id: string) => `${ADMIN_PREFIX}/meshes/${id}`,
+    },
+    sessions: {
+      index: `${ADMIN_PREFIX}/sessions`,
+    },
+    invites: {
+      index: `${ADMIN_PREFIX}/invites`,
+    },
+    audit: {
+      index: `${ADMIN_PREFIX}/audit`,
+    },
   },
   marketing: {
     pricing: "/pricing",
