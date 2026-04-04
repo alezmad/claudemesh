@@ -95,6 +95,13 @@ export interface WSAckMessage {
   queued: boolean;
 }
 
+/** Broker → client: hello handshake acknowledgement. */
+export interface WSHelloAckMessage {
+  type: "hello_ack";
+  presenceId: string;
+  memberDisplayName: string;
+}
+
 /** Broker → client: structured error. */
 export interface WSErrorMessage {
   type: "error";
@@ -108,4 +115,8 @@ export type WSClientMessage =
   | WSSendMessage
   | WSSetStatusMessage;
 
-export type WSServerMessage = WSPushMessage | WSAckMessage | WSErrorMessage;
+export type WSServerMessage =
+  | WSHelloAckMessage
+  | WSPushMessage
+  | WSAckMessage
+  | WSErrorMessage;

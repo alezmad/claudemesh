@@ -267,7 +267,7 @@ function sendError(
 async function handleHello(
   ws: WebSocket,
   hello: Extract<WSClientMessage, { type: "hello" }>,
-): Promise<string | null> {
+): Promise<{ presenceId: string; memberDisplayName: string } | null> {
   // Capacity check BEFORE touching DB.
   const existing = connectionsPerMesh.get(hello.meshId) ?? 0;
   if (existing >= env.MAX_CONNECTIONS_PER_MESH) {
@@ -308,8 +308,12 @@ async function handleHello(
     presence_id: presenceId,
     session_id: hello.sessionId,
   });
-  await maybePushQueuedMessages(presenceId);
-  return presenceId;
+  // Drain any queued messages in the background. The hello_ack is
+  // sent by the CALLER after it assigns presenceId — sending it here
+  // races the caller's closure assignment, causing subsequent client
+  // messages to fail the "no_hello" check.
+  void maybePushQueuedMessages(presenceId);
+  return { presenceId, memberDisplayName: member.displayName };
 }
 
 async function handleSend(
@@ -348,7 +352,22 @@ function handleConnection(ws: WebSocket): void {
     try {
       const msg = JSON.parse(raw.toString()) as WSClientMessage;
       if (msg.type === "hello") {
-        presenceId = await handleHello(ws, msg);
+        const result = await handleHello(ws, msg);
+        if (!result) return;
+        presenceId = result.presenceId;
+        // Ack AFTER closure assignment — subsequent client messages
+        // arriving immediately after will now see a non-null presenceId.
+        try {
+          ws.send(
+            JSON.stringify({
+              type: "hello_ack",
+              presenceId: result.presenceId,
+              memberDisplayName: result.memberDisplayName,
+            }),
+          );
+        } catch {
+          /* ws closed during hello */
+        }
         return;
       }
       if (!presenceId) {

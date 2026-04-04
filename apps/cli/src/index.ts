@@ -14,6 +14,7 @@ import { runInstall } from "./commands/install";
 import { runJoin } from "./commands/join";
 import { runList } from "./commands/list";
 import { runLeave } from "./commands/leave";
+import { runSeedTestMesh } from "./commands/seed-test-mesh";
 
 const HELP = `claudemesh — peer mesh for Claude Code sessions
 
@@ -25,6 +26,7 @@ Commands:
   join <link>     Join a mesh via invite link (ic://join/...)
   list            Show all joined meshes
   leave <slug>    Leave a joined mesh
+  seed-test-mesh  Dev-only: inject a mesh into config (skips invite flow)
   mcp             Start MCP server (stdio) — invoked by Claude Code
   --help, -h      Show this help
 
@@ -53,6 +55,9 @@ async function main(): Promise<void> {
       return;
     case "leave":
       runLeave(args);
+      return;
+    case "seed-test-mesh":
+      runSeedTestMesh(args);
       return;
     case "--help":
     case "-h":
