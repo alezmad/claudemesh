@@ -29,6 +29,7 @@ import {
 } from "drizzle-orm";
 import { db } from "./db";
 import {
+  mesh,
   meshMember as memberTable,
   messageQueue,
   pendingStatus,
@@ -487,6 +488,57 @@ export async function stopSweepers(): Promise<void> {
     .update(presence)
     .set({ disconnectedAt: new Date() })
     .where(isNull(presence.disconnectedAt));
+}
+
+/**
+ * Enroll a new member in an existing mesh. Called by the CLI join
+ * flow after invite-link parsing + keypair generation client-side.
+ *
+ * v0.1.0: trusts the request. Signature verification + invite-token
+ * one-time-use tracking land in Step 18.
+ */
+export async function joinMesh(args: {
+  meshId: string;
+  peerPubkey: string;
+  displayName: string;
+  role: "admin" | "member";
+}): Promise<
+  | { ok: true; memberId: string; alreadyMember?: boolean }
+  | { ok: false; error: string }
+> {
+  // Validate the mesh exists.
+  const [m] = await db
+    .select({ id: mesh.id })
+    .from(mesh)
+    .where(and(eq(mesh.id, args.meshId), isNull(mesh.archivedAt)));
+  if (!m) return { ok: false, error: "mesh not found or archived" };
+
+  // Idempotency: same pubkey already a member → return existing id.
+  const [existing] = await db
+    .select({ id: memberTable.id })
+    .from(memberTable)
+    .where(
+      and(
+        eq(memberTable.meshId, args.meshId),
+        eq(memberTable.peerPubkey, args.peerPubkey),
+        isNull(memberTable.revokedAt),
+      ),
+    );
+  if (existing) {
+    return { ok: true, memberId: existing.id, alreadyMember: true };
+  }
+
+  const [row] = await db
+    .insert(memberTable)
+    .values({
+      meshId: args.meshId,
+      peerPubkey: args.peerPubkey,
+      displayName: args.displayName,
+      role: args.role,
+    })
+    .returning({ id: memberTable.id });
+  if (!row) return { ok: false, error: "member insert failed" };
+  return { ok: true, memberId: row.id };
 }
 
 /**

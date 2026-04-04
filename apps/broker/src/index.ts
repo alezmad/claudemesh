@@ -23,6 +23,7 @@ import {
   findMemberByPubkey,
   handleHookSetStatus,
   heartbeat,
+  joinMesh,
   queueMessage,
   refreshQueueDepth,
   refreshStatusFromJsonl,
@@ -149,6 +150,11 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/join") {
+    handleJoinPost(req, res, started);
+    return;
+  }
+
   res.writeHead(404);
   res.end("not found");
   log.debug("http", { route, status: 404, latency_ms: Date.now() - started });
@@ -213,6 +219,83 @@ function handleHookPost(
         error: e instanceof Error ? e.message : String(e),
       });
       log.error("hook handler error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+}
+
+function handleJoinPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  started: number,
+): void {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let aborted = false;
+
+  req.on("data", (chunk: Buffer) => {
+    if (aborted) return;
+    total += chunk.length;
+    if (total > env.MAX_MESSAGE_BYTES) {
+      aborted = true;
+      writeJson(res, 413, { ok: false, error: "payload too large" });
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+
+  req.on("end", async () => {
+    if (aborted) return;
+    try {
+      const payload = JSON.parse(Buffer.concat(chunks).toString()) as {
+        mesh_id?: string;
+        peer_pubkey?: string;
+        display_name?: string;
+        role?: "admin" | "member";
+      };
+      // Minimal shape validation.
+      if (
+        !payload.mesh_id ||
+        !payload.peer_pubkey ||
+        !payload.display_name ||
+        !payload.role
+      ) {
+        writeJson(res, 400, {
+          ok: false,
+          error: "mesh_id, peer_pubkey, display_name, role required",
+        });
+        return;
+      }
+      if (!/^[0-9a-f]{64}$/i.test(payload.peer_pubkey)) {
+        writeJson(res, 400, {
+          ok: false,
+          error: "peer_pubkey must be 64 hex chars (32 bytes)",
+        });
+        return;
+      }
+      const result = await joinMesh({
+        meshId: payload.mesh_id,
+        peerPubkey: payload.peer_pubkey,
+        displayName: payload.display_name,
+        role: payload.role,
+      });
+      writeJson(res, result.ok ? 200 : 400, result);
+      log.info("join", {
+        route: "POST /join",
+        mesh_id: payload.mesh_id,
+        pubkey: payload.peer_pubkey.slice(0, 12),
+        ok: result.ok,
+        already_member: "alreadyMember" in result ? result.alreadyMember : false,
+        latency_ms: Date.now() - started,
+      });
+    } catch (e) {
+      writeJson(res, 500, {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      log.error("join handler error", {
         error: e instanceof Error ? e.message : String(e),
       });
     }
