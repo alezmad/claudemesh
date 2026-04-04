@@ -9,7 +9,7 @@ import { z } from "zod";
  * without a .env file.
  */
 const envSchema = z.object({
-  BROKER_PORT: z.coerce.number().int().positive().default(7899),
+  BROKER_PORT: z.coerce.number().int().positive().default(7900),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   STATUS_TTL_SECONDS: z.coerce.number().int().positive().default(60),
   HOOK_FRESH_WINDOW_SECONDS: z.coerce.number().int().positive().default(30),

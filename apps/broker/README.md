@@ -23,7 +23,7 @@ pnpm --filter=@claudemesh/broker start   # production
 
 | Var                          | Default | Purpose                                             |
 | ---------------------------- | ------- | --------------------------------------------------- |
-| `BROKER_PORT`                | `7899`  | Single port for HTTP routes + WebSocket upgrade     |
+| `BROKER_PORT`                | `7900`  | Single port for HTTP routes + WebSocket upgrade     |
 | `DATABASE_URL`               | —       | Postgres connection string (shared with apps/web)   |
 | `STATUS_TTL_SECONDS`         | `60`    | Flip stuck-"working" peers to idle after this TTL   |
 | `HOOK_FRESH_WINDOW_SECONDS`  | `30`    | How long a hook signal beats JSONL inference        |
