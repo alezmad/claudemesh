@@ -14,7 +14,18 @@
  *   - Message envelopes are opaque ciphertext (client-side crypto).
  */
 
-import { and, asc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gte,
+  inArray,
+  isNotNull,
+  isNull,
+  lt,
+  or,
+} from "drizzle-orm";
 import { db } from "./db";
 import {
   meshMember as memberTable,
@@ -154,7 +165,7 @@ export async function handleHookSetStatus(
       .select({ id: presence.id, status: presence.status })
       .from(presence)
       .where(activeFilter)
-      .orderBy(sql`${presence.connectedAt} DESC`)
+      .orderBy(desc(presence.connectedAt))
       .limit(1);
     row = r as { id: string; status: PeerStatus } | undefined;
   }
@@ -197,10 +208,10 @@ export async function applyPendingHookStatus(
         eq(pendingStatus.pid, pid),
         eq(pendingStatus.cwd, cwd),
         isNull(pendingStatus.appliedAt),
-        sql`${pendingStatus.createdAt} >= ${cutoff}`,
+        gte(pendingStatus.createdAt, cutoff),
       ),
     )
-    .orderBy(sql`${pendingStatus.createdAt} DESC`)
+    .orderBy(desc(pendingStatus.createdAt))
     .limit(1);
   if (!row) return;
   await writeStatus(presenceId, row.status as PeerStatus, "hook", now);
@@ -241,10 +252,7 @@ export async function sweepPendingStatuses(): Promise<void> {
   await db
     .delete(pendingStatus)
     .where(
-      or(
-        lt(pendingStatus.createdAt, cutoff),
-        sql`${pendingStatus.appliedAt} IS NOT NULL`,
-      )!,
+      or(lt(pendingStatus.createdAt, cutoff), isNotNull(pendingStatus.appliedAt))!,
     );
 }
 
