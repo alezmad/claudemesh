@@ -13,6 +13,7 @@
     "lint:ws": "pnpm dlx sherif@latest -r packages-without-package-json",
     "prepare": "husky",
     "auth:seed": "set -a && source apps/web/.env.local && set +a && pnpm --filter @turbostarter/auth db:seed",
+    "admin:grant": "set -a && source apps/web/.env.local && set +a && pnpm --filter @turbostarter/auth admin:grant",
     "services:logs": "docker compose logs -f",
     "services:setup": "pnpm services:start && pnpm with-env turbo setup",
     "services:start": "docker compose up -d --wait",

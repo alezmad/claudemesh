@@ -13,6 +13,7 @@
     "clean": "git clean -xdf .cache .turbo dist node_modules",
     "db:generate": "cross-env SKIP_ENV_VALIDATION=1 pnpm dlx @better-auth/cli@1.4.3 generate --config src/server.ts --output ../db/src/schema/auth.ts --y",
     "db:seed": "cross-env SKIP_ENV_VALIDATION=1 pnpm dlx tsx ./src/scripts/seed.ts",
+    "admin:grant": "cross-env SKIP_ENV_VALIDATION=1 pnpm dlx tsx ./src/scripts/grant-admin.ts",
     "format": "prettier --check . --ignore-path ../../.gitignore",
     "lint": "eslint",
     "test": "vitest run",
