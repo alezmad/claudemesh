@@ -1,23 +1,22 @@
 #!/usr/bin/env bun
 /**
- * One-off backfill: populate `mesh.mesh.owner_pubkey` for meshes
- * created before Step 18c landed.
+ * One-off backfill: populate owner_pubkey + owner_secret_key +
+ * root_key for meshes created before Step 18c crypto landed.
  *
- * Runs idempotently: only touches rows where owner_pubkey IS NULL.
- * Generates a fresh ed25519 keypair per mesh and writes the owner
- * SECRET KEY to stdout (paired with mesh_id) so an operator can
- * hand it back to the mesh owner out-of-band.
+ * Runs idempotently: only touches rows where ANY of those three
+ * columns is NULL. Generates a fresh keypair + root key per mesh
+ * and stores ALL THREE server-side (invites are signed server-side
+ * by the web UI's create-invite flow, so it needs the secret key).
  *
  * Usage:
  *   DATABASE_URL=... bun apps/broker/scripts/backfill-owner-pubkey.ts
  *
- * Output format (per row): `<mesh_id> <mesh_slug> <owner_pubkey> <owner_secret_key>`
- * Redirect stdout to a secure file — the secret keys grant admin
- * invite-signing power and must be stored carefully.
+ * Output (stdout): one tab-separated row per patched mesh:
+ *   <mesh_id>  <mesh_slug>  <owner_pubkey>  <owner_secret_key>  <root_key>
  */
 
 import sodium from "libsodium-wrappers";
-import { eq, isNull } from "drizzle-orm";
+import { eq, isNull, or } from "drizzle-orm";
 import { db } from "../src/db";
 import { mesh } from "@turbostarter/db/schema/mesh";
 
@@ -25,9 +24,21 @@ async function main(): Promise<void> {
   await sodium.ready;
 
   const missing = await db
-    .select({ id: mesh.id, slug: mesh.slug, name: mesh.name })
+    .select({
+      id: mesh.id,
+      slug: mesh.slug,
+      ownerPubkey: mesh.ownerPubkey,
+      ownerSecretKey: mesh.ownerSecretKey,
+      rootKey: mesh.rootKey,
+    })
     .from(mesh)
-    .where(isNull(mesh.ownerPubkey));
+    .where(
+      or(
+        isNull(mesh.ownerPubkey),
+        isNull(mesh.ownerSecretKey),
+        isNull(mesh.rootKey),
+      )!,
+    );
 
   if (missing.length === 0) {
     console.error("[backfill] no rows to patch");
@@ -39,19 +50,24 @@ async function main(): Promise<void> {
     const kp = sodium.crypto_sign_keypair();
     const pubHex = sodium.to_hex(kp.publicKey);
     const secHex = sodium.to_hex(kp.privateKey);
+    const rootKey = sodium.to_base64(
+      sodium.randombytes_buf(32),
+      sodium.base64_variants.URLSAFE_NO_PADDING,
+    );
     await db
       .update(mesh)
-      .set({ ownerPubkey: pubHex })
+      .set({
+        ownerPubkey: pubHex,
+        ownerSecretKey: secHex,
+        rootKey,
+      })
       .where(eq(mesh.id, row.id));
-    // stdout: machine-readable, one mesh per line
-    console.log(`${row.id}\t${row.slug}\t${pubHex}\t${secHex}`);
-    console.error(
-      `[backfill] patched mesh "${row.slug}" (${row.id}) — save its secret key`,
+    console.log(
+      `${row.id}\t${row.slug}\t${pubHex}\t${secHex}\t${rootKey}`,
     );
+    console.error(`[backfill] patched mesh "${row.slug}" (${row.id})`);
   }
-  console.error(
-    "[backfill] done. SECURELY HAND OFF secret keys to mesh owners.",
-  );
+  console.error("[backfill] done.");
 }
 
 main()

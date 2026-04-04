@@ -32,6 +32,7 @@
     "ai": "catalog:",
     "envin": "catalog:",
     "hono": "4.10.4",
+    "libsodium-wrappers": "0.7.15",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -39,6 +40,7 @@
     "@turbostarter/prettier-config": "workspace:*",
     "@turbostarter/tsconfig": "workspace:*",
     "@turbostarter/vitest-config": "workspace:*",
+    "@types/libsodium-wrappers": "0.7.14",
     "eslint": "catalog:",
     "prettier": "catalog:",
     "typescript": "catalog:",

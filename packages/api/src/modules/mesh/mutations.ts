@@ -1,4 +1,4 @@
-import { randomBytes, createHash } from "node:crypto";
+import sodium from "libsodium-wrappers";
 
 import { and, eq, isNull } from "@turbostarter/db";
 import { invite, mesh, meshMember } from "@turbostarter/db/schema";
@@ -10,6 +10,32 @@ import type {
 } from "../../schema";
 
 const BROKER_URL = process.env.NEXT_PUBLIC_BROKER_URL ?? "ws://localhost:7900";
+
+/**
+ * Canonical invite bytes — MUST match the broker's canonicalInvite()
+ * in apps/broker/src/crypto.ts exactly. Any delimiter/field change
+ * between signer and verifier produces `invite_bad_signature`.
+ */
+const canonicalInvite = (p: {
+  v: number;
+  mesh_id: string;
+  mesh_slug: string;
+  broker_url: string;
+  expires_at: number;
+  mesh_root_key: string;
+  role: "admin" | "member";
+  owner_pubkey: string;
+}): string =>
+  `${p.v}|${p.mesh_id}|${p.mesh_slug}|${p.broker_url}|${p.expires_at}|${p.mesh_root_key}|${p.role}|${p.owner_pubkey}`;
+
+let sodiumReady = false;
+const ensureSodium = async (): Promise<typeof sodium> => {
+  if (!sodiumReady) {
+    await sodium.ready;
+    sodiumReady = true;
+  }
+  return sodium;
+};
 
 export const createMyMesh = async ({
   userId,
@@ -29,6 +55,18 @@ export const createMyMesh = async ({
     throw new Error("A mesh with that slug already exists.");
   }
 
+  // Generate the mesh owner's ed25519 keypair (signs invites) and a
+  // 32-byte shared root key (channel encryption in later steps).
+  // See mesh.ownerSecretKey comment re: plaintext-at-rest trade-off.
+  const s = await ensureSodium();
+  const kp = s.crypto_sign_keypair();
+  const ownerPubkey = s.to_hex(kp.publicKey);
+  const ownerSecretKey = s.to_hex(kp.privateKey);
+  const rootKey = s.to_base64(
+    s.randombytes_buf(32),
+    s.base64_variants.URLSAFE_NO_PADDING,
+  );
+
   const [created] = await db
     .insert(mesh)
     .values({
@@ -37,6 +75,9 @@ export const createMyMesh = async ({
       visibility: input.visibility,
       transport: input.transport,
       ownerUserId: userId,
+      ownerPubkey,
+      ownerSecretKey,
+      rootKey,
     })
     .returning({ id: mesh.id, slug: mesh.slug });
 
@@ -87,20 +128,6 @@ export const leaveMyMesh = async ({
   return updated;
 };
 
-/** Encode an ic://join/<base64url(JSON)> invite link. Format mirrors
- *  apps/cli/src/invite/parse.ts exactly. */
-const encodeInviteLink = (payload: unknown): string => {
-  const json = JSON.stringify(payload);
-  const encoded = Buffer.from(json, "utf-8").toString("base64url");
-  return `ic://join/${encoded}`;
-};
-
-/** Placeholder deterministic root key until mesh_root_key column lands
- *  (Step 18 crypto). Signature verification is Step 18, so an actual
- *  ed25519 pubkey is not yet required — only presence is checked. */
-const derivePlaceholderRootKey = (meshId: string, meshSlug: string): string =>
-  createHash("sha256").update(`${meshId}:${meshSlug}`).digest("hex");
-
 export const createMyInvite = async ({
   userId,
   meshId,
@@ -110,12 +137,15 @@ export const createMyInvite = async ({
   meshId: string;
   input: CreateMyInviteInput;
 }) => {
-  // Authz: owner or admin member can invite
+  // Authz: owner or admin member can invite.
   const [meshRow] = await db
     .select({
       id: mesh.id,
       slug: mesh.slug,
       ownerUserId: mesh.ownerUserId,
+      ownerPubkey: mesh.ownerPubkey,
+      ownerSecretKey: mesh.ownerSecretKey,
+      rootKey: mesh.rootKey,
     })
     .from(mesh)
     .where(eq(mesh.id, meshId))
@@ -123,6 +153,15 @@ export const createMyInvite = async ({
 
   if (!meshRow) {
     throw new Error("Mesh not found.");
+  }
+  if (
+    !meshRow.ownerPubkey ||
+    !meshRow.ownerSecretKey ||
+    !meshRow.rootKey
+  ) {
+    throw new Error(
+      "Mesh is missing owner keypair or root key — run backfill script.",
+    );
   }
 
   const isOwner = meshRow.ownerUserId === userId;
@@ -143,38 +182,59 @@ export const createMyInvite = async ({
     }
   }
 
-  const token = randomBytes(24).toString("base64url");
   const expiresAt = new Date(
     Date.now() + input.expiresInDays * 24 * 60 * 60 * 1000,
   );
+  const expiresAtSec = Math.floor(expiresAt.getTime() / 1000);
 
+  // Build the canonical signed payload. Signature covers every field
+  // except `signature` itself; broker re-verifies identically.
+  const payloadCore = {
+    v: 1 as const,
+    mesh_id: meshRow.id,
+    mesh_slug: meshRow.slug,
+    broker_url: BROKER_URL,
+    expires_at: expiresAtSec,
+    mesh_root_key: meshRow.rootKey,
+    role: input.role,
+    owner_pubkey: meshRow.ownerPubkey,
+  };
+  const canonical = canonicalInvite(payloadCore);
+  const s = await ensureSodium();
+  const signature = s.to_hex(
+    s.crypto_sign_detached(
+      s.from_string(canonical),
+      s.from_hex(meshRow.ownerSecretKey),
+    ),
+  );
+  const fullPayload = { ...payloadCore, signature };
+
+  // The base64url(JSON) is BOTH the link payload AND the DB lookup
+  // token — broker's /join resolves invites by this string.
+  const token = Buffer.from(JSON.stringify(fullPayload), "utf-8").toString(
+    "base64url",
+  );
   const [created] = await db
     .insert(invite)
     .values({
       meshId,
       token,
+      tokenBytes: canonical,
       maxUses: input.maxUses,
       role: input.role,
       expiresAt,
       createdBy: userId,
     })
-    .returning({ id: invite.id, token: invite.token, expiresAt: invite.expiresAt });
-
-  const payload = {
-    v: 1 as const,
-    mesh_id: meshRow.id,
-    mesh_slug: meshRow.slug,
-    broker_url: BROKER_URL,
-    expires_at: Math.floor(expiresAt.getTime() / 1000),
-    mesh_root_key: derivePlaceholderRootKey(meshRow.id, meshRow.slug),
-    role: input.role,
-    // signature: added in Step 18 (ed25519 sign by mesh_root_key)
-  };
+    .returning({
+      id: invite.id,
+      token: invite.token,
+      expiresAt: invite.expiresAt,
+    });
 
   return {
     id: created!.id,
     token: created!.token,
     expiresAt: created!.expiresAt,
-    inviteLink: encodeInviteLink(payload),
+    inviteLink: `ic://join/${token}`,
   };
 };
