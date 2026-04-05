@@ -9,7 +9,9 @@ export function runList(): void {
   if (config.meshes.length === 0) {
     console.log("No meshes joined yet.");
     console.log("");
-    console.log("Join one with: claudemesh join <invite-link>");
+    console.log(
+      "Join one with: claudemesh join https://claudemesh.com/join/<token>",
+    );
     console.log(`Config file:   ${getConfigPath()}`);
     return;
   }

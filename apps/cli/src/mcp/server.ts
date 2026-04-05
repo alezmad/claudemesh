@@ -103,7 +103,7 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
     const { name, arguments: args } = req.params;
     if (config.meshes.length === 0) {
       return text(
-        "No meshes joined. Run `claudemesh join <invite-link>` first.",
+        "No meshes joined. Run `claudemesh join https://claudemesh.com/join/<token>` first.",
         true,
       );
     }

@@ -23,7 +23,7 @@ Usage:
 Commands:
   install         Register claudemesh as a Claude Code MCP server
   uninstall       Remove claudemesh MCP server registration
-  join <link>     Join a mesh via invite link (ic://join/...)
+  join <url>      Join a mesh via https://claudemesh.com/join/... URL
   list            Show all joined meshes
   leave <slug>    Leave a joined mesh
   seed-test-mesh  Dev-only: inject a mesh into config (skips invite flow)

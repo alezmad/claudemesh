@@ -19,9 +19,11 @@ import { hostname } from "node:os";
 export async function runJoin(args: string[]): Promise<void> {
   const link = args[0];
   if (!link) {
-    console.error("Usage: claudemesh join <invite-link>");
+    console.error("Usage: claudemesh join <invite-url-or-token>");
     console.error("");
-    console.error("Example: claudemesh join ic://join/eyJ2IjoxLC4uLn0");
+    console.error(
+      "Example: claudemesh join https://claudemesh.com/join/eyJ2IjoxLC4uLn0",
+    );
     process.exit(1);
   }
 

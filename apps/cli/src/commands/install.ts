@@ -185,7 +185,9 @@ export function runInstall(): void {
   console.log("");
   console.log(yellow(bold("⚠  RESTART CLAUDE CODE")) + yellow(" for MCP tools to appear."));
   console.log("");
-  console.log(`Next: ${bold("claudemesh join ic://join/<your-invite-link>")}`);
+  console.log(
+    `Next: ${bold("claudemesh join https://claudemesh.com/join/<token>")}`,
+  );
 }
 
 export function runUninstall(): void {

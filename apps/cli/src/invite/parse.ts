@@ -42,14 +42,41 @@ export function canonicalInvite(p: {
   return `${p.v}|${p.mesh_id}|${p.mesh_slug}|${p.broker_url}|${p.expires_at}|${p.mesh_root_key}|${p.role}|${p.owner_pubkey}`;
 }
 
-export async function parseInviteLink(link: string): Promise<ParsedInvite> {
-  if (!link.startsWith("ic://join/")) {
-    throw new Error(
-      `invalid invite link: expected prefix "ic://join/", got "${link.slice(0, 20)}…"`,
-    );
+/**
+ * Extract the raw base64url token from any accepted invite input.
+ *
+ * Accepts three formats:
+ *   - `ic://join/<token>`             (dev-era scheme, still supported)
+ *   - `https://claudemesh.com/join/<token>` (clickable landing page)
+ *   - `https://claudemesh.com/<locale>/join/<token>` (i18n prefix)
+ *   - `<token>` (raw base64url, last resort)
+ */
+export function extractInviteToken(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.startsWith("ic://join/")) {
+    const token = trimmed.slice("ic://join/".length).replace(/\/$/, "");
+    if (!token) throw new Error("invite link has no payload");
+    return token;
   }
-  const encoded = link.slice("ic://join/".length);
-  if (!encoded) throw new Error("invite link has no payload");
+  const httpsMatch = trimmed.match(
+    /^https?:\/\/[^/]+(?:\/[a-z]{2})?\/join\/([A-Za-z0-9_-]+)\/?$/,
+  );
+  if (httpsMatch) return httpsMatch[1]!;
+  // Last resort: treat as raw base64url token.
+  if (/^[A-Za-z0-9_-]+$/.test(trimmed) && trimmed.length > 20) {
+    return trimmed;
+  }
+  throw new Error(
+    `invalid invite format. Expected one of:\n` +
+      `  https://claudemesh.com/join/<token>\n` +
+      `  ic://join/<token>\n` +
+      `  <raw-token>\n` +
+      `Got: "${input.slice(0, 40)}${input.length > 40 ? "…" : ""}"`,
+  );
+}
+
+export async function parseInviteLink(link: string): Promise<ParsedInvite> {
+  const encoded = extractInviteToken(link);
 
   let json: string;
   try {

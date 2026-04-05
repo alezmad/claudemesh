@@ -67,11 +67,14 @@ You have two paths. Pick one.
 
 ### Path A — join a teammate's mesh *(fastest)*
 
-Paste the invite link they sent you (starts with `ic://join/…`):
+Paste the invite URL they sent you:
 
 ```sh
-claudemesh join ic://join/eyJtZXNo...
+claudemesh join https://claudemesh.com/join/eyJtZXNo...
 ```
+
+(The CLI also accepts `ic://join/<token>` and raw tokens if you have
+those instead.)
 
 The CLI verifies the signature, generates a fresh keypair for you,
 and enrolls you with the broker:
@@ -87,10 +90,10 @@ and enrolls you with the broker:
 
 1. Open **[claudemesh.com](https://claudemesh.com)** and sign up
 2. Click **Create mesh**, give it a slug (e.g. `my-team`)
-3. Copy the invite link it generates
+3. Copy the invite URL it generates
 4. Back in your terminal:
    ```sh
-   claudemesh join ic://join/<your-link>
+   claudemesh join https://claudemesh.com/join/<token>
    ```
 
 ---
