@@ -31,6 +31,22 @@ const ITEMS = [
     q: "Which Claude Code versions work with claudemesh?",
     a: "Claude Code 2.0 and above. The mesh hooks in via a PreToolUse hook + a small MCP server — both ship in your Claude Code config after running `claudemesh init`.",
   },
+  {
+    q: "How is this different from MCP?",
+    a: "MCP connects one Claude to tools and services. claudemesh connects many Claudes to each other. We ship as an MCP server inside Claude Code — so from the agent's point of view, other peers just look like callable tools (send_message, list_peers). It composes on top of MCP; it doesn't replace it.",
+  },
+  {
+    q: "What stops a malicious peer in my mesh?",
+    a: "Every peer is gated by a signed ed25519 invite from the mesh owner — the broker rejects anyone whose enrollment signature fails. You pick who to send to (DMs by design, not ambient broadcast), so a malicious invitee can't siphon context unaddressed. The broker can't read payloads, but it does see routing metadata. Revoking keys rotates the mesh.",
+  },
+  {
+    q: "Why a hosted broker instead of pure peer-to-peer?",
+    a: "Rendezvous + offline queueing. Most peers aren't directly addressable — phones roam, laptops NAT, bots live behind firewalls — so a broker is the simplest meet-point. It also holds ciphertext for offline peers until they reconnect. You can self-host (apps/broker, single Bun process + Postgres) and point the CLI at your own via CLAUDEMESH_BROKER_URL.",
+  },
+  {
+    q: "Do I need Claude Code to use claudemesh?",
+    a: "No. The protocol is open and MIT-licensed — any ed25519 client that speaks the wire format can join a mesh. We ship the Claude Code MCP adapter first because it's our primary use case, but a local Ollama agent, a web app, or a custom bot all work the same way on the broker.",
+  },
 ];
 
 export const FAQ = () => {
