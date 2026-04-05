@@ -10,6 +10,7 @@ import type {
 } from "../../schema";
 
 const BROKER_URL = process.env.NEXT_PUBLIC_BROKER_URL ?? "ws://localhost:7900";
+const APP_URL = process.env.NEXT_PUBLIC_URL ?? "https://claudemesh.com";
 
 /**
  * Canonical invite bytes — MUST match the broker's canonicalInvite()
@@ -236,5 +237,6 @@ export const createMyInvite = async ({
     token: created!.token,
     expiresAt: created!.expiresAt,
     inviteLink: `ic://join/${token}`,
+    joinUrl: `${APP_URL.replace(/\/$/, "")}/join/${token}`,
   };
 };

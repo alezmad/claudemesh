@@ -131,6 +131,7 @@ export const createMyInviteResponseSchema = z.object({
   id: z.string(),
   token: z.string(),
   inviteLink: z.string(),
+  joinUrl: z.string(),
   expiresAt: z.coerce.date(),
 });
 export type CreateMyInviteResponse = z.infer<typeof createMyInviteResponseSchema>;
@@ -185,6 +186,41 @@ export const getMyMeshStreamResponseSchema = z.object({
 export type GetMyMeshStreamResponse = z.infer<
   typeof getMyMeshStreamResponseSchema
 >;
+
+// ---------------------------------------------------------------------
+// Public invite preview (unauthed invite-landing page)
+// ---------------------------------------------------------------------
+
+export const publicInviteResponseSchema = z.discriminatedUnion("valid", [
+  z.object({
+    valid: z.literal(true),
+    meshName: z.string(),
+    meshSlug: z.string(),
+    inviterName: z.string().nullable(),
+    memberCount: z.number(),
+    role: z.enum(["admin", "member"]),
+    expiresAt: z.coerce.date(),
+    maxUses: z.number(),
+    usedCount: z.number(),
+    token: z.string(),
+  }),
+  z.object({
+    valid: z.literal(false),
+    reason: z.enum([
+      "malformed",
+      "bad_signature",
+      "expired",
+      "revoked",
+      "exhausted",
+      "mesh_archived",
+      "not_found",
+    ]),
+    meshName: z.string().nullable(),
+    inviterName: z.string().nullable(),
+    expiresAt: z.coerce.date().nullable(),
+  }),
+]);
+export type PublicInviteResponse = z.infer<typeof publicInviteResponseSchema>;
 
 // ---------------------------------------------------------------------
 // Public stats (unauthed landing counter)

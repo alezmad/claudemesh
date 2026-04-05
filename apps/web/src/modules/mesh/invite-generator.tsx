@@ -35,13 +35,14 @@ interface GeneratedInvite {
   id: string;
   token: string;
   inviteLink: string;
+  joinUrl: string;
   expiresAt: Date;
   qrDataUrl: string;
 }
 
 export const InviteGenerator = ({ meshId }: { meshId: string }) => {
   const [result, setResult] = useState<GeneratedInvite | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"url" | "cli" | null>(null);
 
   const form = useForm<CreateMyInviteInput>({
     resolver: zodResolver(createMyInviteInputSchema),
@@ -58,6 +59,7 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
             id: string;
             token: string;
             inviteLink: string;
+            joinUrl: string;
             expiresAt: string;
           }
         | { error: string };
@@ -67,7 +69,9 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
         return;
       }
 
-      const qrDataUrl = await QRCode.toDataURL(res.inviteLink, {
+      // QR encodes the HTTPS join URL now — anyone with a camera can
+      // scan and land on the friendly /join/[token] page.
+      const qrDataUrl = await QRCode.toDataURL(res.joinUrl, {
         width: 256,
         margin: 1,
         color: { dark: "#141413", light: "#ffffff" },
@@ -77,6 +81,7 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
         id: res.id,
         token: res.token,
         inviteLink: res.inviteLink,
+        joinUrl: res.joinUrl,
         expiresAt: new Date(res.expiresAt),
         qrDataUrl,
       });
@@ -87,14 +92,14 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
     }
   };
 
-  const onCopy = async () => {
-    if (!result) return;
-    await navigator.clipboard.writeText(result.inviteLink);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const copy = async (text: string, key: "url" | "cli") => {
+    await navigator.clipboard.writeText(text);
+    setCopied(key);
+    setTimeout(() => setCopied(null), 2000);
   };
 
   if (result) {
+    const cliCmd = `claudemesh join ${result.token}`;
     return (
       <div className="space-y-6">
         <div className="rounded-lg border p-6">
@@ -109,10 +114,10 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
             <div className="space-y-4">
               <div>
                 <div className="text-muted-foreground mb-1 text-xs uppercase tracking-wider">
-                  Invite link
+                  Share this link
                 </div>
                 <code className="bg-muted block break-all rounded p-3 font-mono text-xs">
-                  {result.inviteLink}
+                  {result.joinUrl}
                 </code>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -120,9 +125,16 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
                   expires {result.expiresAt.toLocaleDateString()}
                 </Badge>
               </div>
-              <div className="flex gap-2">
-                <Button onClick={onCopy} size="sm">
-                  {copied ? "Copied ✓" : "Copy link"}
+              <div className="flex flex-wrap gap-2">
+                <Button onClick={() => copy(result.joinUrl, "url")} size="sm">
+                  {copied === "url" ? "Copied ✓" : "Copy link"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => copy(cliCmd, "cli")}
+                >
+                  {copied === "cli" ? "Copied ✓" : "Copy CLI command"}
                 </Button>
                 <Button
                   variant="outline"
@@ -140,12 +152,14 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
         </div>
         <div className="text-muted-foreground rounded border border-dashed p-4 text-xs">
           <p className="mb-2 font-medium">How your teammate joins:</p>
-          <code className="bg-muted block rounded p-2 font-mono text-xs">
-            claudemesh join {result.inviteLink}
-          </code>
-          <p className="mt-2">
-            Or scan the QR code from the claudemesh mobile app (coming soon).
+          <p className="mb-2">
+            Paste the link in Slack / Telegram / email. They land on a page
+            with step-by-step install, or run the CLI directly if they already
+            have it:
           </p>
+          <code className="bg-muted block rounded p-2 font-mono text-xs">
+            {cliCmd}
+          </code>
         </div>
       </div>
     );
