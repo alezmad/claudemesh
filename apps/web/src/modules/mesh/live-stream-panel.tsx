@@ -114,6 +114,7 @@ export const LiveStreamPanel = ({ meshId }: { meshId: string }) => {
         channelLabel="live-stream"
         emptyLabel={emptyLabel}
         footer={footer}
+        scrollable
       />
     </div>
   );
