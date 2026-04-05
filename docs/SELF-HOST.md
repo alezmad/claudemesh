@@ -1,16 +1,27 @@
-# Self-hosting the broker
+# Self-hosting the claudemesh broker
 
-Run your own `claudemesh` broker when you need **data residency**
-(payloads stay in your infra), **enterprise isolation** (your own
-TLS cert, your own auth boundary), or you just want to **tinker**
-with the protocol. The broker is stateless-ish — presence +
-offline-queue metadata lives in Postgres — so most ops practices
-you already have will work.
+**Most people don't need this page.** Here's the short version:
 
-> Peers connect with their ed25519 keypair; the broker only routes
-> ciphertext. Self-hosting doesn't give you access to anyone's
-> message contents — it just moves the metadata surface to your
-> side.
+- **Local peer mesh** (just your own laptop's Claude Code sessions
+  talking to each other): use **[claude-intercom](https://github.com/alezmad/claude-intercom)**
+  — single-machine, Unix sockets, MIT, zero infra.
+- **Team / cross-machine mesh** (your agents reaching each other
+  across laptops, repos, devices): use **hosted claudemesh**
+  ([claudemesh.com](https://claudemesh.com)) — E2E encrypted, so
+  using our broker doesn't cost you data control. Plaintext never
+  leaves the peer.
+- **Audit / fork / enterprise self-host**: the broker source in
+  [`apps/broker/`](../apps/broker/) is MIT. Read it, fork it, run
+  your own. Instructions below.
+
+> **Why self-hosting is a narrow path**: the broker only routes
+> ciphertext. It never sees plaintext, file contents, or prompts.
+> Self-hosting narrows the metadata surface (who ↔ whom, when,
+> size) to your infra — it doesn't change the cryptographic
+> guarantee. For most teams, the hosted broker's zero-ops trade
+> is the right one. A first-class packaged self-host / enterprise
+> deploy is a **v0.2 paid-tier feature**; what's here is the bare
+> primitives for people who want them today.
 
 ---
 
@@ -85,23 +96,28 @@ for production deploy notes.
 
 ## Known gaps in v0.1.0 self-host
 
-Being upfront so you don't hit them cold:
+Self-hosting claudemesh in v0.1.0 is a **raw-source path**, not a
+packaged product. Being upfront so you don't hit these cold:
 
-- **No first-class binary yet.** You run via Docker or `bun`. Native
-  single-file binaries land in v0.2.
+- **No first-class binary or distribution yet.** You run via Docker
+  or `bun` from the monorepo. A packaged enterprise deploy is a
+  v0.2 paid-tier deliverable — not on the free self-host track.
 - **No broker federation.** Self-hosted brokers don't talk to each
-  other — peers on *your* broker can't reach peers on *ours* (yet).
-  Federation is on the v0.3 roadmap.
-- **TLS is your responsibility.** The broker does plain WS; put it
-  behind a reverse proxy for `wss://`.
-- **Postgres only.** No SQLite fallback right now (it's workable but
-  not shipped). Presence + offline queue use the same Postgres the
-  web app uses — you can share a DB or run a dedicated one.
+  other. Peers on *your* broker can't reach peers on *ours* (yet).
+  Federation is v0.3 roadmap.
+- **TLS is your responsibility.** The broker speaks plain WS; put
+  it behind Traefik / Caddy / nginx for `wss://`.
+- **Postgres only.** No SQLite fallback shipped. Presence + offline
+  queue use the same Postgres the web app uses — you can share a
+  DB or run a dedicated one.
 - **No built-in backups.** Standard Postgres backup tooling applies.
   Losing the DB loses offline queue + presence, not cryptographic
   identity.
-- **Metrics are minimal.** `/health` and `/metrics` exist; Grafana
-  dashboards don't ship yet.
+- **Minimal metrics.** `/health` and `/metrics` exist; no Grafana
+  dashboards yet.
+
+If you want a turnkey self-host experience, you probably want to
+wait for v0.2 — or use the hosted broker today and revisit later.
 
 ---
 

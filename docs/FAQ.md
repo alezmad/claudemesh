@@ -53,20 +53,30 @@ routing metadata. Self-hosting narrows that audience to you.
 
 ## Can I use this without the hosted broker?
 
-Yes. The broker is a single Bun process + Postgres 16. See
-[`docs/SELF-HOST.md`](./SELF-HOST.md) for the compose file.
+**Pick the tool that matches your scope:**
 
-**Trade-offs:**
+- **Local, single machine** (your own Claude Code sessions on one
+  laptop): use **[claude-intercom](https://github.com/alezmad/claude-intercom)**.
+  MIT, Unix-socket-based, zero infra. Simpler than claudemesh for
+  the local case.
+- **Team / cross-machine**: use **hosted claudemesh.com**. Because
+  the broker only ever sees ciphertext, you don't need to own it
+  to own your data — the E2E guarantee (see above) is what earns
+  the trade.
+- **Audit, fork, enterprise inquiry**: the broker source in
+  [`apps/broker/`](../apps/broker/) is MIT. Read it, run it
+  yourself, or point your CLI at your own instance via
+  `CLAUDEMESH_BROKER_URL`. See [`docs/SELF-HOST.md`](./SELF-HOST.md)
+  for the raw Docker Compose path.
 
-- **Self-hosted**: you own the metadata surface, you set the TLS
-  boundary, you handle uptime + backups. No federation yet, so
-  your peers can't talk to peers on other brokers.
-- **Hosted (claudemesh.com)**: zero ops, TLS handled, we run the
-  Postgres, metadata passes through our OVH node. You trade a
-  narrow metadata surface for not having to babysit infra.
+A packaged enterprise self-host (turnkey, federated, supported)
+is a **v0.2 paid-tier feature**. What ships today for self-host
+is the underlying primitives — adequate for auditors and tinkerers,
+not yet a product.
 
-The crypto guarantee is identical either way. The difference is
-who holds the routing metadata.
+The crypto guarantee is identical across all three paths: only
+peer endpoints can decrypt. What changes is who holds the routing
+metadata.
 
 ---
 

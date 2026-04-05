@@ -55,9 +55,15 @@ with context — without a human writing it up in Slack first.
 Each Claude stays inside its own repo. Nothing reads anyone else's
 files. Information flows at the agent layer; humans stay on the PR.
 
-It's MIT-licensed, E2E-encrypted with libsodium, and you can
-self-host the broker. WhatsApp / Telegram / iOS gateways are on
-the roadmap — protocol is ready, the bots aren't shipped yet.
+It's MIT-licensed and E2E-encrypted with libsodium. For local
+single-machine use (just your own Claude sessions on one laptop),
+there's claude-intercom — the OSS ancestor, Unix sockets, MIT:
+github.com/alezmad/claude-intercom. claudemesh is the hosted
+cross-machine version — because the broker only sees ciphertext,
+you don't need to own it to own your data. Broker source is also
+MIT for audit + forks; a packaged enterprise self-host is v0.2.
+WhatsApp / Telegram / iOS gateways are on the roadmap — protocol
+is ready, the bots aren't shipped yet.
 
 Repo: https://github.com/claudemesh/claudemesh
 Protocol: https://claudemesh.com/docs
@@ -65,8 +71,10 @@ Protocol: https://claudemesh.com/docs
 Would love feedback, especially on the trust model.
 ```
 
-Word count: ~215. First-person, honest, leads with a concrete
-personal pain. No hype words. Ends with a specific ask.
+Word count: ~260. First-person, honest, leads with a concrete
+personal pain. No hype words. Ends with a specific ask. Calls out
+the local-vs-hosted split with claude-intercom so HN doesn't read
+the hosted broker as vendor-lock-in.
 
 ---
 
@@ -101,10 +109,12 @@ notes file; paste verbatim or adapt.
 > Two reasons. (1) Most peers aren't addressable — phones roam,
 > laptops NAT, bots live behind firewalls. A broker is the simplest
 > rendezvous point. (2) Offline queueing — broker holds ciphertext
-> until the recipient comes back. You can self-host the broker
-> (it's in the repo, single Node/Bun process) and point the CLI
-> at your own via `CLAUDEMESH_BROKER_URL`. We run the hosted one so
-> teams can start in 60 seconds.
+> until the recipient comes back. The broker only sees ciphertext,
+> so trust comes from the crypto, not from owning the server. If
+> you only need local (same machine), use claude-intercom — same
+> model, Unix sockets, zero infra. Broker source is MIT and you
+> can run it yourself via `CLAUDEMESH_BROKER_URL`, but a packaged
+> enterprise self-host is v0.2.
 
 ### 4. "How is this different from MCP already?"
 
@@ -138,10 +148,14 @@ notes file; paste verbatim or adapt.
 
 **Title**: `Claudemesh: peer-to-peer mesh that lets agents (Claude, Ollama, etc.) reference each other's work`
 
-**Body**: 2 paragraphs. Lean into: (a) self-hosted broker, (b) it's
-transport-agnostic — the agent doesn't have to be Claude. Emphasize
-MIT + libsodium crypto. LocalLLaMA audience cares about escaping
-hosted services, so lead with the self-host angle.
+**Body**: 2 paragraphs. Lean into: (a) protocol-open + MIT, (b)
+it's transport-agnostic — the agent doesn't have to be Claude, any
+ed25519 client works. Point local-only users at claude-intercom
+(single machine, Unix sockets, MIT). Point cross-machine users at
+hosted claudemesh with the E2E framing: the broker only sees
+ciphertext, so using our infra doesn't cost data control. Note
+that broker source is MIT for audit/forks, and enterprise packaged
+self-host is a v0.2 deliverable.
 
 ### r/ClaudeAI (Reddit)
 
