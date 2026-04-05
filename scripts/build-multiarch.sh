@@ -4,13 +4,18 @@
 # Usage:
 #   scripts/build-multiarch.sh [REGISTRY] [TAG]
 #
-#   REGISTRY   default: ghcr.io/claudemesh        (override for private registry)
+#   REGISTRY   default: ghcr.io/alezmad   (override for your own ghcr/dockerhub scope)
 #   TAG        default: $(git rev-parse --short HEAD)
 #
+# Images produced (all three get built + tagged + pushed):
+#   <REGISTRY>/claudemesh-broker:<TAG>  + :latest
+#   <REGISTRY>/claudemesh-web:<TAG>     + :latest
+#   <REGISTRY>/claudemesh-migrate:<TAG> + :latest
+#
 # Examples:
-#   scripts/build-multiarch.sh                                 # → ghcr.io/claudemesh/broker:<sha> + web + migrate
-#   scripts/build-multiarch.sh ghcr.io/myorg latest            # → ghcr.io/myorg/broker:latest + web + migrate
-#   scripts/build-multiarch.sh localhost:5000/claudemesh 0.1.0 # → local registry
+#   scripts/build-multiarch.sh                              # → ghcr.io/alezmad/claudemesh-*:<sha>
+#   scripts/build-multiarch.sh ghcr.io/alezmad 0.1.0        # → ghcr.io/alezmad/claudemesh-*:0.1.0
+#   scripts/build-multiarch.sh ghcr.io/myorg latest         # → ghcr.io/myorg/claudemesh-*:latest
 #
 # Requires: docker buildx with a multi-arch-capable builder. On Docker Desktop
 # (Mac/Windows), this is already set up. On Linux CI, run first:
@@ -23,7 +28,7 @@
 
 set -euo pipefail
 
-REGISTRY="${1:-ghcr.io/claudemesh}"
+REGISTRY="${1:-ghcr.io/alezmad}"
 TAG="${2:-$(git rev-parse --short HEAD)}"
 GIT_SHA="$(git rev-parse --short HEAD)"
 
@@ -31,7 +36,7 @@ PLATFORMS="linux/amd64,linux/arm64"
 
 cd "$(dirname "$0")/.."
 
-echo "→ Building ${REGISTRY}/{broker,web,migrate}:${TAG} for [${PLATFORMS}]"
+echo "→ Building ${REGISTRY}/claudemesh-{broker,web,migrate}:${TAG} for [${PLATFORMS}]"
 echo "  GIT_SHA=${GIT_SHA}"
 echo ""
 
@@ -39,8 +44,8 @@ docker buildx build \
   --platform "${PLATFORMS}" \
   --file apps/broker/Dockerfile \
   --build-arg "GIT_SHA=${GIT_SHA}" \
-  --tag "${REGISTRY}/broker:${TAG}" \
-  --tag "${REGISTRY}/broker:latest" \
+  --tag "${REGISTRY}/claudemesh-broker:${TAG}" \
+  --tag "${REGISTRY}/claudemesh-broker:latest" \
   --push \
   .
 
@@ -48,19 +53,19 @@ docker buildx build \
   --platform "${PLATFORMS}" \
   --file apps/web/Dockerfile \
   --build-arg "NEXT_PUBLIC_URL=${NEXT_PUBLIC_URL:-https://claudemesh.com}" \
-  --tag "${REGISTRY}/web:${TAG}" \
-  --tag "${REGISTRY}/web:latest" \
+  --tag "${REGISTRY}/claudemesh-web:${TAG}" \
+  --tag "${REGISTRY}/claudemesh-web:latest" \
   --push \
   .
 
 docker buildx build \
   --platform "${PLATFORMS}" \
   --file packages/db/Dockerfile \
-  --tag "${REGISTRY}/migrate:${TAG}" \
-  --tag "${REGISTRY}/migrate:latest" \
+  --tag "${REGISTRY}/claudemesh-migrate:${TAG}" \
+  --tag "${REGISTRY}/claudemesh-migrate:latest" \
   --push \
   .
 
 echo ""
-echo "✓ pushed ${REGISTRY}/{broker,web,migrate}:${TAG} (+ :latest)"
+echo "✓ pushed ${REGISTRY}/claudemesh-{broker,web,migrate}:${TAG} (+ :latest)"
 echo "  arm64 + amd64 — no QEMU emulation for your adopters"

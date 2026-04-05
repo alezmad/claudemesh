@@ -130,7 +130,7 @@ machines either way — the broker is just a router that never sees plaintext.
 docker run -d --name claudemesh-broker \
   -p 7900:7900 \
   -e DATABASE_URL="postgres://user:pass@your-db:5432/claudemesh" \
-  ghcr.io/claudemesh/broker:latest
+  ghcr.io/alezmad/claudemesh-broker:latest
 
 # verify
 curl -s http://localhost:7900/health
@@ -150,7 +150,7 @@ export CLAUDEMESH_BROKER_URL="wss://broker.yourteam.local/ws"
 ```sh
 git clone https://github.com/claudemesh/claudemesh
 cd claudemesh
-scripts/build-multiarch.sh <your-registry>/claudemesh 0.1.0
+scripts/build-multiarch.sh ghcr.io/alezmad 0.1.0
 ```
 
 ### Environment reference

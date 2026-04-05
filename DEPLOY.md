@@ -57,9 +57,9 @@ docker login <REGISTRY_HOST> -u <USERNAME>
 scripts/build-multiarch.sh <REGISTRY_HOST>/<ORG> <TAG>
 
 # Examples:
-scripts/build-multiarch.sh                                 # → ghcr.io/claudemesh/*:<git-sha>
-scripts/build-multiarch.sh ghcr.io/myorg latest            # → ghcr.io/myorg/*:latest
-scripts/build-multiarch.sh localhost:5000/claudemesh 0.1.0 # → local registry
+scripts/build-multiarch.sh                              # → ghcr.io/alezmad/claudemesh-*:<git-sha>
+scripts/build-multiarch.sh ghcr.io/alezmad 0.1.0        # → ghcr.io/alezmad/claudemesh-*:0.1.0
+scripts/build-multiarch.sh ghcr.io/myorg latest         # → ghcr.io/myorg/claudemesh-*:latest
 ```
 
 The script tags each image with both `<TAG>` and `:latest`. Builds in ~5-8 min
