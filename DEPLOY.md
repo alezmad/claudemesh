@@ -43,22 +43,44 @@ openssl rand -base64 32
 
 See `.env.production.example` for full list with `[REQUIRED]` / `[FEATURE]` / `[OPTIONAL]` tags.
 
-## Step 2: Build & Push Image
+## Step 2: Build & Push Images
+
+Three images ship: `broker`, `web`, `migrate`. Use the multi-arch build script —
+it produces both `linux/amd64` (VPS) and `linux/arm64` (Apple Silicon devs)
+manifests so nobody hits QEMU emulation at runtime.
 
 ```bash
-# Login to your registry (adjust for your setup)
+# Login to your registry
 docker login <REGISTRY_HOST> -u <USERNAME>
 
-# Build for AMD64 (required for most VPS)
-docker build --platform linux/amd64 \
-  --build-arg NEXT_PUBLIC_URL=https://your-app.example.com \
-  -t <REGISTRY_HOST>/<ORG>/<APP>:latest .
+# Multi-arch build + push (all 3 images: broker, web, migrate)
+scripts/build-multiarch.sh <REGISTRY_HOST>/<ORG> <TAG>
 
-# Push
-docker push <REGISTRY_HOST>/<ORG>/<APP>:latest
+# Examples:
+scripts/build-multiarch.sh                                 # → ghcr.io/claudemesh/*:<git-sha>
+scripts/build-multiarch.sh ghcr.io/myorg latest            # → ghcr.io/myorg/*:latest
+scripts/build-multiarch.sh localhost:5000/claudemesh 0.1.0 # → local registry
 ```
 
-Build takes ~2 min on Mac M-series. If push fails with EOF, retry.
+The script tags each image with both `<TAG>` and `:latest`. Builds in ~5-8 min
+on Mac M-series (arm64 native is fast, amd64 via emulation is the slow leg).
+
+> **Mac Docker Desktop note**: if amd64 builds fail with `Input/output error`
+> during `apt-get install`, enable **Settings → General → Use Rosetta for x86/amd64
+> emulation** (not QEMU). QEMU has known I/O stability issues on macOS; Rosetta
+> is rock-solid. Linux CI runners don't hit this.
+
+### Single-arch fallback (if you really only need amd64)
+
+```bash
+docker build --platform linux/amd64 \
+  --build-arg NEXT_PUBLIC_URL=https://your-app.example.com \
+  -f apps/web/Dockerfile \
+  -t <REGISTRY_HOST>/<ORG>/web:latest .
+docker push <REGISTRY_HOST>/<ORG>/web:latest
+```
+
+Repeat for `apps/broker/Dockerfile` and `packages/db/Dockerfile`.
 
 ## Step 3: Create Coolify Service
 
