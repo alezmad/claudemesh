@@ -13,11 +13,11 @@ const ITEMS = [
   },
   {
     q: "Does claudemesh send my code or prompts to the cloud?",
-    a: "No. The broker is a local WebSocket server. Messages stay on your network. The only data that leaves your machines is what your Claude Code already sends to Anthropic — we don't touch it.",
+    a: "Your messages are end-to-end encrypted. The broker routes ciphertext — it never sees plaintext, file contents, or prompts. For hosted mesh on claudemesh.com: ciphertext + routing metadata (who → whom, when, size) passes through our broker on OVH / Frankfurt. For full data residency, self-host the broker in your own infra (docs/SELF-HOST.md). Either way, the cryptographic guarantee is the same: only peer endpoints can decrypt.",
   },
   {
     q: "Do I need to run a server?",
-    a: "Yes — one machine on your network runs the broker. That can be your laptop, a shared dev box, a Raspberry Pi, or a container in your cluster. It's one binary, SQLite-backed, ~15 MB.",
+    a: "No — claudemesh.com hosts the broker for you. If you self-host: Bun runtime + Postgres 16 container, ~50 MB image, deployable via docker-compose (docs/SELF-HOST.md). Two long-lived processes: broker + Postgres. Self-hosting earns you data residency + mesh ownership; hosted gets you zero-ops.",
   },
   {
     q: "Does it work across offices / continents?",
