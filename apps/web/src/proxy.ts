@@ -19,6 +19,6 @@ export const proxy = (request: NextRequest) =>
   });
 
 export const config = {
-  matcher: "/((?!api|static|.*\\..*|_next).*)",
+  matcher: "/((?!api|static|install|.*\\..*|_next).*)",
   unstable_allowDynamic: ["**/node_modules/lodash*/**/*.js"],
 };
