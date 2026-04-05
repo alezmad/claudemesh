@@ -27,6 +27,7 @@ import {
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 const MCP_NAME = "claudemesh";
 const CLAUDE_CONFIG = join(homedir(), ".claude.json");
@@ -64,22 +65,44 @@ function writeClaudeConfig(obj: Record<string, unknown>): void {
   }
 }
 
-/** Check `bun` is on PATH — OS-agnostic. */
+/** Check `bun` is on PATH — OS-agnostic, node:child_process. */
 function bunAvailable(): boolean {
-  const which =
+  const res =
     platform() === "win32"
-      ? Bun.spawnSync(["where", "bun"])
-      : Bun.spawnSync(["sh", "-c", "command -v bun"]);
-  return which.exitCode === 0;
+      ? spawnSync("where", ["bun"])
+      : spawnSync("sh", ["-c", "command -v bun"]);
+  return res.status === 0;
 }
 
 /** Absolute path to this CLI's entry file. */
 function resolveEntry(): string {
   const here = fileURLToPath(import.meta.url);
+  // When bundled (dist/index.js), this file IS the entry → return self.
+  // When running from source (src/index.ts via bun), walk up to the
+  // dir + resolve index.ts.
+  if (here.endsWith("/dist/index.js") || here.endsWith("\\dist\\index.js")) {
+    return here;
+  }
   return resolve(dirname(here), "..", "index.ts");
 }
 
+/**
+ * Build the MCP server entry for Claude Code's config.
+ *
+ * Two modes:
+ *   - Installed globally (npm i -g @claudemesh/cli): use `claudemesh`
+ *     as the command, relies on it being on PATH.
+ *   - Local dev (bun apps/cli/src/index.ts): use `bun <absolute-path>`.
+ */
 function buildMcpEntry(entryPath: string): McpEntry {
+  const isBundled = entryPath.endsWith("/dist/index.js") ||
+    entryPath.endsWith("\\dist\\index.js");
+  if (isBundled) {
+    return {
+      command: "claudemesh",
+      args: ["mcp"],
+    };
+  }
   return {
     command: "bun",
     args: [entryPath, "mcp"],
@@ -97,14 +120,18 @@ export function runInstall(): void {
   console.log("claudemesh install");
   console.log("------------------");
 
-  if (!bunAvailable()) {
+  const entry = resolveEntry();
+  const isBundled = entry.endsWith("/dist/index.js") ||
+    entry.endsWith("\\dist\\index.js");
+
+  // Dev mode (running from src/) requires bun on PATH; bundled mode
+  // (npm install -g) just uses node + the claudemesh bin shim.
+  if (!isBundled && !bunAvailable()) {
     console.error(
       "✗ `bun` is not on PATH. Install Bun first: https://bun.com",
     );
     process.exit(1);
   }
-
-  const entry = resolveEntry();
   if (!existsSync(entry)) {
     console.error(`✗ MCP entry not found at ${entry}`);
     process.exit(1);
@@ -142,7 +169,9 @@ export function runInstall(): void {
 
   console.log(`✓ MCP server "${MCP_NAME}" ${action}`);
   console.log(`  config:  ${CLAUDE_CONFIG}`);
-  console.log(`  command: bun ${entry} mcp`);
+  console.log(
+    `  command: ${desired.command}${desired.args?.length ? " " + desired.args.join(" ") : ""}`,
+  );
   console.log("");
   console.log("Restart Claude Code to load the MCP server.");
   console.log("Then join a mesh:");

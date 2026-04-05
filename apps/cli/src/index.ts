@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 /**
  * @claudemesh/cli entry point.
  *

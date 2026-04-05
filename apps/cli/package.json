@@ -1,26 +1,55 @@
 {
   "name": "@claudemesh/cli",
   "version": "0.1.0",
-  "private": true,
+  "description": "Claude Code MCP client for claudemesh — peer mesh messaging between Claude sessions.",
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "model-context-protocol",
+    "claudemesh",
+    "peer-messaging",
+    "multi-agent"
+  ],
+  "author": "Alejandro Gutiérrez",
+  "license": "MIT",
+  "homepage": "https://claudemesh.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alezmad/claudemesh.git",
+    "directory": "apps/cli"
+  },
   "type": "module",
   "bin": {
-    "claudemesh": "./src/index.ts"
+    "claudemesh": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
+    "build": "bun build src/index.ts --target=node --outfile dist/index.js --banner \"#!/usr/bin/env node\" && chmod +x dist/index.js",
     "clean": "git clean -xdf .cache .turbo dist node_modules",
     "dev": "bun --hot src/index.ts",
     "start": "bun src/index.ts",
     "format": "prettier --check . --ignore-path ../../.gitignore",
     "lint": "eslint",
+    "prepublishOnly": "bun run build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
   "prettier": "@turbostarter/prettier-config",
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.27.1",
     "libsodium-wrappers": "0.7.15",
     "ws": "8.20.0",
-    "zod": "catalog:"
+    "zod": "4.1.13"
   },
   "devDependencies": {
     "@turbostarter/eslint-config": "workspace:*",
