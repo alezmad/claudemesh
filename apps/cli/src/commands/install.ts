@@ -307,6 +307,17 @@ export function runInstall(args: string[] = []): void {
   console.log(
     `Next: ${bold("claudemesh join https://claudemesh.com/join/<token>")}`,
   );
+  console.log("");
+  console.log(
+    yellow("⚠  For real-time push messages from peers, launch with:"),
+  );
+  console.log(
+    `     ${bold("claudemesh launch")}` +
+      dim("    (or: claude --dangerously-load-development-channels server:claudemesh)"),
+  );
+  console.log(
+    dim("   Plain `claude` still works — messages are then pull-only via check_messages."),
+  );
 }
 
 export function runUninstall(): void {
