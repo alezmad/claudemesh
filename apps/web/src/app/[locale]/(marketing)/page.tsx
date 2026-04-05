@@ -5,6 +5,7 @@ import { LaptopToLaptop } from "~/modules/marketing/home/laptop-to-laptop";
 import { Features } from "~/modules/marketing/home/features";
 import { MeetsYou } from "~/modules/marketing/home/meets-you";
 import { BeyondTerminal } from "~/modules/marketing/home/beyond-terminal";
+import { DemoDashboard } from "~/modules/marketing/home/demo-dashboard";
 import { WhatIsClaudemesh } from "~/modules/marketing/home/what-is-claudemesh";
 import { FAQ } from "~/modules/marketing/home/faq";
 import { CallToAction } from "~/modules/marketing/home/cta";
@@ -23,6 +24,7 @@ const HomePage = () => {
       <Features />
       <MeetsYou />
       <WhatIsClaudemesh />
+      <DemoDashboard />
       <BeyondTerminal />
       <FAQ />
       <CallToAction />
