@@ -101,3 +101,56 @@
   --cm-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
   --cm-dur: 300ms;
 }
+
+/* ============================================================
+   Map shadcn/ui tokens → claudemesh palette
+   Overrides the TurboStarter-inherited orange theme so every
+   Button/Card/Input/Dialog/etc renders in the claudemesh dark
+   palette, not the white/neutral defaults. Applies to BOTH
+   the light variant and the dark variant of the active
+   [data-theme="orange"] selector — we want the same dark
+   claudemesh look regardless of system preference.
+   ============================================================ */
+:root,
+[data-theme="orange"],
+[data-theme="orange"] .dark,
+.dark {
+  --background: var(--cm-bg);
+  --foreground: var(--cm-fg);
+  --card: var(--cm-bg-elevated);
+  --card-foreground: var(--cm-fg);
+  --popover: var(--cm-bg-elevated);
+  --popover-foreground: var(--cm-fg);
+  --primary: var(--cm-clay);
+  --primary-foreground: var(--cm-gray-050);
+  --secondary: var(--cm-bg-elevated);
+  --secondary-foreground: var(--cm-fg-secondary);
+  --muted: var(--cm-bg-elevated);
+  --muted-foreground: var(--cm-fg-tertiary);
+  --accent: var(--cm-bg-elevated);
+  --accent-foreground: var(--cm-fg);
+  --destructive: #dc2626;
+  --destructive-foreground: var(--cm-gray-050);
+  --success: #16a34a;
+  --success-foreground: var(--cm-gray-050);
+  --border: var(--cm-border);
+  --input: var(--cm-border);
+  --ring: var(--cm-clay);
+  --radius: var(--cm-radius-md);
+
+  --sidebar: var(--cm-bg-elevated);
+  --sidebar-foreground: var(--cm-fg);
+  --sidebar-primary: var(--cm-clay);
+  --sidebar-primary-foreground: var(--cm-gray-050);
+  --sidebar-accent: var(--cm-bg-hover);
+  --sidebar-accent-foreground: var(--cm-fg);
+  --sidebar-border: var(--cm-border);
+  --sidebar-ring: var(--cm-clay);
+}
+
+/* Tailwind's @variant light path — when no data-theme or no dark class,
+   Tailwind emits the light branch. Override it too so there's no
+   white-background flash on any shadcn surface. */
+:root {
+  color-scheme: dark;
+}
