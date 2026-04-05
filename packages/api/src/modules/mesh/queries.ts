@@ -10,7 +10,14 @@ import {
   or,
   sql,
 } from "@turbostarter/db";
-import { auditLog, invite, mesh, meshMember } from "@turbostarter/db/schema";
+import {
+  auditLog,
+  invite,
+  mesh,
+  meshMember,
+  messageQueue,
+  presence,
+} from "@turbostarter/db/schema";
 import { db } from "@turbostarter/db/server";
 
 import type { GetMyMeshesInput } from "../../schema";
@@ -161,6 +168,100 @@ export const getMyMeshById = async ({
     })),
     invites,
   };
+};
+
+/**
+ * Live mesh stream — presences + recent message envelopes (metadata only) +
+ * recent audit events. Polled every 3-5s by the live dashboard. Authz:
+ * caller must own OR be a non-revoked member of the mesh.
+ *
+ * Envelopes expose a 24-char ciphertext preview so the UI can show
+ * "broker sees: <blob>" truthfully — this IS what the broker sees.
+ * Plaintext, nonces, full ciphertext are NEVER returned from here.
+ */
+export const getMyMeshStream = async ({
+  userId,
+  meshId,
+}: {
+  userId: string;
+  meshId: string;
+}) => {
+  // Authz check — same pattern as getMyMeshById
+  const [m] = await db
+    .select({ ownerUserId: mesh.ownerUserId })
+    .from(mesh)
+    .where(eq(mesh.id, meshId))
+    .limit(1);
+  if (!m) return null;
+
+  const isOwner = m.ownerUserId === userId;
+  if (!isOwner) {
+    const [membership] = await db
+      .select({ id: meshMember.id })
+      .from(meshMember)
+      .where(
+        and(
+          eq(meshMember.meshId, meshId),
+          eq(meshMember.userId, userId),
+          isNull(meshMember.revokedAt),
+        ),
+      )
+      .limit(1);
+    if (!membership) return null;
+  }
+
+  const presences = await db
+    .select({
+      id: presence.id,
+      memberId: presence.memberId,
+      displayName: meshMember.displayName,
+      sessionId: presence.sessionId,
+      pid: presence.pid,
+      cwd: presence.cwd,
+      status: presence.status,
+      statusSource: presence.statusSource,
+      statusUpdatedAt: presence.statusUpdatedAt,
+      lastPingAt: presence.lastPingAt,
+      disconnectedAt: presence.disconnectedAt,
+    })
+    .from(presence)
+    .leftJoin(meshMember, eq(presence.memberId, meshMember.id))
+    .where(and(eq(meshMember.meshId, meshId), isNull(presence.disconnectedAt)))
+    .orderBy(desc(presence.lastPingAt))
+    .limit(20);
+
+  const envelopes = await db
+    .select({
+      id: messageQueue.id,
+      senderMemberId: messageQueue.senderMemberId,
+      senderDisplayName: meshMember.displayName,
+      targetSpec: messageQueue.targetSpec,
+      priority: messageQueue.priority,
+      ciphertextPreview: sql<string>`LEFT(${messageQueue.ciphertext}, 24)`,
+      size: sql<number>`OCTET_LENGTH(${messageQueue.ciphertext})`,
+      createdAt: messageQueue.createdAt,
+      deliveredAt: messageQueue.deliveredAt,
+    })
+    .from(messageQueue)
+    .leftJoin(meshMember, eq(messageQueue.senderMemberId, meshMember.id))
+    .where(eq(messageQueue.meshId, meshId))
+    .orderBy(desc(messageQueue.createdAt))
+    .limit(50);
+
+  const auditEvents = await db
+    .select({
+      id: auditLog.id,
+      eventType: auditLog.eventType,
+      actorPeerId: auditLog.actorPeerId,
+      targetPeerId: auditLog.targetPeerId,
+      createdAt: auditLog.createdAt,
+    })
+    .from(auditLog)
+    .where(eq(auditLog.meshId, meshId))
+    .orderBy(desc(auditLog.createdAt))
+    .limit(20);
+
+  return { presences, envelopes, auditEvents };
 };
 
 export const getMyExport = async ({ userId }: { userId: string }) => {

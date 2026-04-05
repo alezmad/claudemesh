@@ -55,12 +55,21 @@ export default async function MeshPage({
               · tier {mesh.tier} · {mesh.visibility} · {mesh.transport}
             </DashboardHeaderDescription>
           </div>
-          <Link
-            href={pathsConfig.dashboard.user.meshes.invite(mesh.id)}
-            className={buttonVariants({ variant: "default" })}
-          >
-            Generate invite link
-          </Link>
+          <div className="flex gap-2">
+            <Link
+              href={pathsConfig.dashboard.user.meshes.live(mesh.id)}
+              className={buttonVariants({ variant: "outline" })}
+            >
+              <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--cm-clay)]" />
+              Live
+            </Link>
+            <Link
+              href={pathsConfig.dashboard.user.meshes.invite(mesh.id)}
+              className={buttonVariants({ variant: "default" })}
+            >
+              Generate invite link
+            </Link>
+          </div>
         </div>
       </DashboardHeader>
 

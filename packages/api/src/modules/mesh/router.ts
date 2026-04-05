@@ -19,6 +19,7 @@ import {
   getMyExport,
   getMyInvitesSent,
   getMyMeshById,
+  getMyMeshStream,
   getMyMeshes,
 } from "./queries";
 
@@ -46,6 +47,15 @@ export const myRouter = new Hono<Env>()
         400,
       );
     }
+  })
+  .get("/meshes/:id/stream", async (c) => {
+    const user = c.var.user;
+    return c.json(
+      (await getMyMeshStream({
+        userId: user.id,
+        meshId: c.req.param("id"),
+      })) ?? { presences: [], envelopes: [], auditEvents: [] },
+    );
   })
   .get("/meshes/:id", async (c) => {
     const user = c.var.user;

@@ -139,6 +139,53 @@ export type CreateMyInviteResponse = z.infer<typeof createMyInviteResponseSchema
 // List my invites (pending + sent)
 // ---------------------------------------------------------------------
 
+// ---------------------------------------------------------------------
+// Live mesh stream (presences + recent envelopes + recent audit events)
+// ---------------------------------------------------------------------
+
+export const getMyMeshStreamResponseSchema = z.object({
+  presences: z.array(
+    z.object({
+      id: z.string(),
+      memberId: z.string(),
+      displayName: z.string().nullable(),
+      sessionId: z.string(),
+      pid: z.number(),
+      cwd: z.string(),
+      status: z.enum(["idle", "working", "dnd"]),
+      statusSource: z.enum(["hook", "manual", "jsonl"]),
+      statusUpdatedAt: z.coerce.date(),
+      lastPingAt: z.coerce.date(),
+      disconnectedAt: z.coerce.date().nullable(),
+    }),
+  ),
+  envelopes: z.array(
+    z.object({
+      id: z.string(),
+      senderMemberId: z.string(),
+      senderDisplayName: z.string().nullable(),
+      targetSpec: z.string(),
+      priority: z.enum(["now", "next", "low"]),
+      ciphertextPreview: z.string(),
+      size: z.number(),
+      createdAt: z.coerce.date(),
+      deliveredAt: z.coerce.date().nullable(),
+    }),
+  ),
+  auditEvents: z.array(
+    z.object({
+      id: z.string(),
+      eventType: z.string(),
+      actorPeerId: z.string().nullable(),
+      targetPeerId: z.string().nullable(),
+      createdAt: z.coerce.date(),
+    }),
+  ),
+});
+export type GetMyMeshStreamResponse = z.infer<
+  typeof getMyMeshStreamResponseSchema
+>;
+
 export const getMyInvitesResponseSchema = z.object({
   sent: z.array(
     z.object({
