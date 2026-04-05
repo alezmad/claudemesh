@@ -61,7 +61,7 @@ export const Features = () => {
           >
             Free forever for solo developers · Or read the{" "}
             <a
-              href="#"
+              href="https://github.com/alezmad/claudemesh-cli#readme"
               className="underline decoration-[var(--cm-fg-tertiary)] underline-offset-4 transition-colors hover:text-[var(--cm-fg)] hover:decoration-[var(--cm-clay)]"
             >
               documentation

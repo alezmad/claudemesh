@@ -93,7 +93,7 @@ export const Hero = () => {
           >
             Or{" "}
             <Link
-              href="#docs"
+              href="https://github.com/alezmad/claudemesh-cli#readme"
               className="underline decoration-[var(--cm-fg-tertiary)] underline-offset-4 transition-colors hover:text-[var(--cm-fg)] hover:decoration-[var(--cm-clay)]"
             >
               read the documentation

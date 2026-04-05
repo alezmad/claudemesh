@@ -50,7 +50,7 @@ export const LaptopToLaptop = () => {
         </Reveal>
         <Reveal delay={3} className="mt-10 flex justify-center">
           <Link
-            href="#"
+            href="/auth/register"
             className="inline-flex items-center justify-center gap-2 rounded-[var(--cm-radius-xs)] border border-[var(--cm-fg-tertiary)] px-5 py-3 text-sm font-medium text-[var(--cm-fg)] transition-colors hover:border-[var(--cm-fg)] hover:bg-[var(--cm-bg)]"
             style={{ fontFamily: "var(--cm-font-sans)" }}
           >

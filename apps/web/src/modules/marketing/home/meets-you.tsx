@@ -6,7 +6,7 @@ const CARDS = [
     accent: "clay",
     title: "Start in your terminal",
     body: "Drop the broker next to Claude Code. One env var. Your session joins the mesh.",
-    cta: { label: "Install", href: "#" },
+    cta: { label: "Install", href: "https://github.com/alezmad/claudemesh-cli#install" },
     mock: (
       <div
         className="rounded-[8px] bg-[#D97757] p-6 font-mono text-[11px] leading-[1.6] text-[#141413]"
@@ -26,8 +26,8 @@ const CARDS = [
     accent: "oat",
     title: "Bridge to your editor",
     body: "VS Code, Cursor, JetBrains — the mesh exposes an MCP server your editor's agent can call.",
-    cta: { label: "VS Code", href: "#" },
-    cta2: { label: "JetBrains", href: "#" },
+    cta: { label: "VS Code", href: "https://github.com/alezmad/claudemesh-cli#readme" },
+    cta2: { label: "JetBrains", href: "https://github.com/alezmad/claudemesh-cli#readme" },
     mock: (
       <div
         className="rounded-[8px] border border-[var(--cm-border)] bg-[var(--cm-bg)] p-4"
@@ -52,7 +52,7 @@ const CARDS = [
     accent: "cactus",
     title: "Reach across machines",
     body: "Tailscale, WireGuard, or plain WS over your LAN. The broker is one binary, anywhere.",
-    cta: { label: "Open the dashboard", href: "#" },
+    cta: { label: "Open the dashboard", href: "/dashboard" },
     mock: (
       <div
         className="rounded-[8px] border border-[var(--cm-border)] bg-[var(--cm-bg)] p-4"
