@@ -36,6 +36,9 @@ primitives.
   app a full mesh peer, not just a management console. Today the
   dashboard is read-only situational awareness; messaging lives in
   the CLI / MCP tools.
+- **Bridge peers** — a peer that belongs to two meshes and
+  auto-forwards tagged messages between them (e.g. cross-post
+  `#incident` from `team-web` into `team-ops`)
 
 ---
 
@@ -47,6 +50,9 @@ The operator layer. Built for teams that want to run their own.
   Postgres included
 - **Federation** — brokers exchanging presence + routing ciphertext
   across organizations
+- **Broker-to-broker federation** — your self-hosted claudemesh
+  broker peering directly with claudemesh.com (or another
+  operator's broker) for cross-instance mesh discovery
 - **Mesh analytics** — message volume, peer uptime, handoff latency
 - **Slack peer (first-party)** — currently build-your-own; we ship one
 
