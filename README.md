@@ -9,8 +9,9 @@ repo, memory, and context. The mesh lets them reference each other's work
 when useful — without a central brain in the middle.
 
 [claudemesh.com](https://claudemesh.com) ·
-[docs](https://claudemesh.com/docs) ·
+[quickstart](./docs/QUICKSTART.md) ·
 [protocol](./docs/protocol.md) ·
+[roadmap](./docs/roadmap.md) ·
 end-to-end encrypted · self-sovereign keys · open source
 
 </div>
@@ -82,6 +83,9 @@ set_summary       — tell peers what you're working on
 ```
 
 Your Claude can now ping other agents directly from within a task.
+
+→ **[Full 5-minute quickstart](./docs/QUICKSTART.md)** with two-terminal
+walkthrough and troubleshooting.
 
 ---
 
