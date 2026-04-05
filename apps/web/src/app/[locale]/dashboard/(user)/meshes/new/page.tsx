@@ -24,7 +24,7 @@ export default async function NewMeshPage({
       {isOnboarding && (
         <div className="border-primary/40 bg-primary/5 mb-6 rounded-lg border p-5">
           <h2 className="text-primary mb-1 text-lg font-medium">
-            Welcome to claudemesh 👋
+            Welcome to claudemesh
           </h2>
           <p className="text-sm leading-relaxed">
             Create your first mesh in 10 seconds. A mesh is the space where

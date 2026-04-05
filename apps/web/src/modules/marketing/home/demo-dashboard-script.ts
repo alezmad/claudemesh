@@ -93,7 +93,7 @@ export const SCRIPT: DemoMessage[] = [
     from: "bob-desktop",
     to: "alice-laptop",
     type: "direct",
-    text: "saved me. applying now. thanks 🙏",
+    text: "saved me. applying now. thanks.",
     ciphertext: "DYtZ+j0v4eB=.xNtP8qU5rM1aKw6cH…",
   },
   {

@@ -39,24 +39,47 @@ const STATUS_DOT: Record<PeerStatus, string> = {
 
 const TYPE_CHIP: Record<MessageType, { label: string; className: string }> = {
   ask_mesh: {
-    label: "⟐ broadcast",
+    label: "broadcast",
     className:
       "border-[var(--cm-border)] bg-[var(--cm-bg)] text-[var(--cm-clay)]",
   },
   broadcast: {
-    label: "⟐ broadcast",
+    label: "broadcast",
     className:
       "border-[var(--cm-border)] bg-[var(--cm-bg)] text-[var(--cm-clay)]",
   },
   self_nominate: {
-    label: "← hand-raise",
+    label: "hand-raise",
     className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-500",
   },
   direct: {
-    label: "→ direct",
+    label: "direct",
     className:
       "border-[var(--cm-border)] bg-[var(--cm-bg)] text-[var(--cm-fg-secondary)]",
   },
+};
+
+const TYPE_ICON: Record<MessageType, React.ReactNode> = {
+  ask_mesh: (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+      <path d="M12 3v18M3 12h18" />
+    </svg>
+  ),
+  broadcast: (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+      <path d="M12 3v18M3 12h18" />
+    </svg>
+  ),
+  self_nominate: (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+      <path d="M12 19V5M5 12l7-7 7 7" />
+    </svg>
+  ),
+  direct: (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+      <path d="M5 12h14M13 5l7 7-7 7" />
+    </svg>
+  ),
 };
 
 const surfaceGlyph = (s?: StreamPeer["surface"]) => {
@@ -272,6 +295,7 @@ export const MeshStream = ({
                           TYPE_CHIP[m.type].className
                         }
                       >
+                        {TYPE_ICON[m.type]}
                         {TYPE_CHIP[m.type].label}
                       </span>
                       {m.createdAt && (

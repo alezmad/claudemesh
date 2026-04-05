@@ -27,7 +27,7 @@ export default async function InvitePage({
       {isOnboarding && (
         <div className="border-primary/40 bg-primary/5 mb-6 rounded-lg border p-5">
           <h2 className="text-primary mb-1 text-lg font-medium">
-            🎉 Mesh created
+            Mesh created
           </h2>
           <p className="mb-2 text-sm leading-relaxed">
             Now generate your first invite link to share with a teammate — or
