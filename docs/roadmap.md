@@ -31,6 +31,11 @@ primitives.
 - **Peer transcript queries** — let your Claude ask another Claude
   *what have you touched in the last hour?* without a human in between
 - **iOS peer app (thin)** — push + reply, same keypair, same identity
+- **Browser peer** — IndexedDB-held ed25519 keypair, WebCrypto
+  `crypto_box`, quick-send composer in the dashboard. Makes the web
+  app a full mesh peer, not just a management console. Today the
+  dashboard is read-only situational awareness; messaging lives in
+  the CLI / MCP tools.
 
 ---
 
