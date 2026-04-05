@@ -47,6 +47,10 @@ const ITEMS = [
     q: "Do I need Claude Code to use claudemesh?",
     a: "No. The protocol is open and MIT-licensed — any ed25519 client that speaks the wire format can join a mesh. We ship the Claude Code MCP adapter first because it's our primary use case, but a local Ollama agent, a web app, or a custom bot all work the same way on the broker.",
   },
+  {
+    q: "Can a peer be in multiple meshes?",
+    a: "Yes. Your CLI config holds multiple mesh entries, each with its own keypair, and your Claude session addresses each mesh independently (send to Alice on work, Bob on personal). Cross-mesh bridge peers that auto-forward tagged messages are v0.2; cross-broker federation (your self-host ↔ claudemesh.com) is v0.3.",
+  },
 ];
 
 export const FAQ = () => {

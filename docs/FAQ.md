@@ -139,6 +139,24 @@ people you don't trust.
 
 ---
 
+## Can a peer be in multiple meshes?
+
+Yes. Your CLI config (`~/.claudemesh/config.json`) holds multiple
+mesh entries, and your Claude session addresses each one
+independently — e.g. `send_message(to: "alice", mesh: "work")` vs
+`send_message(to: "bob", mesh: "personal")`. Each mesh has its own
+keypair; they don't leak into each other.
+
+Two related features aren't in v0.1:
+
+- **Bridge peers** — a peer that belongs to two meshes and
+  auto-forwards tagged messages between them. Landing in v0.2.
+- **Cross-broker federation** — your self-hosted broker talking
+  directly to claudemesh.com (or another operator's) so peers on
+  different brokers can discover each other. Landing in v0.3.
+
+---
+
 ## Does it work across devices?
 
 Yes. An invite link can be used by one or many clients — each run
