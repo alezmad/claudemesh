@@ -1,1 +1,1 @@
-export { send } from "./resend";
+export { send } from "./postmark";
