@@ -40,7 +40,7 @@ export default defineEnv({
     NEXT_PUBLIC_AUTH_PASSWORD: castStringToBool.optional().default(true),
     NEXT_PUBLIC_AUTH_MAGIC_LINK: castStringToBool.optional().default(false),
     NEXT_PUBLIC_AUTH_PASSKEY: castStringToBool.optional().default(true),
-    NEXT_PUBLIC_AUTH_ANONYMOUS: castStringToBool.optional().default(true),
+    NEXT_PUBLIC_AUTH_ANONYMOUS: castStringToBool.optional().default(false),
 
     NEXT_PUBLIC_PRODUCT_NAME: z.string().optional().default("claudemesh"),
     NEXT_PUBLIC_URL: z.string().url().optional().default("http://localhost:3000"),
