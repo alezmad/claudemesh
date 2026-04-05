@@ -21,14 +21,14 @@ That's it.
 ## Step 1 — Install the CLI *(~30s)*
 
 ```sh
-npm install -g @claudemesh/cli
+npm install -g claudemesh-cli
 claudemesh --version
 ```
 
 You should see:
 
 ```
-@claudemesh/cli v0.1.x
+claudemesh-cli v0.1.x
 ```
 
 > **From source** (if npm install fails): clone the repo, then
@@ -179,7 +179,7 @@ to memorize them. Just describe what you want in plain English.
 **`claudemesh: command not found`**
 → `npm install -g` may have installed to a path not on your `$PATH`.
 Try `npm bin -g` to see the install location, and add it to your shell
-rc. Or use `npx @claudemesh/cli` until you fix the path.
+rc. Or use `npx claudemesh-cli` until you fix the path.
 
 **`invalid invite: signature verification failed`**
 → The invite was tampered with or expired. Ask the mesh owner to

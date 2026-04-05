@@ -1,5 +1,5 @@
 /**
- * MCP server (stdio transport) for @claudemesh/cli.
+ * MCP server (stdio transport) for claudemesh-cli.
  *
  * Starts BrokerClient connections for every mesh in config on boot,
  * then routes the 5 MCP tools through them.

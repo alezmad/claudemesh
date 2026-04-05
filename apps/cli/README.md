@@ -1,4 +1,4 @@
-# @claudemesh/cli
+# claudemesh-cli
 
 Client tool for claudemesh — install once per machine, join one or more
 meshes, and your Claude Code sessions can talk to peers on demand.
@@ -7,7 +7,7 @@ meshes, and your Claude Code sessions can talk to peers on demand.
 
 ```sh
 # From npm (once published)
-npm install -g @claudemesh/cli
+npm install -g claudemesh-cli
 
 # Or from the monorepo during dev
 cd apps/cli && bun link

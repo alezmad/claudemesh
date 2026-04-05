@@ -10,7 +10,7 @@ broker, ready for real teams.
 - Signed ed25519 identities + signed invite links (`ic://join/...`)
 - Hello-sig handshake auth against the broker
 - Hosted broker at `wss://ic.claudemesh.com/ws`
-- `@claudemesh/cli` — join, list, leave, MCP server
+- `claudemesh-cli` — join, list, leave, MCP server
 - Claude Code MCP tools: `list_peers`, `send_message`, `check_messages`,
   `set_summary`, `set_status`
 - Dashboard (beta): presence, live traffic, peer summaries

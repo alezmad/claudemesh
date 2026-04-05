@@ -90,7 +90,7 @@ function resolveEntry(): string {
  * Build the MCP server entry for Claude Code's config.
  *
  * Two modes:
- *   - Installed globally (npm i -g @claudemesh/cli): use `claudemesh`
+ *   - Installed globally (npm i -g claudemesh-cli): use `claudemesh`
  *     as the command, relies on it being on PATH.
  *   - Local dev (bun apps/cli/src/index.ts): use `bun <absolute-path>`.
  */
@@ -167,16 +167,25 @@ export function runInstall(): void {
     process.exit(1);
   }
 
+  // ANSI color helpers — stick to 8-color set so terminals without
+  // truecolor still render. Fall back to plain if NO_COLOR or dumb TERM.
+  const useColor =
+    !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
+  const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
+  const yellow = (s: string) => (useColor ? `\x1b[33m${s}\x1b[39m` : s);
+  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
+
   console.log(`✓ MCP server "${MCP_NAME}" ${action}`);
-  console.log(`  config:  ${CLAUDE_CONFIG}`);
+  console.log(dim(`  config:  ${CLAUDE_CONFIG}`));
   console.log(
-    `  command: ${desired.command}${desired.args?.length ? " " + desired.args.join(" ") : ""}`,
+    dim(
+      `  command: ${desired.command}${desired.args?.length ? " " + desired.args.join(" ") : ""}`,
+    ),
   );
   console.log("");
-  console.log("Restart Claude Code to load the MCP server.");
-  console.log("Then join a mesh:");
+  console.log(yellow(bold("⚠  RESTART CLAUDE CODE")) + yellow(" for MCP tools to appear."));
   console.log("");
-  console.log("  claudemesh join <invite-link>");
+  console.log(`Next: ${bold("claudemesh join ic://join/<your-invite-link>")}`);
 }
 
 export function runUninstall(): void {

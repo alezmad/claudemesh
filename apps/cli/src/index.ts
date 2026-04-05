@@ -1,5 +1,5 @@
 /**
- * @claudemesh/cli entry point.
+ * claudemesh-cli entry point.
  *
  * Dispatches between two modes:
  *   - `claudemesh mcp`           → MCP server (stdio transport)
