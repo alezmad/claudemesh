@@ -9,7 +9,13 @@ import { DemoDashboard } from "~/modules/marketing/home/demo-dashboard";
 import { WhatIsClaudemesh } from "~/modules/marketing/home/what-is-claudemesh";
 import { FAQ } from "~/modules/marketing/home/faq";
 import { CallToAction } from "~/modules/marketing/home/cta";
+import { MeshStats } from "~/modules/marketing/home/mesh-stats";
 import { LatestNewsToaster } from "~/modules/marketing/home/toaster";
+
+// Revalidate the page every 60s so the mesh-stats counter stays fresh
+// without hammering the DB. The /api/public/stats endpoint has its own
+// 60s in-memory cache too.
+export const revalidate = 60;
 
 const HomePage = () => {
   return (
@@ -28,6 +34,7 @@ const HomePage = () => {
       <BeyondTerminal />
       <FAQ />
       <CallToAction />
+      <MeshStats />
       <LatestNewsToaster />
     </div>
   );

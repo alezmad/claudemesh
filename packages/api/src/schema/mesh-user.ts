@@ -186,6 +186,18 @@ export type GetMyMeshStreamResponse = z.infer<
   typeof getMyMeshStreamResponseSchema
 >;
 
+// ---------------------------------------------------------------------
+// Public stats (unauthed landing counter)
+// ---------------------------------------------------------------------
+
+export const publicStatsResponseSchema = z.object({
+  messagesRouted: z.number(),
+  meshesCreated: z.number(),
+  peersActive: z.number(),
+  lastUpdated: z.string(),
+});
+export type PublicStatsResponse = z.infer<typeof publicStatsResponseSchema>;
+
 export const getMyInvitesResponseSchema = z.object({
   sent: z.array(
     z.object({

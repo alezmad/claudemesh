@@ -15,6 +15,7 @@ import { authRouter } from "./modules/auth/router";
 import { billingRouter } from "./modules/billing/router";
 import { myRouter } from "./modules/mesh/router";
 import { organizationRouter } from "./modules/organization/router";
+import { publicRouter } from "./modules/public/router";
 import { storageRouter } from "./modules/storage/router";
 import { onError } from "./utils/on-error";
 
@@ -51,6 +52,7 @@ const appRouter = new Hono()
   .route("/billing", billingRouter)
   .route("/my", myRouter)
   .route("/organizations", organizationRouter)
+  .route("/public", publicRouter)
   .route("/storage", storageRouter)
   .onError(onError);
 
