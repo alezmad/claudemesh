@@ -154,3 +154,13 @@
 :root {
   color-scheme: dark;
 }
+
+/* Override the Tailwind default --font-sans / --font-mono CSS vars
+   (which BaseLayout used to populate from next/font/google Geist).
+   We self-host Anthropic Sans/Serif/Mono now — no Google Fonts fetch,
+   no CSP font-src violation. */
+.cm-root {
+  --font-sans: var(--cm-font-sans);
+  --font-mono: var(--cm-font-mono);
+  --font-serif: var(--cm-font-serif);
+}
