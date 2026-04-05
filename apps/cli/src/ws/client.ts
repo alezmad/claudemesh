@@ -93,7 +93,7 @@ export class BrokerClient {
   /** Open WS, send hello, resolve when hello_ack received. */
   async connect(): Promise<void> {
     if (this.closed) throw new Error("client is closed");
-    this.setStatus("connecting");
+    this.setConnStatus("connecting");
     const ws = new WebSocket(this.mesh.brokerUrl);
     this.ws = ws;
 
@@ -146,7 +146,7 @@ export class BrokerClient {
         if (msg.type === "hello_ack") {
           if (this.helloTimer) clearTimeout(this.helloTimer);
           this.helloTimer = null;
-          this.setStatus("open");
+          this.setConnStatus("open");
           this.reconnectAttempt = 0;
           this.flushOutbound();
           resolve();
@@ -163,7 +163,7 @@ export class BrokerClient {
           reject(new Error("ws closed before hello_ack"));
         }
         if (!this.closed) this.scheduleReconnect();
-        else this.setStatus("closed");
+        else this.setConnStatus("closed");
       };
 
       const onError = (err: Error): void => {
@@ -277,7 +277,7 @@ export class BrokerClient {
         /* ignore */
       }
     }
-    this.setStatus("closed");
+    this.setConnStatus("closed");
   }
 
   // --- Internals ---
@@ -373,7 +373,7 @@ export class BrokerClient {
   }
 
   private scheduleReconnect(): void {
-    this.setStatus("reconnecting");
+    this.setConnStatus("reconnecting");
     const delay =
       BACKOFF_CAPS[Math.min(this.reconnectAttempt, BACKOFF_CAPS.length - 1)]!;
     this.reconnectAttempt += 1;
@@ -388,7 +388,7 @@ export class BrokerClient {
     }, delay);
   }
 
-  private setStatus(s: ConnStatus): void {
+  private setConnStatus(s: ConnStatus): void {
     if (this._status === s) return;
     this._status = s;
     this.opts.onStatusChange?.(s);
