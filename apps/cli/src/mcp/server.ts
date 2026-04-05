@@ -73,8 +73,13 @@ function resolveClient(to: string): {
   };
 }
 
+function decryptFailedWarning(senderPubkey: string): string {
+  const who = senderPubkey ? senderPubkey.slice(0, 12) + "…" : "unknown sender";
+  return `⚠ message from ${who} failed to decrypt (tampered or wrong keypair)`;
+}
+
 function formatPush(p: InboundPush, meshSlug: string): string {
-  const body = p.plaintext ?? "(decryption failed)";
+  const body = p.plaintext ?? decryptFailedWarning(p.senderPubkey);
   return `[${meshSlug}] from ${p.senderPubkey.slice(0, 12)}… (${p.priority}, ${p.createdAt}):\n${body}`;
 }
 
@@ -82,7 +87,7 @@ export async function startMcpServer(): Promise<void> {
   const config = loadConfig();
 
   const server = new Server(
-    { name: "claudemesh", version: "0.1.1" },
+    { name: "claudemesh", version: "0.1.2" },
     {
       capabilities: {
         experimental: { "claude/channel": {} },
@@ -215,7 +220,7 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
       const fromName = fromPubkey
         ? `peer-${fromPubkey.slice(0, 8)}`
         : "unknown";
-      const content = msg.plaintext ?? "(decryption failed)";
+      const content = msg.plaintext ?? decryptFailedWarning(fromPubkey);
       try {
         await server.notification({
           method: "notifications/claude/channel",

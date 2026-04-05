@@ -312,10 +312,14 @@ export class BrokerClient {
             this.mesh.secretKey,
           );
         }
-        // If decryption failed, fall back to base64 UTF-8 unwrap —
-        // this covers the legacy plaintext path for broadcasts/channels
-        // until channel crypto lands.
-        if (plaintext === null && ciphertext) {
+        // Legacy/broadcast path: no senderPubkey means the message
+        // was not crypto_box'd, so base64 UTF-8 unwrap is correct.
+        // For direct messages (senderPubkey present) we MUST NOT
+        // base64-decode the ciphertext on decrypt failure — that
+        // produces garbage binary that surfaces as garbled bytes
+        // to Claude. Leave plaintext=null and let consumers emit
+        // a clear "failed to decrypt" warning.
+        if (plaintext === null && ciphertext && !senderPubkey) {
           try {
             plaintext = Buffer.from(ciphertext, "base64").toString("utf-8");
           } catch {
