@@ -82,22 +82,6 @@ const config: NextConfig = {
     "better-sqlite3",
     "@mapbox/node-pre-gyp",
   ],
-  // turbopack config moved to dev-only — Next.js 16.0.10 doesn't
-  // support turbopack for production builds (needs >=16.1.0).
-  // SVG loading via @svgr/webpack works via the webpack config below.
-  ...(process.env.NODE_ENV !== "production"
-    ? {
-        turbopack: {
-          rules: {
-            "*.svg": {
-              loaders: ["@svgr/webpack"],
-              as: "*.js",
-            },
-          },
-        },
-      }
-    : {}),
-
   images: {
     remotePatterns: [
       {
