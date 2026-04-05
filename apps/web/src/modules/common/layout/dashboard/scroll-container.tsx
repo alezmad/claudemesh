@@ -53,7 +53,9 @@ export function ScrollContainer({ children, className }: ScrollContainerProps) {
         onScroll={updateScrollState}
         className="h-full overflow-auto"
       >
-        {children}
+        <div className="mx-auto w-full max-w-[var(--cm-max-w)] px-4 py-6 md:px-8 md:py-8">
+          {children}
+        </div>
       </div>
     </div>
   );
