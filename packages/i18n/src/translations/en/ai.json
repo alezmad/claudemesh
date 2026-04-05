@@ -55,7 +55,7 @@
     "title": "Image generation",
     "description": "Create visuals from text descriptions using different models like SDXL or Midjourney.",
     "headline": {
-      "title": "Describe what you imagine 🖼️",
+      "title": "Describe what you imagine",
       "subtitle": "And let's make it live."
     },
     "composer": {
