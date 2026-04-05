@@ -90,7 +90,9 @@ export const auth = betterAuth({
   ],
   emailAndPassword: {
     enabled: true,
-    requireEmailVerification: true,
+    // v0.1.0: email verification DEFERRED until RESEND_API_KEY / SMTP wired.
+    // Users sign up and land in dashboard immediately. Re-enable when email provider is live.
+    requireEmailVerification: false,
     sendResetPassword: async ({ user, url }, request) =>
       sendEmail({
         to: user.email,
