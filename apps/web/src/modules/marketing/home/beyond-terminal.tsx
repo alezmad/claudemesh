@@ -219,12 +219,11 @@ export const BeyondTerminal = () => {
             <span className="text-[var(--cm-fg-secondary)]">anything</span>
           </p>
           <Link
-            href="https://github.com/claudemesh/claudemesh#protocol"
-            target="_blank"
+            href="/auth/register"
             className="inline-flex items-center gap-2 rounded-[var(--cm-radius-xs)] border border-[var(--cm-fg-tertiary)] px-5 py-2.5 text-sm font-medium text-[var(--cm-fg)] transition-colors hover:border-[var(--cm-fg)] hover:bg-[var(--cm-bg-elevated)]"
             style={{ fontFamily: "var(--cm-font-sans)" }}
           >
-            Read the protocol spec →
+            Get on the mesh →
           </Link>
         </Reveal>
       </div>
