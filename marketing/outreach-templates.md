@@ -4,7 +4,8 @@
 
 ## Template 1: Cold email to Claude Code / MCP team at Anthropic
 
-**To:** jobs@anthropic.com (or direct to a Claude Code / MCP team member if identified)
+**To:** jobs@anthropic.com
+**Alt:** DM @davidsp (David Soria Parra, MCP lead) or @bcherny (Boris Cherny, Claude Code) on X
 
 **Subject:** Built an E2E-encrypted mesh for Claude Code sessions — found some things about dev-channels
 
@@ -73,7 +74,7 @@ Repo: github.com/alezmad/claudemesh-cli
 Landing: claudemesh.com
 npm: claudemesh-cli
 
-Built this because I want to work on this layer full-time. @AnthropicAI, let's talk.
+Built this because I want to work on this layer full-time. @AnthropicAI @davidsp @bcherny — let's talk.
 ```
 
 *Note: @alexalbertt omitted — could not verify this is the correct handle for a Claude Code team lead. Add if confirmed.*
