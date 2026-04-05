@@ -1,16 +1,7 @@
 import type { NextConfig } from "next";
+import { withPayload } from "@payloadcms/next/withPayload";
 
 import env from "./env.config";
-
-// Payload CMS requires Next.js >=16.1.0 for production builds (turbopack).
-// Until we upgrade from 16.0.10, load withPayload only in dev where
-// turbopack isn't used for builds. Production serves blog/changelog
-// as static pages — Payload admin is dev-only for now.
-const withPayload =
-  process.env.NODE_ENV === "production"
-    ? (c: NextConfig) => c
-    : // eslint-disable-next-line @typescript-eslint/no-require-imports
-      require("@payloadcms/next/withPayload").withPayload;
 
 const INTERNAL_PACKAGES = [
   "@turbostarter/analytics-web",
@@ -125,4 +116,4 @@ const withBundleAnalyzer = require("@next/bundle-analyzer")({
   enabled: env.ANALYZE,
 });
 
-export default withPayload(withBundleAnalyzer(config)) as NextConfig;
+export default withPayload(withBundleAnalyzer(config));
