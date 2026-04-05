@@ -87,7 +87,7 @@ export async function startMcpServer(): Promise<void> {
   const config = loadConfig();
 
   const server = new Server(
-    { name: "claudemesh", version: "0.1.3" },
+    { name: "claudemesh", version: "0.1.4" },
     {
       capabilities: {
         experimental: { "claude/channel": {} },
