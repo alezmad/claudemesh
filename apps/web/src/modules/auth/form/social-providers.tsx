@@ -29,6 +29,12 @@ export const SocialIcons: Record<SocialProviderType, Icon> = {
   [SocialProviderType.APPLE]: Icons.Apple,
 };
 
+const PROVIDER_LABELS: Record<SocialProviderType, string> = {
+  [SocialProviderType.GITHUB]: "GitHub",
+  [SocialProviderType.GOOGLE]: "Google",
+  [SocialProviderType.APPLE]: "Apple",
+};
+
 const SocialProvider = ({
   provider,
   isSubmitting,
@@ -49,7 +55,7 @@ const SocialProvider = ({
       variant="outline"
       type="button"
       size="lg"
-      className="relative grow basis-28 gap-2"
+      className="relative w-full justify-center gap-2"
       disabled={isSubmitting}
       onClick={onClick}
     >
@@ -58,7 +64,9 @@ const SocialProvider = ({
       ) : (
         <>
           <Icon className="size-5 dark:brightness-125" />
-          <span className="leading-none capitalize">{provider}</span>
+          <span className="leading-none">
+            Continue with {PROVIDER_LABELS[provider]}
+          </span>
         </>
       )}
 
