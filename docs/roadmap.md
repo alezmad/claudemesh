@@ -62,7 +62,7 @@ The operator layer. Built for teams that want to run their own.
 
 - **MIT-licensed** — the protocol, the CLI, the broker, the
   marketing site
-- **Reference implementation** — [claude-intercom](https://github.com/agutmou/claude-intercom)
+- **Reference implementation** — [claude-intercom](https://github.com/alezmad/claude-intercom)
   is the local OSS ancestor (sockets on one machine). claudemesh is
   the hosted/enterprise extension.
 - **Spec-first** — the wire protocol + crypto are documented in
