@@ -35,3 +35,6 @@ Dockerfile
 *.local
 .env*.local
 tmp/
+
+# Apps not needed in any server image (CLI ships to npm, not to containers)
+apps/cli/

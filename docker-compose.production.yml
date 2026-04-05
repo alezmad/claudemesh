@@ -1,0 +1,94 @@
+# claudemesh — production compose (for Coolify Service deployment)
+#
+# Three services:
+#   - migrate → one-shot drizzle-kit migrate, exits 0, gates web startup
+#   - broker  → ic.claudemesh.com (WSS /ws + HTTP /health + /hook/set-status)
+#   - web     → claudemesh.com + dashboard.claudemesh.com (Next.js)
+#
+# Postgres is NOT declared here — managed externally by Coolify or a managed DB.
+# Pass DATABASE_URL + all secrets at runtime via Coolify env config.
+#
+# Why broker does NOT depend on migrate:
+#   Broker tolerates DB-down gracefully (per apps/broker/DEPLOY_SPEC.md §Healthcheck).
+#   It should keep serving even if a migration is in-flight or has failed, so WS
+#   peers stay connected + /health reports degraded instead of going 502.
+#
+# Why web DOES depend on migrate:
+#   Next.js routes assume the schema they were built against. Starting web before
+#   migrations land → 500s on every query touching new tables/columns.
+
+name: claudemesh
+
+services:
+  migrate:
+    image: ${MIGRATE_IMAGE:-claudemesh-migrate:latest}
+    restart: "no"
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    networks:
+      - claudemesh-internal
+
+  broker:
+    image: ${BROKER_IMAGE:-claudemesh-broker:latest}
+    restart: always
+    environment:
+      NODE_ENV: production
+      BROKER_PORT: 7900
+      DATABASE_URL: ${DATABASE_URL}
+      STATUS_TTL_SECONDS: ${STATUS_TTL_SECONDS:-60}
+      HOOK_FRESH_WINDOW_SECONDS: ${HOOK_FRESH_WINDOW_SECONDS:-30}
+      MAX_CONNECTIONS_PER_MESH: ${MAX_CONNECTIONS_PER_MESH:-100}
+      MAX_MESSAGE_BYTES: ${MAX_MESSAGE_BYTES:-65536}
+      HOOK_RATE_LIMIT_PER_MIN: ${HOOK_RATE_LIMIT_PER_MIN:-30}
+    expose:
+      - "7900"
+    networks:
+      - coolify
+      - claudemesh-internal
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:7900/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  web:
+    image: ${WEB_IMAGE:-claudemesh-web:latest}
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      DATABASE_URL: ${DATABASE_URL}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-https://claudemesh.com}
+      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-https://claudemesh.com,https://dashboard.claudemesh.com,https://ic.claudemesh.com}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      BROKER_INTERNAL_URL: http://broker:7900
+    expose:
+      - "3000"
+    networks:
+      - coolify
+      - claudemesh-internal
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      broker:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+networks:
+  # Coolify's shared Traefik network — must already exist on the host
+  coolify:
+    external: true
+  # Internal backplane between migrate + broker + web
+  claudemesh-internal:
+    driver: bridge
