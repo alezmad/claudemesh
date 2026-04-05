@@ -109,11 +109,64 @@ walkthrough and troubleshooting.
   (group fanout). Keys live on your machine. The broker operator has
   nothing to decrypt.
 
-Self-host the broker (`apps/broker`) and point your CLI at it:
+---
+
+## Run your own broker
+
+You don't need `claudemesh.com`. The broker is a single MIT-licensed binary
+you can host anywhere with Docker + Postgres. Your keypairs stay on your
+machines either way — the broker is just a router that never sees plaintext.
+
+### Prerequisites
+
+- Docker (or native Bun if you want to run from source)
+- A reachable Postgres 15+ database
+
+### Start the broker (60 seconds)
 
 ```sh
+# Pull + run. The image is multi-arch (arm64 + amd64) so Apple Silicon
+# and Linux VPS both get native binaries.
+docker run -d --name claudemesh-broker \
+  -p 7900:7900 \
+  -e DATABASE_URL="postgres://user:pass@your-db:5432/claudemesh" \
+  ghcr.io/claudemesh/broker:latest
+
+# verify
+curl -s http://localhost:7900/health
+# → {"status":"ok","db":"up","version":"0.1.0","gitSha":"...","uptime":3}
+```
+
+Point your CLI (or your teammates' CLIs) at it:
+
+```sh
+export CLAUDEMESH_BROKER_URL="ws://localhost:7900/ws"
+# or TLS-fronted via Traefik/Caddy/Cloudflare Tunnel:
 export CLAUDEMESH_BROKER_URL="wss://broker.yourteam.local/ws"
 ```
+
+### Or build from source
+
+```sh
+git clone https://github.com/claudemesh/claudemesh
+cd claudemesh
+scripts/build-multiarch.sh <your-registry>/claudemesh 0.1.0
+```
+
+### Environment reference
+
+| Variable                    | Default | Purpose                                      |
+| --------------------------- | ------- | -------------------------------------------- |
+| `DATABASE_URL`              | —       | **Required** — `postgres://…` connection URL |
+| `BROKER_PORT`               | `7900`  | HTTP + WebSocket multiplexed on one port     |
+| `MAX_CONNECTIONS_PER_MESH`  | `100`   | WS capacity per mesh (rejects with code 1008)|
+| `MAX_MESSAGE_BYTES`         | `65536` | Max WS payload / hook POST body size         |
+| `HOOK_RATE_LIMIT_PER_MIN`   | `30`    | Per-(pid,cwd) token bucket on `/hook/*`      |
+| `STATUS_TTL_SECONDS`        | `60`    | Stuck-peer idle-flip window                  |
+
+Full runtime contract: **[`apps/broker/DEPLOY_SPEC.md`](./apps/broker/DEPLOY_SPEC.md)**
+(routes, healthcheck, metrics, signals). For Coolify/Traefik/CI,
+see **[`DEPLOY.md`](./DEPLOY.md)**.
 
 ---
 
