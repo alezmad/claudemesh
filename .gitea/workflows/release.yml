@@ -1,0 +1,61 @@
+name: Release
+
+# Triggers on any v-prefixed tag push:
+#   git tag v0.1.0 && git push --tags gitea-vps v0.1.0
+#
+# Builds + pushes all 3 multi-arch images to
+# ghcr.io/alezmad/claudemesh-{broker,web,migrate}:<tag> and :latest
+#
+# Prereq: the Gitea repo must have a secret named GHCR_TOKEN containing a
+# GitHub personal access token with `write:packages` scope for the alezmad
+# GHCR namespace.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (without v prefix, e.g. 0.1.0)"
+        required: true
+        default: "latest"
+
+jobs:
+  publish:
+    name: Publish multi-arch images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (cross-arch emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "value=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            # Strip leading v from git tag (v0.1.0 → 0.1.0)
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to ghcr.io/alezmad
+        env:
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+        run: ./scripts/publish-images.sh "${{ steps.tag.outputs.value }}"
+
+      - name: Summary
+        run: |
+          echo "## Released claudemesh ${{ steps.tag.outputs.value }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pulled with:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+          echo "docker pull ghcr.io/alezmad/claudemesh-broker:${{ steps.tag.outputs.value }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "docker pull ghcr.io/alezmad/claudemesh-web:${{ steps.tag.outputs.value }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "docker pull ghcr.io/alezmad/claudemesh-migrate:${{ steps.tag.outputs.value }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
