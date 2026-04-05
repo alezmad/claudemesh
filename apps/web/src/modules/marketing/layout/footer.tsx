@@ -1,189 +1,141 @@
-import { getTranslation } from "@turbostarter/i18n/server";
-import { isExternal } from "@turbostarter/shared/utils";
+import Link from "next/link";
+
 import { BuiltWith } from "@turbostarter/ui-web/built-with";
 import { Icons } from "@turbostarter/ui-web/icons";
 
 import { appConfig } from "~/config/app";
 import { pathsConfig } from "~/config/paths";
 import { I18nControls } from "~/modules/common/i18n/controls";
-import { TurboLink } from "~/modules/common/turbo-link";
 
-const socials = [
-  {
-    id: "x",
-    href: "https://x.com/turbostarter_",
-    icon: Icons.Twitter,
-  },
-  {
-    id: "github",
-    href: "https://github.com/turbostarter",
-    icon: Icons.Github,
-  },
+const REPO_URL = "https://github.com/alezmad/claudemesh";
+const OSS_URL = "https://github.com/alezmad/claude-intercom";
 
+const columns = [
   {
-    id: "facebook",
-    href: "#",
-    icon: Icons.Facebook,
+    label: "product",
+    items: [
+      { title: "Docs", href: "#docs" },
+      { title: "Pricing", href: pathsConfig.marketing.pricing },
+      { title: "Changelog", href: "#changelog" },
+      { title: "Contact", href: pathsConfig.marketing.contact },
+    ],
   },
   {
-    id: "linkedin",
-    href: "#",
-    icon: Icons.Linkedin,
+    label: "protocol",
+    items: [
+      { title: "GitHub", href: REPO_URL },
+      { title: "claude-intercom (OSS)", href: OSS_URL },
+      { title: "Protocol spec", href: `${OSS_URL}#protocol` },
+      { title: "Self-host broker", href: `${REPO_URL}#self-host` },
+    ],
   },
 ];
 
-const links = [
-  {
-    label: "common:product",
-    items: [
-      {
-        title: "marketing:product.mobile.ios.title",
-        href: "https://turbostarter.dev",
-      },
-      {
-        title: "marketing:product.mobile.android.title",
-        href: "https://turbostarter.dev",
-      },
-      {
-        title: "marketing:product.extension.chrome.title",
-        href: "https://chromewebstore.google.com/detail/bcjmonmlfbnngpkllpnpmnjajaciaboo",
-      },
-      {
-        title: "marketing:product.extension.firefox.title",
-        href: "https://addons.mozilla.org/addon/turbostarter_",
-      },
-      {
-        title: "marketing:product.extension.edge.title",
-        href: "https://microsoftedge.microsoft.com/addons/detail/turbostarter/ianbflanmmoeleokihabnmmcahhfijig",
-      },
-    ],
-  },
-  {
-    label: "resources",
-    items: [
-      {
-        title: "marketing:contact.label",
-        href: pathsConfig.marketing.contact,
-      },
-      {
-        title: "marketing:roadmap.title",
-        href: "https://github.com/orgs/turbostarter/projects/1",
-      },
-      {
-        title: "marketing:docs.title",
-        href: "https://turbostarter.dev/docs/web",
-      },
-      {
-        title: "marketing:api.title",
-        href: "#",
-      },
-    ],
-  },
-  {
-    label: "about",
-    items: [
-      {
-        title: "billing:pricing.label",
-        href: pathsConfig.marketing.pricing,
-      },
-      {
-        title: "marketing:blog.label",
-        href: pathsConfig.marketing.blog.index,
-      },
-    ],
-  },
-  {
-    label: "legal.label",
-    items: [
-      {
-        title: "legal.privacy",
-        href: pathsConfig.marketing.legal("privacy-policy"),
-      },
-      {
-        title: "legal.terms",
-        href: pathsConfig.marketing.legal("terms-and-conditions"),
-      },
-    ],
-  },
-] as const;
-
-export const Footer = async () => {
-  const { t } = await getTranslation({
-    ns: ["common", "marketing", "billing"],
-  });
-
+export const Footer = () => {
   return (
-    <footer className="mt-auto w-full border-t px-6 pt-8 pb-6 sm:pt-10 sm:pb-8 md:pt-14 md:pb-10 lg:pt-16">
-      <div className="sm:container">
-        <div className="flex w-full flex-col items-start justify-between gap-10 md:gap-16 lg:flex-row lg:gap-24 xl:gap-32">
-          <div className="flex flex-col items-start justify-center gap-2">
-            <TurboLink
+    <footer
+      className="mt-auto w-full border-t border-[var(--cm-border)] bg-[var(--cm-bg)] px-6 pt-12 pb-8 md:px-12 md:pt-16"
+      style={{ fontFamily: "var(--cm-font-sans)" }}
+    >
+      <div className="mx-auto max-w-[var(--cm-max-w)]">
+        <div className="flex flex-col gap-10 lg:flex-row lg:gap-16">
+          {/* wordmark + tagline */}
+          <div className="flex flex-col gap-4 lg:w-80">
+            <Link
               href={pathsConfig.index}
-              className="flex shrink-0 items-center gap-3"
-              aria-label={t("home")}
+              className="group flex items-center gap-2.5"
+              aria-label="claudemesh home"
             >
-              <Icons.Logo className="text-primary h-8" />
-              <Icons.LogoText className="text-foreground h-4" />
-            </TurboLink>
-
-            <p className="text-muted-foreground text-sm text-pretty">
-              {t("product.title")}
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                className="text-[var(--cm-clay)]"
+              >
+                <circle cx="12" cy="4" r="2" fill="currentColor" />
+                <circle cx="4" cy="12" r="2" fill="currentColor" />
+                <circle cx="20" cy="12" r="2" fill="currentColor" />
+                <circle cx="12" cy="20" r="2" fill="currentColor" />
+                <path
+                  d="M12 4L4 12M12 4L20 12M4 12L12 20M20 12L12 20M4 12L20 12M12 4L12 20"
+                  stroke="currentColor"
+                  strokeWidth="1.2"
+                  opacity="0.45"
+                />
+              </svg>
+              <span
+                className="text-[17px] font-medium tracking-tight text-[var(--cm-fg)]"
+                style={{ fontFamily: "var(--cm-font-serif)" }}
+              >
+                claudemesh
+              </span>
+            </Link>
+            <p
+              className="text-sm leading-[1.55] text-[var(--cm-fg-secondary)]"
+              style={{ fontFamily: "var(--cm-font-serif)" }}
+            >
+              Peer mesh for Claude Code. Every session, woven into one mesh —
+              reachable from anywhere you are.
             </p>
-
             <I18nControls />
-
             <div className="mt-2 flex items-center gap-2.5">
-              {socials.map((social) => (
-                <a
-                  key={social.id}
-                  href={social.href}
-                  rel="noopener noreferrer"
-                  target="_blank"
-                  className="text-muted-foreground hover:text-foreground transition-colors"
-                  aria-label={social.id}
-                >
-                  <social.icon className="size-7" />
-                </a>
-              ))}
+              <a
+                href={REPO_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="claudemesh on GitHub"
+                className="text-[var(--cm-fg-tertiary)] transition-colors hover:text-[var(--cm-fg)]"
+              >
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                  <path d="M12 .3a12 12 0 00-3.8 23.4c.6.1.8-.3.8-.6v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6a4.7 4.7 0 011.3-3.3c-.2-.3-.6-1.6.1-3.3 0 0 1-.3 3.3 1.2a11.5 11.5 0 016 0c2.3-1.5 3.3-1.2 3.3-1.2.7 1.7.3 3 .1 3.3a4.7 4.7 0 011.3 3.3c0 4.7-2.8 5.7-5.5 6 .4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6A12 12 0 0012 .3" />
+                </svg>
+              </a>
             </div>
           </div>
 
-          <div className="mt-1 grid w-full max-w-[50rem] grid-cols-2 gap-8 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-3 xl:grid-cols-4">
-            {links.map((link) => (
-              <div className="flex w-full flex-col gap-4" key={link.label}>
-                <span className="text-foreground text-sm font-medium">
-                  {t(link.label)}
+          {/* link columns */}
+          <div className="grid flex-1 grid-cols-2 gap-8 md:grid-cols-2 lg:gap-12">
+            {columns.map((col) => (
+              <div key={col.label} className="flex flex-col gap-3">
+                <span
+                  className="text-[11px] uppercase tracking-[0.18em] text-[var(--cm-clay)]"
+                  style={{ fontFamily: "var(--cm-font-mono)" }}
+                >
+                  {col.label}
                 </span>
-                <nav>
-                  <ul className="flex flex-col gap-2">
-                    {link.items.map((link) => (
-                      <li key={link.title}>
-                        <TurboLink
-                          href={link.href}
-                          className="text-muted-foreground hover:text-foreground relative text-sm transition-colors"
+                <ul className="flex flex-col gap-2">
+                  {col.items.map((item) => {
+                    const external = item.href.startsWith("http");
+                    return (
+                      <li key={item.title}>
+                        <Link
+                          href={item.href}
+                          {...(external
+                            ? { target: "_blank", rel: "noopener noreferrer" }
+                            : {})}
+                          className="text-sm text-[var(--cm-fg-secondary)] transition-colors hover:text-[var(--cm-fg)]"
                         >
-                          {t(link.title)}
-                          {isExternal(link.href) && (
-                            <Icons.ArrowUpRight className="-mt-1 inline size-2.5" />
-                          )}
-                        </TurboLink>
+                          {item.title}
+                        </Link>
                       </li>
-                    ))}
-                  </ul>
-                </nav>
+                    );
+                  })}
+                </ul>
               </div>
             ))}
           </div>
         </div>
-        <div className="mt-8 pt-6">
-          <div className="flex flex-col items-center justify-between gap-4 sm:flex-row">
-            <p className="text-muted-foreground text-sm">
-              &copy; {new Date().getFullYear()} {appConfig.name}.{" "}
-              {t("legal.copyright")}.
-            </p>
 
-            <BuiltWith />
-          </div>
+        {/* bottom bar */}
+        <div className="mt-12 flex flex-col items-start justify-between gap-4 border-t border-[var(--cm-border)] pt-6 sm:flex-row sm:items-center">
+          <p
+            className="text-xs text-[var(--cm-fg-tertiary)]"
+            style={{ fontFamily: "var(--cm-font-mono)" }}
+          >
+            © {new Date().getFullYear()} {appConfig.name} · MIT licensed
+          </p>
+          <BuiltWith />
         </div>
       </div>
     </footer>

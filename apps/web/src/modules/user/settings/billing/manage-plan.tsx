@@ -48,24 +48,39 @@ export const ManagePlan = () => {
       </SettingsCardHeader>
 
       <SettingsCardContent>
-        <Button
-          className="w-fit gap-1"
-          disabled={getPortal.isPending}
-          onClick={() =>
-            getPortal.mutate({
-              query: {
-                redirectUrl: window.location.href,
-              },
-            })
-          }
-        >
-          {t("manage.billing.visitPortal")}
-          {getPortal.isPending ? (
-            <Icons.Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Icons.ArrowUpRight className="size-4" />
-          )}
-        </Button>
+        {plan.id === PricingPlanType.FREE ? (
+          // v0.1.0: only the free tier is live. Paid-tier checkout +
+          // Stripe customer portal land post-launch; surface that
+          // honestly instead of a button that would hit a 500.
+          <div className="flex items-center gap-2">
+            <Button className="w-fit gap-1" disabled>
+              {t("manage.billing.visitPortal")}
+              <Icons.ArrowUpRight className="size-4" />
+            </Button>
+            <span className="text-muted-foreground text-xs">
+              Paid tiers coming soon
+            </span>
+          </div>
+        ) : (
+          <Button
+            className="w-fit gap-1"
+            disabled={getPortal.isPending}
+            onClick={() =>
+              getPortal.mutate({
+                query: {
+                  redirectUrl: window.location.href,
+                },
+              })
+            }
+          >
+            {t("manage.billing.visitPortal")}
+            {getPortal.isPending ? (
+              <Icons.Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Icons.ArrowUpRight className="size-4" />
+            )}
+          </Button>
+        )}
       </SettingsCardContent>
     </SettingsCard>
   );
