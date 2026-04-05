@@ -4,24 +4,27 @@
 
 ## Template 1: Cold email to Claude Code / MCP team at Anthropic
 
-**To:** [RECIPIENT — e.g., hiring@anthropic.com, or a specific engineer/PM on the Claude Code team]
+**To:** jobs@anthropic.com (or direct to a Claude Code / MCP team member if identified)
 
 **Subject:** Built an E2E-encrypted mesh for Claude Code sessions — found some things about dev-channels
 
 ---
 
-Hi [NAME],
+Hi,
 
-I'm Alejandro Gutierrez. I built claudemesh — an open-source peer-to-peer mesh that connects Claude Code sessions across machines via MCP. Each session holds its own ed25519 keypair, messages route through a WebSocket broker that only sees ciphertext, and the MCP server exposes `send_message` / `list_peers` / `check_messages` as tools inside Claude Code.
+I'm Alejandro Gutiérrez — fighter pilot turned AI builder. I built claudemesh — an open-source peer-to-peer mesh that connects Claude Code sessions across machines via MCP. Each session holds its own ed25519 keypair, messages route through a WebSocket broker that only sees ciphertext, and the MCP server exposes `send_message` / `list_peers` / `check_messages` as tools inside Claude Code.
 
-One specific finding from the implementation: your `--dangerously-load-development-channels` flag allows MCP servers to push `notifications/claude/channel` messages that get injected as system reminders mid-turn. I validated this end-to-end with Claude Code v2.1.92. It works — and it opens a real prompt-injection surface that I wrote up in a threat model ([LINK TO THREAT_MODEL.md or protocol doc]).
+One specific finding from the implementation: your `--dangerously-load-development-channels` flag allows MCP servers to push `notifications/claude/channel` messages that get injected as system reminders mid-turn. I validated this end-to-end with Claude Code v2.1.92. It works — and it opens a real prompt-injection surface that I wrote up in a threat model ([THREAT_MODEL.md](https://github.com/alezmad/claudemesh-cli/blob/main/THREAT_MODEL.md)).
 
-The repo is MIT: [github.com/alezmad/claudemesh-cli](https://github.com/alezmad/claudemesh-cli). Protocol spec with the crypto model: [claudemesh.com/docs](https://claudemesh.com/docs).
+The repo is MIT: [github.com/alezmad/claudemesh-cli](https://github.com/alezmad/claudemesh-cli). Protocol spec: [PROTOCOL.md](https://github.com/alezmad/claudemesh-cli/blob/main/PROTOCOL.md).
 
-I'm looking for a conversation about roles on the MCP ecosystem or Claude Code platform side. Happy to walk through the protocol decisions or the threat model in more detail.
+Before software I spent a decade flying F-18s and running operational safety for the Spanish Air Force. The safety thinking transfers directly: systems either handle failure modes or they fail people. That's what drew me to Anthropic.
 
-Alejandro Gutierrez
-[EMAIL] | [PHONE/LINKEDIN]
+I'm looking for a conversation about roles on the MCP ecosystem or Claude Code platform side. Happy to walk through the protocol decisions or the threat model.
+
+Alejandro A. Gutiérrez Mourente
+info@whyrating.com · linkedin.com/in/alejandrogutierrezmourente
+claudemesh.com · github.com/alezmad/claudemesh-cli
 
 ---
 
@@ -120,7 +123,7 @@ is a single point of routing (not of trust — crypto is peer-side), and
 enterprise self-host packaging is a v0.2 goal.
 
 Repo (MIT): https://github.com/alezmad/claudemesh-cli
-Protocol spec: https://claudemesh.com/docs
+Protocol spec: https://github.com/alezmad/claudemesh-cli/blob/main/PROTOCOL.md
 npm: claudemesh-cli
 
 Would love feedback on the trust model and the protocol design.
@@ -128,4 +131,4 @@ Would love feedback on the trust model and the protocol design.
 
 ---
 
-*All templates drafted 2026-04-05. Review before sending — check that repo URLs, doc links, and the threat model are publicly accessible.*
+*All templates drafted 2026-04-05. Personalized 2026-04-06. Verify all URLs are live before sending.*
