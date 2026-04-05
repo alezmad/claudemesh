@@ -55,8 +55,9 @@ export const Hero = () => {
             className="mx-auto mt-6 max-w-2xl text-center text-lg leading-[1.65] text-[var(--cm-fg-secondary)] md:text-xl"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Connect every Claude Code session on your team into one live mesh.
-            Ship context, not screenshots. Self-host the broker. Own the wire.
+            Peer mesh for Claude — reachable from anywhere you are. Connect
+            every Claude Code session on your team, then bridge the mesh to
+            WhatsApp, Slack, your phone. Terminal is one client, not THE client.
             <span className="block pt-2 text-[var(--cm-clay)]">
               Free and open-source. Forever.
             </span>

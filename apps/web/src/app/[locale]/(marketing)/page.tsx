@@ -4,6 +4,7 @@ import { Pricing } from "~/modules/marketing/home/pricing";
 import { LaptopToLaptop } from "~/modules/marketing/home/laptop-to-laptop";
 import { Features } from "~/modules/marketing/home/features";
 import { MeetsYou } from "~/modules/marketing/home/meets-you";
+import { BeyondTerminal } from "~/modules/marketing/home/beyond-terminal";
 import { FAQ } from "~/modules/marketing/home/faq";
 import { CallToAction } from "~/modules/marketing/home/cta";
 import { LatestNewsToaster } from "~/modules/marketing/home/toaster";
@@ -20,6 +21,7 @@ const HomePage = () => {
       <LaptopToLaptop />
       <Features />
       <MeetsYou />
+      <BeyondTerminal />
       <FAQ />
       <CallToAction />
       <LatestNewsToaster />
