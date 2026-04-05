@@ -41,8 +41,8 @@ export default async function InvitesPage() {
           </p>
         </div>
       ) : (
-        <div className="rounded-lg border">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full min-w-[560px] text-sm">
             <thead className="text-muted-foreground border-b text-left text-xs uppercase">
               <tr>
                 <th className="px-4 py-3 font-medium">Mesh</th>

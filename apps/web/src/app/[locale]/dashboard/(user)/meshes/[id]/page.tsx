@@ -40,11 +40,11 @@ export default async function MeshPage({
   return (
     <>
       <DashboardHeader>
-        <div className="flex w-full items-start justify-between gap-4">
-          <div>
+        <div className="flex w-full flex-col items-start gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 flex-1">
             <DashboardHeaderTitle>
-              <span className="flex items-center gap-3">
-                {mesh.name}
+              <span className="flex flex-wrap items-center gap-2 sm:gap-3">
+                <span className="truncate">{mesh.name}</span>
                 <Badge variant="outline" className="font-mono text-xs">
                   {mesh.slug}
                 </Badge>
@@ -55,19 +55,26 @@ export default async function MeshPage({
               · tier {mesh.tier} · {mesh.visibility} · {mesh.transport}
             </DashboardHeaderDescription>
           </div>
-          <div className="flex gap-2">
+          <div className="flex w-full gap-2 sm:w-auto">
             <Link
               href={pathsConfig.dashboard.user.meshes.live(mesh.id)}
-              className={buttonVariants({ variant: "outline" })}
+              className={buttonVariants({
+                variant: "outline",
+                className: "flex-1 sm:flex-initial",
+              })}
             >
               <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--cm-clay)]" />
               Live
             </Link>
             <Link
               href={pathsConfig.dashboard.user.meshes.invite(mesh.id)}
-              className={buttonVariants({ variant: "default" })}
+              className={buttonVariants({
+                variant: "default",
+                className: "flex-1 sm:flex-initial",
+              })}
             >
-              Generate invite link
+              <span className="hidden sm:inline">Generate invite link</span>
+              <span className="sm:hidden">Invite</span>
             </Link>
           </div>
         </div>
@@ -90,9 +97,9 @@ export default async function MeshPage({
               {members.map((m) => (
                 <div
                   key={m.id}
-                  className="flex items-center justify-between px-4 py-3"
+                  className="flex flex-col gap-1.5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                     <span className="font-medium">
                       {m.displayName}
                       {m.isMe && (
@@ -140,16 +147,16 @@ export default async function MeshPage({
               {activeInvites.map((inv) => (
                 <div
                   key={inv.id}
-                  className="flex items-center justify-between px-4 py-3 text-sm"
+                  className="flex flex-col gap-1.5 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-3"
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                     <code className="bg-muted rounded px-2 py-0.5 text-xs">
                       {inv.token.slice(0, 12)}…
                     </code>
                     <Badge variant="outline" className="text-xs">
                       {inv.role}
                     </Badge>
-                    <span className="text-muted-foreground">
+                    <span className="text-muted-foreground text-xs">
                       {inv.usedCount} / {inv.maxUses} used
                     </span>
                   </div>
