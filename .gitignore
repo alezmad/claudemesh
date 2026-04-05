@@ -67,3 +67,8 @@ dist/
 
 # Auto Claude data directory
 .auto-claude/
+
+# Payload CMS
+apps/web/payload.db
+apps/web/public/media/*
+!apps/web/public/media/.gitkeep

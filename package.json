@@ -44,7 +44,9 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "esbuild",
-      "duckdb"
+      "duckdb",
+      "better-sqlite3",
+      "sharp"
     ],
     "overrides": {
       "csstype": "3.1.3",
