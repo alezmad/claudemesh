@@ -10,7 +10,7 @@
  */
 
 import { startMcpServer } from "./mcp/server";
-import { runInstall } from "./commands/install";
+import { runInstall, runUninstall } from "./commands/install";
 import { runJoin } from "./commands/join";
 import { runList } from "./commands/list";
 import { runLeave } from "./commands/leave";
@@ -22,7 +22,8 @@ Usage:
   claudemesh <command> [args]
 
 Commands:
-  install         Print Claude Code MCP registration instructions
+  install         Register claudemesh as a Claude Code MCP server
+  uninstall       Remove claudemesh MCP server registration
   join <link>     Join a mesh via invite link (ic://join/...)
   list            Show all joined meshes
   leave <slug>    Leave a joined mesh
@@ -46,6 +47,9 @@ async function main(): Promise<void> {
       return;
     case "install":
       runInstall();
+      return;
+    case "uninstall":
+      runUninstall();
       return;
     case "join":
       await runJoin(args);
