@@ -189,7 +189,7 @@ pkill -f "ssh -f -N -L 5440"
 ## Step 7: Verify
 
 Open your app URL. Sign in with:
-- Email: value of `SEED_EMAIL` (default: `me@turbostarter.dev`)
+- Email: value of `SEED_EMAIL` (default: `dev@example.com`)
 - Password: value of `SEED_PASSWORD` (default: `Pa$$w0rd`)
 
 ---

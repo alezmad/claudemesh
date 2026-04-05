@@ -196,8 +196,8 @@ After `pnpm services:setup`:
 
 | Role  | Email                         | Password   |
 |-------|-------------------------------|------------|
-| User  | `me+user@turbostarter.dev`    | `Pa$$w0rd` |
-| Admin | `me+admin@turbostarter.dev`   | `Pa$$w0rd` |
+| User  | `dev+user@example.com`        | `Pa$$w0rd` |
+| Admin | `dev+admin@example.com`       | `Pa$$w0rd` |
 
 ### Common commands
 
