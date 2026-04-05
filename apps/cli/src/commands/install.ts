@@ -31,12 +31,26 @@ import { spawnSync } from "node:child_process";
 
 const MCP_NAME = "claudemesh";
 const CLAUDE_CONFIG = join(homedir(), ".claude.json");
+const CLAUDE_SETTINGS = join(homedir(), ".claude", "settings.json");
+const HOOK_COMMAND_STOP = "claudemesh hook idle";
+const HOOK_COMMAND_USER_PROMPT = "claudemesh hook working";
+const HOOK_MARKER = "claudemesh hook ";
 
 type McpEntry = {
   command: string;
   args?: string[];
   env?: Record<string, string>;
 };
+
+interface HookCommand {
+  type: "command";
+  command: string;
+}
+interface HookMatcher {
+  matcher?: string;
+  hooks: HookCommand[];
+}
+type HooksConfig = Record<string, HookMatcher[]>;
 
 function readClaudeConfig(): Record<string, unknown> {
   if (!existsSync(CLAUDE_CONFIG)) return {};
@@ -116,7 +130,87 @@ function entriesEqual(a: McpEntry, b: McpEntry): boolean {
   );
 }
 
-export function runInstall(): void {
+function readClaudeSettings(): Record<string, unknown> {
+  if (!existsSync(CLAUDE_SETTINGS)) return {};
+  const text = readFileSync(CLAUDE_SETTINGS, "utf-8").trim();
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch (e) {
+    throw new Error(
+      `failed to parse ${CLAUDE_SETTINGS}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+}
+
+function writeClaudeSettings(obj: Record<string, unknown>): void {
+  mkdirSync(dirname(CLAUDE_SETTINGS), { recursive: true });
+  writeFileSync(
+    CLAUDE_SETTINGS,
+    JSON.stringify(obj, null, 2) + "\n",
+    "utf-8",
+  );
+}
+
+/**
+ * Add a Stop + UserPromptSubmit hook entry to ~/.claude/settings.json,
+ * idempotent on the command string. Returns counts for reporting.
+ */
+function installHooks(): { added: number; unchanged: number } {
+  const settings = readClaudeSettings();
+  const hooks = ((settings.hooks ??= {}) as HooksConfig) ?? {};
+  let added = 0;
+  let unchanged = 0;
+
+  const ensure = (event: string, command: string): void => {
+    const list = (hooks[event] ??= []);
+    const alreadyPresent = list.some((entry) =>
+      (entry.hooks ?? []).some((h) => h.command === command),
+    );
+    if (alreadyPresent) {
+      unchanged += 1;
+      return;
+    }
+    list.push({ hooks: [{ type: "command", command }] });
+    added += 1;
+  };
+  ensure("Stop", HOOK_COMMAND_STOP);
+  ensure("UserPromptSubmit", HOOK_COMMAND_USER_PROMPT);
+
+  settings.hooks = hooks;
+  writeClaudeSettings(settings);
+  return { added, unchanged };
+}
+
+/**
+ * Remove every hook entry whose command contains "claudemesh hook "
+ * from ~/.claude/settings.json. Idempotent. Returns removed count.
+ */
+function uninstallHooks(): number {
+  if (!existsSync(CLAUDE_SETTINGS)) return 0;
+  const settings = readClaudeSettings();
+  const hooks = settings.hooks as HooksConfig | undefined;
+  if (!hooks) return 0;
+  let removed = 0;
+  for (const event of Object.keys(hooks)) {
+    const kept: HookMatcher[] = [];
+    for (const entry of hooks[event] ?? []) {
+      const filtered = (entry.hooks ?? []).filter(
+        (h) => !(h.command ?? "").includes(HOOK_MARKER),
+      );
+      removed += (entry.hooks ?? []).length - filtered.length;
+      if (filtered.length > 0) kept.push({ ...entry, hooks: filtered });
+    }
+    if (kept.length === 0) delete hooks[event];
+    else hooks[event] = kept;
+  }
+  settings.hooks = hooks;
+  writeClaudeSettings(settings);
+  return removed;
+}
+
+export function runInstall(args: string[] = []): void {
+  const skipHooks = args.includes("--no-hooks");
   console.log("claudemesh install");
   console.log("------------------");
 
@@ -182,6 +276,31 @@ export function runInstall(): void {
       `  command: ${desired.command}${desired.args?.length ? " " + desired.args.join(" ") : ""}`,
     ),
   );
+
+  // Hooks — status accuracy (Stop/UserPromptSubmit → POST /hook/set-status).
+  if (!skipHooks) {
+    try {
+      const { added, unchanged } = installHooks();
+      if (added > 0) {
+        console.log(
+          `✓ Hooks registered (Stop + UserPromptSubmit) → ${added} added, ${unchanged} already present`,
+        );
+      } else {
+        console.log(`✓ Hooks already registered (${unchanged} present)`);
+      }
+      console.log(dim(`  config:  ${CLAUDE_SETTINGS}`));
+    } catch (e) {
+      console.error(
+        `⚠  hook registration failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      console.error(
+        "   (MCP is still installed — hooks just skip. Retry with --no-hooks to suppress.)",
+      );
+    }
+  } else {
+    console.log(dim("· Hooks skipped (--no-hooks)"));
+  }
+
   console.log("");
   console.log(yellow(bold("⚠  RESTART CLAUDE CODE")) + yellow(" for MCP tools to appear."));
   console.log("");
@@ -193,21 +312,39 @@ export function runInstall(): void {
 export function runUninstall(): void {
   console.log("claudemesh uninstall");
   console.log("--------------------");
-  if (!existsSync(CLAUDE_CONFIG)) {
-    console.log(`· no ${CLAUDE_CONFIG} — nothing to remove`);
-    return;
+
+  // MCP entry
+  if (existsSync(CLAUDE_CONFIG)) {
+    const cfg = readClaudeConfig();
+    const servers = cfg.mcpServers as
+      | Record<string, McpEntry>
+      | undefined;
+    if (servers && MCP_NAME in servers) {
+      delete servers[MCP_NAME];
+      cfg.mcpServers = servers;
+      writeClaudeConfig(cfg);
+      console.log(`✓ MCP server "${MCP_NAME}" removed`);
+    } else {
+      console.log(`· MCP server "${MCP_NAME}" not present`);
+    }
+  } else {
+    console.log(`· no ${CLAUDE_CONFIG} — MCP entry skipped`);
   }
-  const cfg = readClaudeConfig();
-  const servers = cfg.mcpServers as
-    | Record<string, McpEntry>
-    | undefined;
-  if (!servers || !(MCP_NAME in servers)) {
-    console.log(`· MCP server "${MCP_NAME}" not present — nothing to remove`);
-    return;
+
+  // Hooks
+  try {
+    const removed = uninstallHooks();
+    if (removed > 0) {
+      console.log(`✓ Hooks removed (${removed} entries)`);
+    } else {
+      console.log("· No claudemesh hooks to remove");
+    }
+  } catch (e) {
+    console.error(
+      `⚠  hook removal failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
-  delete servers[MCP_NAME];
-  cfg.mcpServers = servers;
-  writeClaudeConfig(cfg);
-  console.log(`✓ MCP server "${MCP_NAME}" removed`);
-  console.log("Restart Claude Code to drop the MCP connection.");
+
+  console.log("");
+  console.log("Restart Claude Code to drop the MCP connection + hooks.");
 }

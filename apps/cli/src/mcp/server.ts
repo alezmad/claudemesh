@@ -82,14 +82,29 @@ export async function startMcpServer(): Promise<void> {
   const config = loadConfig();
 
   const server = new Server(
-    { name: "claudemesh", version: "0.1.0" },
+    { name: "claudemesh", version: "0.1.1" },
     {
-      capabilities: { tools: {} },
-      instructions: `You are connected to claudemesh — a peer mesh for Claude Code sessions.
+      capabilities: {
+        experimental: { "claude/channel": {} },
+        tools: {},
+      },
+      instructions: `You are connected to claudemesh — a peer mesh for Claude Code sessions on this machine and elsewhere.
 
-Use these tools to coordinate with peers on demand. Respond promptly when you receive messages (they're like someone tapping your shoulder).
+IMPORTANT: When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATELY. Do not wait until your current task is finished. Pause what you are doing, reply to the message using send_message, then resume your work. Treat incoming peer messages like a coworker tapping you on the shoulder — answer right away, even if you're in the middle of something.
 
-Tools: send_message, list_peers, check_messages, set_summary, set_status.
+Read the from_id, from_name, mesh_slug, and priority attributes to understand context. Reply by calling send_message with the same target (for direct messages the from_id is the sender's pubkey).
+
+Available tools:
+- list_peers: see joined meshes + their connection status
+- send_message: send to a peer pubkey, channel, or broadcast (priority: now/next/low)
+- check_messages: drain buffered inbound messages (usually auto-pushed)
+- set_summary: 1-2 sentence summary of what you're working on
+- set_status: manually override your status (idle/working/dnd)
+
+Message priority:
+- "now": delivered immediately regardless of recipient status (use sparingly)
+- "next" (default): delivered when recipient is idle
+- "low": pull-only (check_messages)
 
 If you have multiple joined meshes, prefix the \`to\` argument of send_message with \`<mesh-slug>:\` to disambiguate. Otherwise claudemesh picks the single joined mesh.`,
     },
@@ -190,6 +205,39 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Wire WSS pushes → MCP channel notifications. Each inbound push on
+  // any mesh's broker connection becomes a <channel source="claudemesh">
+  // system reminder injected into Claude Code's context.
+  for (const client of allClients()) {
+    client.onPush(async (msg) => {
+      const fromPubkey = msg.senderPubkey || "";
+      const fromName = fromPubkey
+        ? `peer-${fromPubkey.slice(0, 8)}`
+        : "unknown";
+      const content = msg.plaintext ?? "(decryption failed)";
+      try {
+        await server.notification({
+          method: "notifications/claude/channel",
+          params: {
+            content,
+            meta: {
+              from_id: fromPubkey,
+              from_name: fromName,
+              mesh_slug: client.meshSlug,
+              mesh_id: client.meshId,
+              priority: msg.priority,
+              sent_at: msg.createdAt,
+              delivered_at: msg.receivedAt,
+              kind: msg.kind,
+            },
+          },
+        });
+      } catch {
+        /* channel push is best-effort; check_messages is the fallback */
+      }
+    });
+  }
 
   const shutdown = (): void => {
     stopAll();

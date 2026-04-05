@@ -14,6 +14,7 @@ import { runJoin } from "./commands/join";
 import { runList } from "./commands/list";
 import { runLeave } from "./commands/leave";
 import { runSeedTestMesh } from "./commands/seed-test-mesh";
+import { runHook } from "./commands/hook";
 
 const HELP = `claudemesh — peer mesh for Claude Code sessions
 
@@ -21,8 +22,9 @@ Usage:
   claudemesh <command> [args]
 
 Commands:
-  install         Register claudemesh as a Claude Code MCP server
-  uninstall       Remove claudemesh MCP server registration
+  install         Register MCP + Stop/UserPromptSubmit status hooks
+                  (add --no-hooks for bare MCP registration)
+  uninstall       Remove MCP server + hooks
   join <url>      Join a mesh via https://claudemesh.com/join/... URL
   list            Show all joined meshes
   leave <slug>    Leave a joined mesh
@@ -45,10 +47,13 @@ async function main(): Promise<void> {
       await startMcpServer();
       return;
     case "install":
-      runInstall();
+      runInstall(args);
       return;
     case "uninstall":
       runUninstall();
+      return;
+    case "hook":
+      await runHook(args);
       return;
     case "join":
       await runJoin(args);
