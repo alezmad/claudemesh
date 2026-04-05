@@ -5,7 +5,7 @@
 #
 # Build from repo root:  docker build -f packages/db/Dockerfile -t claudemesh-migrate .
 
-# Stage 1: resolve pnpm workspace + install deps (Bun base + standalone pnpm)
+# Stage 1: resolve pnpm workspace + flatten db's subset to /deploy via pnpm deploy
 FROM oven/bun:1.2 AS deps
 WORKDIR /app
 
@@ -17,25 +17,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # pnpm needs full workspace context to resolve workspace:* and catalog: specifiers
 COPY . .
 
-# drizzle-kit is a devDependency → install the full dep graph (NOT --prod).
-# Filter to db + its transitive deps only → ~20x smaller install than the whole workspace.
-RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@turbostarter/db..."
+# Install full workspace, then flatten the db package's deploy subset.
+# Keeps devDependencies (--no `--prod`) because drizzle-kit IS the runtime here.
+RUN pnpm install --frozen-lockfile --ignore-scripts && \
+    pnpm deploy --legacy --ignore-scripts --filter=@turbostarter/db /deploy
 
-# Stage 2: minimal Bun runtime (executes drizzle-kit CLI + TS config)
+# Stage 2: minimal Bun runtime — copy only /deploy
 FROM oven/bun:1.2-slim AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-# Copy workspace metadata, the db package (schema + migrations + config), shared (transitive)
-COPY --from=deps --chown=bun:bun /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml /app/.npmrc ./
-COPY --from=deps --chown=bun:bun /app/node_modules ./node_modules
-COPY --from=deps --chown=bun:bun /app/packages/db ./packages/db
-COPY --from=deps --chown=bun:bun /app/packages/shared ./packages/shared
-COPY --from=deps --chown=bun:bun /app/tooling/typescript ./tooling/typescript
+COPY --from=deps --chown=bun:bun /deploy /app
 
 USER bun
-WORKDIR /app/packages/db
 
 # drizzle-kit reads DATABASE_URL from env via ./src/env.ts, runs pending migrations,
 # exits 0 on success / non-zero on failure. No long-running process.

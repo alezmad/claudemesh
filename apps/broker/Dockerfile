@@ -15,10 +15,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certifi
 # Copy full workspace (pnpm needs lockfile + all package.jsons to resolve workspace:* and catalog:)
 COPY . .
 
-# Install all workspace deps (broker needs @turbostarter/db + @turbostarter/shared and their transitive deps)
-RUN pnpm install --frozen-lockfile --ignore-scripts
+# Install all workspace deps, then flatten broker's prod subset into /deploy.
+# pnpm deploy: resolves workspace:* to real copies, drops catalog: references,
+# drops devDependencies (--prod), produces a self-contained runtime directory
+# with only what this one package + its transitive prod deps need.
+RUN pnpm install --frozen-lockfile --ignore-scripts && \
+    pnpm deploy --legacy --prod --ignore-scripts --filter=@claudemesh/broker /deploy
 
-# Stage 2: minimal Bun runtime
+# Stage 2: minimal Bun runtime — copy only the flat /deploy subset
 FROM oven/bun:1.2-slim AS runtime
 WORKDIR /app
 
@@ -29,13 +33,7 @@ ENV GIT_SHA=$GIT_SHA
 ENV NODE_ENV=production
 ENV BROKER_PORT=7900
 
-# Copy workspace root metadata + node_modules + only the packages the broker needs
-COPY --from=deps --chown=bun:bun /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml /app/.npmrc ./
-COPY --from=deps --chown=bun:bun /app/node_modules ./node_modules
-COPY --from=deps --chown=bun:bun /app/apps/broker ./apps/broker
-COPY --from=deps --chown=bun:bun /app/packages/db ./packages/db
-COPY --from=deps --chown=bun:bun /app/packages/shared ./packages/shared
-COPY --from=deps --chown=bun:bun /app/tooling/typescript ./tooling/typescript
+COPY --from=deps --chown=bun:bun /deploy /app
 
 EXPOSE 7900
 
@@ -44,4 +42,4 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
 
 # Non-root user (oven/bun image ships with 'bun' uid 1000)
 USER bun
-CMD ["bun", "apps/broker/src/index.ts"]
+CMD ["bun", "src/index.ts"]
