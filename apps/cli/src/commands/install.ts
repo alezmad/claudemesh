@@ -68,7 +68,6 @@ function readClaudeConfig(): Record<string, unknown> {
 
 /**
  * Create a timestamped backup of ~/.claude.json before any write.
- * Keeps the last 3 backups to avoid clutter.
  */
 function backupClaudeConfig(): void {
   if (!existsSync(CLAUDE_CONFIG)) return;
@@ -80,30 +79,52 @@ function backupClaudeConfig(): void {
 }
 
 /**
- * Sanity-check: abort if we're about to lose MCP servers that existed
- * on disk but are missing from the object we're about to write.
+ * Atomic read-merge-write: re-reads ~/.claude.json at write time and
+ * patches ONLY the `claudemesh` MCP entry. Never touches other keys.
+ * Returns the action taken ("added" | "updated" | "unchanged").
  */
-function assertNoMcpLoss(next: Record<string, unknown>): void {
-  if (!existsSync(CLAUDE_CONFIG)) return;
-  const prev = readClaudeConfig();
-  const prevServers = Object.keys(
-    (prev.mcpServers as Record<string, unknown>) ?? {},
-  );
-  const nextServers = Object.keys(
-    (next.mcpServers as Record<string, unknown>) ?? {},
-  );
-  const lost = prevServers.filter((k) => !nextServers.includes(k));
-  if (lost.length > 0) {
-    throw new Error(
-      `Aborting write: would lose ${lost.length} existing MCP server(s): ${lost.join(", ")}. ` +
-        `This is a bug — please report it. A backup was saved in ~/.claude/backups/`,
-    );
+function patchMcpServer(entry: McpEntry): "added" | "updated" | "unchanged" {
+  backupClaudeConfig();
+  const cfg = readClaudeConfig();
+  const servers =
+    ((cfg.mcpServers as Record<string, McpEntry>) ?? {});
+  if (!cfg.mcpServers) cfg.mcpServers = servers;
+
+  const existing = servers[MCP_NAME];
+  let action: "added" | "updated" | "unchanged";
+  if (!existing) {
+    servers[MCP_NAME] = entry;
+    action = "added";
+  } else if (entriesEqual(existing, entry)) {
+    return "unchanged";
+  } else {
+    servers[MCP_NAME] = entry;
+    action = "updated";
   }
+
+  flushClaudeConfig(cfg);
+  return action;
 }
 
-function writeClaudeConfig(obj: Record<string, unknown>): void {
+/**
+ * Atomic read-merge-write: re-reads ~/.claude.json at write time and
+ * removes ONLY the `claudemesh` MCP entry. Never touches other keys.
+ * Returns true if an entry was removed.
+ */
+function removeMcpServer(): boolean {
+  if (!existsSync(CLAUDE_CONFIG)) return false;
   backupClaudeConfig();
-  assertNoMcpLoss(obj);
+  const cfg = readClaudeConfig();
+  const servers = cfg.mcpServers as Record<string, McpEntry> | undefined;
+  if (!servers || !(MCP_NAME in servers)) return false;
+  delete servers[MCP_NAME];
+  cfg.mcpServers = servers;
+  flushClaudeConfig(cfg);
+  return true;
+}
+
+/** Low-level write — callers must backup + merge first. */
+function flushClaudeConfig(obj: Record<string, unknown>): void {
   mkdirSync(dirname(CLAUDE_CONFIG), { recursive: true });
   writeFileSync(
     CLAUDE_CONFIG,
@@ -116,6 +137,7 @@ function writeClaudeConfig(obj: Record<string, unknown>): void {
     /* windows has no chmod */
   }
 }
+
 
 /** Check `bun` is on PATH — OS-agnostic, node:child_process. */
 function bunAvailable(): boolean {
@@ -269,24 +291,8 @@ export function runInstall(args: string[] = []): void {
     process.exit(1);
   }
 
-  const cfg = readClaudeConfig();
-  const servers =
-    ((cfg.mcpServers ??= {}) as Record<string, McpEntry>) ?? {};
   const desired = buildMcpEntry(entry);
-  const existing = servers[MCP_NAME];
-  let action: "added" | "updated" | "unchanged";
-  if (!existing) {
-    servers[MCP_NAME] = desired;
-    action = "added";
-  } else if (entriesEqual(existing, desired)) {
-    action = "unchanged";
-  } else {
-    servers[MCP_NAME] = desired;
-    action = "updated";
-  }
-  cfg.mcpServers = servers;
-
-  writeClaudeConfig(cfg);
+  const action = patchMcpServer(desired);
 
   // Read-back verification.
   const verify = readClaudeConfig();
@@ -362,22 +368,11 @@ export function runUninstall(): void {
   console.log("claudemesh uninstall");
   console.log("--------------------");
 
-  // MCP entry
-  if (existsSync(CLAUDE_CONFIG)) {
-    const cfg = readClaudeConfig();
-    const servers = cfg.mcpServers as
-      | Record<string, McpEntry>
-      | undefined;
-    if (servers && MCP_NAME in servers) {
-      delete servers[MCP_NAME];
-      cfg.mcpServers = servers;
-      writeClaudeConfig(cfg);
-      console.log(`✓ MCP server "${MCP_NAME}" removed`);
-    } else {
-      console.log(`· MCP server "${MCP_NAME}" not present`);
-    }
+  // MCP entry — only removes claudemesh, never touches other servers.
+  if (removeMcpServer()) {
+    console.log(`✓ MCP server "${MCP_NAME}" removed`);
   } else {
-    console.log(`· no ${CLAUDE_CONFIG} — MCP entry skipped`);
+    console.log(`· MCP server "${MCP_NAME}" not present`);
   }
 
   // Hooks
