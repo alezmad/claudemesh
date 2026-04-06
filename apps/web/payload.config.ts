@@ -15,6 +15,10 @@ const usePostgres = !!process.env.DATABASE_URL;
 export default buildConfig({
   secret: process.env.PAYLOAD_SECRET || "claudemesh-dev-secret-change-in-production",
 
+  routes: {
+    admin: "/payload",
+  },
+
   admin: {
     user: "users",
     meta: {

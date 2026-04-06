@@ -1,5 +1,8 @@
 import type { NextConfig } from "next";
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { withPayload } = require("@payloadcms/next/withPayload");
+
 import env from "./env.config";
 
 const INTERNAL_PACKAGES = [
@@ -115,4 +118,4 @@ const withBundleAnalyzer = require("@next/bundle-analyzer")({
   enabled: env.ANALYZE,
 });
 
-export default withBundleAnalyzer(config);
+export default withPayload(withBundleAnalyzer(config));
