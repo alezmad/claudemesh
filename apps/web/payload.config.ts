@@ -22,7 +22,7 @@ export default buildConfig({
 
   db: sqliteAdapter({
     client: {
-      url: process.env.PAYLOAD_DATABASE_URI || path.resolve(dirname, "payload.db"),
+      url: process.env.PAYLOAD_DATABASE_URI || `file:${path.resolve(dirname, "payload.db")}`,
     },
   }),
 
