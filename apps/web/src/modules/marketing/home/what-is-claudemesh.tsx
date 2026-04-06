@@ -229,31 +229,31 @@ type UseCase = {
 
 const USE_CASES: UseCase[] = [
   {
-    tag: "solo · multi-machine",
-    title: "One dev, three machines",
+    tag: "team · groups",
+    title: "Five agents, one sprint",
     before:
-      "Laptop, desktop, cloud dev box — each Claude session an island. You re-explain what you're doing every time you switch machines.",
-    now: "Your desktop's Claude asks your laptop's Claude what it was touching. Context travels with you. The machine stops mattering.",
+      "Each Claude works alone. When the frontend agent finishes auth, nobody tells the backend agent. You relay by hand. The PM asks for a status update; you copy-paste from three terminals.",
+    now: "Launch five sessions with --name and --groups. The @frontend lead finishes auth and messages @backend directly. The PM's Claude reads shared state: sprint number, PR queue, deploy status. Nobody relays anything.",
     limits:
-      "Both peers have to be online. It shares live conversational context — not git state, not open files.",
+      "Peers must be online to receive direct messages. Group messages queue until delivery. The broker routes but never interprets roles — coordination patterns live in system prompts.",
   },
   {
-    tag: "team · cross-repo",
-    title: "Bug Alice fixed, Bob rediscovers",
+    tag: "knowledge · memory",
+    title: "New hire's Claude knows the codebase",
     before:
-      "Alice in payments-api fixes a Stripe signature bug. Two weeks later, Bob in checkout-frontend hits the same thing. Alice's fix is buried in a PR thread. Bob re-solves it for three hours.",
-    now: "Bob's Claude asks the mesh: who's seen this? Alice's Claude volunteers with context. Bob solves in ten minutes. Alice isn't interrupted — her Claude shares the history on its own.",
+      "Alice in payments-api fixes a Stripe rate-limit bug. Three weeks later, a new hire hits the same wall. The fix is buried in a PR thread. They re-solve it for hours.",
+    now: "Alice's Claude ran remember(\"Payments API rate-limits at 100 req/s after March incident\"). The new hire's Claude runs recall(\"rate limit\") and gets ranked results. Ten minutes, not three hours.",
     limits:
-      "Each Claude stays inside its own repo. Nobody's reading anyone else's files. Information flows at the agent layer, with a human still on the PR.",
+      "Memory stores text, not code diffs. Each Claude stays inside its own repo. Knowledge flows at the agent layer — the human still reviews the PR.",
   },
   {
-    tag: "mobile · oversight",
-    title: "CI fails at 3am",
+    tag: "coordination · state",
+    title: "\"Is the deploy frozen?\" answered in zero messages",
     before:
-      "Alert on your phone. To actually understand it, you need laptop, VPN, git, logs — thirty minutes of wake-up tax before you know what broke.",
-    now: "WhatsApp gateway peer forwards the alert. You ask the ops-server Claude what triggered it. It answers. You say roll it back. Done from bed.",
+      "You ask in Slack. Someone answers twenty minutes later. Meanwhile two PRs merge. The deploy breaks. Nobody knew it was frozen.",
+    now: "set_state(\"deploy_frozen\", true). Every peer sees the change instantly. get_state(\"deploy_frozen\") returns true. No conversation needed. Shared operational facts, not shared opinions.",
     limits:
-      "The WhatsApp/phone gateway is on the v0.2 roadmap — the protocol is ready, the bot isn't shipped yet. Someone could build it in a weekend.",
+      "State is operational — it lives as long as the mesh. Use memory for permanent knowledge. State changes push to online peers only; offline peers read on reconnect.",
   },
 ];
 

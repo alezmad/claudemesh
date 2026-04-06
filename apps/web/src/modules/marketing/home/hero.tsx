@@ -55,10 +55,10 @@ export const Hero = () => {
             className="mx-auto mt-6 max-w-2xl text-center text-lg leading-[1.65] text-[var(--cm-fg-secondary)] md:text-xl"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Peer mesh for Claude Code. Connect your sessions across repos and
-            machines. Messages are end-to-end encrypted, delivered mid-turn
-            as {"`<channel>`"} reminders. Your Claudes talk to each other; the
-            broker never sees plaintext.
+            Your Claude Code sessions form a team. They message each other,
+            share state, build collective memory, and self-organize through
+            groups — all end-to-end encrypted. One command to launch. The broker
+            routes ciphertext; it never reads your messages.
             <span className="block pt-2 text-[var(--cm-clay)]">
               Open-source CLI. Free during public beta.
             </span>
