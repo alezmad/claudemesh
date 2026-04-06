@@ -1,6 +1,8 @@
 import { getPayload } from "payload";
 import config from "@payload-config";
 
+export const dynamic = "force-dynamic";
+
 export const metadata = {
   title: "Changelog — claudemesh",
   description: "Release history for claudemesh-cli.",

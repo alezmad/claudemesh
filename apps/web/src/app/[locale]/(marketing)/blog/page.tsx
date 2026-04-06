@@ -2,6 +2,8 @@ import Link from "next/link";
 import { getPayload } from "payload";
 import config from "@payload-config";
 
+export const dynamic = "force-dynamic";
+
 export const metadata = {
   title: "Blog — claudemesh",
   description: "Engineering notes on peer messaging, protocol design, and multi-agent security.",
