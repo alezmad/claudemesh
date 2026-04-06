@@ -166,6 +166,26 @@ When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATEL
 | list_files(query?, from?) | Find files shared in the mesh. |
 | file_status(id) | Check who has accessed a file. |
 | delete_file(id) | Remove a shared file from the mesh. |
+| vector_store(collection, text, metadata?) | Store embedding in per-mesh Qdrant collection. |
+| vector_search(collection, query, limit?) | Semantic search over stored embeddings. |
+| vector_delete(collection, id) | Remove an embedding. |
+| list_collections() | List vector collections in this mesh. |
+| graph_query(cypher) | Read-only Cypher query on per-mesh Neo4j. |
+| graph_execute(cypher) | Write Cypher query (CREATE, MERGE, DELETE). |
+| mesh_query(sql) | Run a SELECT query on the per-mesh shared database. |
+| mesh_execute(sql) | Run DDL/DML on the per-mesh database (CREATE TABLE, INSERT, UPDATE, DELETE). |
+| mesh_schema() | List tables and columns in the per-mesh shared database. |
+| create_stream(name) | Create a real-time data stream in the mesh. |
+| publish(stream, data) | Push data to a stream. Subscribers receive it in real-time. |
+| subscribe(stream) | Subscribe to a stream. Data pushes arrive as channel notifications. |
+| list_streams() | List active streams in the mesh. |
+| share_context(summary, files_read?, key_findings?, tags?) | Share session understanding with peers. |
+| get_context(query) | Find context from peers who explored an area. |
+| list_contexts() | See what all peers currently know. |
+| create_task(title, assignee?, priority?, tags?) | Create a work item. |
+| claim_task(id) | Claim an unclaimed task. |
+| complete_task(id, result?) | Mark task done with optional result. |
+| list_tasks(status?, assignee?) | List tasks filtered by status/assignee. |
 
 If multiple meshes are joined, prefix \`to\` with \`<mesh-slug>:\` to disambiguate (e.g. \`dev-team:Alice\`).
 
@@ -191,6 +211,24 @@ Persistent knowledge that survives across sessions. Use remember(content, tags?)
 ## Files
 share_file for persistent references, send_message(file:) for ephemeral attachments.
 Tags on shared files make them searchable. Use list_files to find what peers shared.
+
+## Vectors
+Store and search semantic embeddings. Use vector_store to index content, vector_search to find similar content.
+
+## Graph
+Build and query entity relationship graphs. Use graph_execute for writes (CREATE, MERGE), graph_query for reads (MATCH).
+
+## Mesh Database
+Per-mesh PostgreSQL database. Use mesh_execute for DDL/DML (CREATE TABLE, INSERT), mesh_query for SELECT, mesh_schema to inspect tables. Schema auto-created on first use.
+
+## Streams
+Real-time data channels. create_stream to start one, publish to push data, subscribe to receive pushes. Use for build logs, deploy status, live metrics.
+
+## Context
+Share your session understanding with peers. Use share_context after exploring a codebase area. Check get_context before re-reading files another peer already analyzed.
+
+## Tasks
+Create and claim work items. create_task to propose work, claim_task to take ownership, complete_task when done. Prevents duplicate effort.
 
 ## Priority
 - "now": interrupt immediately, even if recipient is in DND (use for urgent: broken deploy, blocking issue)
@@ -455,6 +493,213 @@ Call list_peers at session start to understand who is online, their roles, and w
         return text(`Deleted: ${id}`);
       }
 
+      // --- Vectors ---
+      case "vector_store": {
+        const { collection, text: storeText, metadata } = (args ?? {}) as { collection?: string; text?: string; metadata?: Record<string, unknown> };
+        if (!collection || !storeText) return text("vector_store: `collection` and `text` required", true);
+        const client = allClients()[0];
+        if (!client) return text("vector_store: not connected", true);
+        const id = await client.vectorStore(collection, storeText, metadata);
+        return text(`Stored in ${collection}${id ? ` (${id})` : ""}`);
+      }
+      case "vector_search": {
+        const { collection, query, limit } = (args ?? {}) as { collection?: string; query?: string; limit?: number };
+        if (!collection || !query) return text("vector_search: `collection` and `query` required", true);
+        const client = allClients()[0];
+        if (!client) return text("vector_search: not connected", true);
+        const results = await client.vectorSearch(collection, query, limit);
+        if (results.length === 0) return text(`No results in ${collection} for "${query}".`);
+        const lines = results.map(r => `- [${r.id.slice(0, 8)}…] (score: ${r.score.toFixed(3)}) ${r.text.slice(0, 120)}${r.text.length > 120 ? "…" : ""}`);
+        return text(`${results.length} result(s) in ${collection}:\n${lines.join("\n")}`);
+      }
+      case "vector_delete": {
+        const { collection, id } = (args ?? {}) as { collection?: string; id?: string };
+        if (!collection || !id) return text("vector_delete: `collection` and `id` required", true);
+        const client = allClients()[0];
+        if (!client) return text("vector_delete: not connected", true);
+        await client.vectorDelete(collection, id);
+        return text(`Deleted ${id} from ${collection}`);
+      }
+      case "list_collections": {
+        const client = allClients()[0];
+        if (!client) return text("list_collections: not connected", true);
+        const collections = await client.listCollections();
+        if (collections.length === 0) return text("No vector collections.");
+        return text(`Collections:\n${collections.map(c => `- ${c}`).join("\n")}`);
+      }
+
+      // --- Graph ---
+      case "graph_query": {
+        const { cypher } = (args ?? {}) as { cypher?: string };
+        if (!cypher) return text("graph_query: `cypher` required", true);
+        const client = allClients()[0];
+        if (!client) return text("graph_query: not connected", true);
+        const rows = await client.graphQuery(cypher);
+        if (rows.length === 0) return text("No results.");
+        return text(JSON.stringify(rows, null, 2));
+      }
+      case "graph_execute": {
+        const { cypher } = (args ?? {}) as { cypher?: string };
+        if (!cypher) return text("graph_execute: `cypher` required", true);
+        const client = allClients()[0];
+        if (!client) return text("graph_execute: not connected", true);
+        const rows = await client.graphExecute(cypher);
+        return text(rows.length > 0 ? JSON.stringify(rows, null, 2) : "Executed successfully.");
+      }
+
+      // --- Context ---
+      case "share_context": {
+        const { summary, files_read, key_findings, tags } = (args ?? {}) as { summary?: string; files_read?: string[]; key_findings?: string[]; tags?: string[] };
+        if (!summary) return text("share_context: `summary` required", true);
+        const client = allClients()[0];
+        if (!client) return text("share_context: not connected", true);
+        await client.shareContext(summary, files_read, key_findings, tags);
+        return text(`Context shared: "${summary.slice(0, 80)}${summary.length > 80 ? "…" : ""}"`);
+      }
+      case "get_context": {
+        const { query } = (args ?? {}) as { query?: string };
+        if (!query) return text("get_context: `query` required", true);
+        const client = allClients()[0];
+        if (!client) return text("get_context: not connected", true);
+        const contexts = await client.getContext(query);
+        if (contexts.length === 0) return text(`No context found for "${query}".`);
+        const lines = contexts.map(c => {
+          const files = c.filesRead.length ? `\n  Files: ${c.filesRead.join(", ")}` : "";
+          const findings = c.keyFindings.length ? `\n  Findings: ${c.keyFindings.join("; ")}` : "";
+          return `- **${c.peerName}** (${c.updatedAt}): ${c.summary}${files}${findings}`;
+        });
+        return text(`${contexts.length} context(s):\n${lines.join("\n")}`);
+      }
+      case "list_contexts": {
+        const client = allClients()[0];
+        if (!client) return text("list_contexts: not connected", true);
+        const contexts = await client.listContexts();
+        if (contexts.length === 0) return text("No peer contexts shared yet.");
+        const lines = contexts.map(c => `- **${c.peerName}**: ${c.summary}${c.tags.length ? ` [${c.tags.join(", ")}]` : ""}`);
+        return text(`Peer contexts:\n${lines.join("\n")}`);
+      }
+
+      // --- Tasks ---
+      case "create_task": {
+        const { title, assignee, priority, tags } = (args ?? {}) as { title?: string; assignee?: string; priority?: string; tags?: string[] };
+        if (!title) return text("create_task: `title` required", true);
+        const client = allClients()[0];
+        if (!client) return text("create_task: not connected", true);
+        const id = await client.createTask(title, assignee, priority, tags);
+        return text(`Task created${id ? ` (${id})` : ""}: "${title}"${assignee ? ` → ${assignee}` : ""}`);
+      }
+      case "claim_task": {
+        const { id } = (args ?? {}) as { id?: string };
+        if (!id) return text("claim_task: `id` required", true);
+        const client = allClients()[0];
+        if (!client) return text("claim_task: not connected", true);
+        await client.claimTask(id);
+        return text(`Claimed task: ${id}`);
+      }
+      case "complete_task": {
+        const { id, result } = (args ?? {}) as { id?: string; result?: string };
+        if (!id) return text("complete_task: `id` required", true);
+        const client = allClients()[0];
+        if (!client) return text("complete_task: not connected", true);
+        await client.completeTask(id, result);
+        return text(`Completed task: ${id}${result ? ` — ${result}` : ""}`);
+      }
+      case "list_tasks": {
+        const { status, assignee } = (args ?? {}) as { status?: string; assignee?: string };
+        const client = allClients()[0];
+        if (!client) return text("list_tasks: not connected", true);
+        const tasks = await client.listTasks(status, assignee);
+        if (tasks.length === 0) return text("No tasks found.");
+        const lines = tasks.map(t => `- [${t.id.slice(0, 8)}…] **${t.title}** (${t.status}, ${t.priority}) ${t.assignee ? `→ ${t.assignee}` : "unassigned"} (by ${t.createdBy})`);
+        return text(`${tasks.length} task(s):\n${lines.join("\n")}`);
+      }
+
+      // --- Mesh Database ---
+      case "mesh_query": {
+        const { sql: querySql } = (args ?? {}) as { sql?: string };
+        if (!querySql) return text("mesh_query: `sql` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_query: not connected", true);
+        const result = await client.meshQuery(querySql);
+        if (!result) return text("mesh_query: query failed or timed out", true);
+        if (result.rows.length === 0) return text(`Query returned 0 rows.`);
+        const header = `| ${result.columns.join(" | ")} |`;
+        const sep = `| ${result.columns.map(() => "---").join(" | ")} |`;
+        const rows = result.rows.map(r => `| ${result.columns.map(c => String(r[c] ?? "")).join(" | ")} |`);
+        return text(`${result.rowCount} row(s):\n${header}\n${sep}\n${rows.join("\n")}`);
+      }
+      case "mesh_execute": {
+        const { sql: execSql } = (args ?? {}) as { sql?: string };
+        if (!execSql) return text("mesh_execute: `sql` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_execute: not connected", true);
+        await client.meshExecute(execSql);
+        return text(`Executed.`);
+      }
+      case "mesh_schema": {
+        const client = allClients()[0];
+        if (!client) return text("mesh_schema: not connected", true);
+        const tables = await client.meshSchema();
+        if (!tables || tables.length === 0) return text("No tables in mesh database.");
+        const lines = tables.map(t => `**${t.name}**: ${t.columns.map(c => `${c.name} (${c.type}${c.nullable ? ", nullable" : ""})`).join(", ")}`);
+        return text(lines.join("\n"));
+      }
+
+      // --- Streams ---
+      case "create_stream": {
+        const { name: streamName } = (args ?? {}) as { name?: string };
+        if (!streamName) return text("create_stream: `name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("create_stream: not connected", true);
+        const streamId = await client.createStream(streamName);
+        return text(`Stream created: ${streamName}${streamId ? ` (${streamId})` : ""}`);
+      }
+      case "publish": {
+        const { stream: pubStream, data: pubData } = (args ?? {}) as { stream?: string; data?: unknown };
+        if (!pubStream) return text("publish: `stream` required", true);
+        const client = allClients()[0];
+        if (!client) return text("publish: not connected", true);
+        await client.publish(pubStream, pubData);
+        return text(`Published to ${pubStream}.`);
+      }
+      case "subscribe": {
+        const { stream: subStream } = (args ?? {}) as { stream?: string };
+        if (!subStream) return text("subscribe: `stream` required", true);
+        const client = allClients()[0];
+        if (!client) return text("subscribe: not connected", true);
+        await client.subscribe(subStream);
+        return text(`Subscribed to ${subStream}. Data pushes will arrive as channel notifications.`);
+      }
+      case "list_streams": {
+        const client = allClients()[0];
+        if (!client) return text("list_streams: not connected", true);
+        const streams = await client.listStreams();
+        if (streams.length === 0) return text("No active streams.");
+        const lines = streams.map(s => `- **${s.name}** (${s.id.slice(0, 8)}…) by ${s.createdBy}, ${s.subscriberCount} subscriber(s)`);
+        return text(lines.join("\n"));
+      }
+
+      case "mesh_info": {
+        const client = allClients()[0];
+        if (!client) return text("mesh_info: not connected", true);
+        const info = await client.meshInfo();
+        if (!info) return text("mesh_info: timed out", true);
+        const lines = [
+          `**Mesh**: ${info.mesh}`,
+          `**Peers**: ${info.peers}`,
+          `**Groups**: ${(info.groups as string[])?.join(", ") || "none"}`,
+          `**State keys**: ${(info.stateKeys as string[])?.join(", ") || "none"}`,
+          `**Memories**: ${info.memoryCount}`,
+          `**Files**: ${info.fileCount}`,
+          `**Tasks**: open=${(info.tasks as any)?.open ?? 0}, claimed=${(info.tasks as any)?.claimed ?? 0}, done=${(info.tasks as any)?.done ?? 0}`,
+          `**Streams**: ${(info.streams as string[])?.join(", ") || "none"}`,
+          `**Tables**: ${(info.tables as string[])?.join(", ") || "none"}`,
+          `**Your name**: ${info.yourName}`,
+          `**Your groups**: ${(info.yourGroups as any[])?.map((g: any) => `@${g.name}${g.role ? ':' + g.role : ''}`).join(", ") || "none"}`,
+        ];
+        return text(lines.join("\n"));
+      }
+
       default:
         return text(`Unknown tool: ${name}`, true);
     }
@@ -497,6 +742,22 @@ Call list_peers at session start to understand who is online, their roles, and w
       } catch {
         /* channel push is best-effort; check_messages is the fallback */
       }
+    });
+
+    client.onStreamData(async (evt) => {
+      try {
+        await server.notification({
+          method: "notifications/claude/channel",
+          params: {
+            content: `[stream:${evt.stream}] from ${evt.publishedBy}: ${JSON.stringify(evt.data)}`,
+            meta: {
+              kind: "stream_data",
+              stream: evt.stream,
+              published_by: evt.publishedBy,
+            },
+          },
+        });
+      } catch { /* best effort */ }
     });
 
     client.onStateChange(async (change) => {

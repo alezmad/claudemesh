@@ -15,17 +15,21 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { env } from "./env";
 import { db } from "./db";
 import { messageQueue } from "@turbostarter/db/schema/mesh";
 import {
+  claimTask,
+  completeTask,
   connectPresence,
+  createTask,
   deleteFile,
   disconnectPresence,
   drainForMember,
   findMemberByPubkey,
   forgetMemory,
+  getContext,
   getFile,
   getFileStatus,
   getState,
@@ -34,9 +38,11 @@ import {
   joinGroup,
   joinMesh,
   leaveGroup,
+  listContexts,
   listFiles,
   listPeersInMesh,
   listState,
+  listTasks,
   queueMessage,
   recallMemory,
   recordFileAccess,
@@ -45,12 +51,21 @@ import {
   rememberMemory,
   setSummary,
   setState,
+  shareContext,
   startSweepers,
   stopSweepers,
   uploadFile,
   writeStatus,
+  ensureMeshSchema,
+  meshQuery,
+  meshExecute,
+  meshSchema,
+  createStream,
+  listStreams,
 } from "./broker";
 import { ensureBucket, meshBucketName, minioClient } from "./minio";
+import { qdrant, meshCollectionName, ensureCollection } from "./qdrant";
+import { neo4jDriver, meshDbName, ensureDatabase } from "./neo4j-client";
 import type {
   HookSetStatusRequest,
   WSClientMessage,
@@ -81,6 +96,9 @@ interface PeerConn {
 
 const connections = new Map<string, PeerConn>();
 const connectionsPerMesh = new Map<string, number>();
+
+// Stream subscriptions: "meshId:streamName" → Set of presenceIds
+const streamSubscriptions = new Map<string, Set<string>>();
 const hookRateLimit = new TokenBucket(
   env.HOOK_RATE_LIMIT_PER_MIN,
   env.HOOK_RATE_LIMIT_PER_MIN,
@@ -1066,6 +1084,598 @@ function handleConnection(ws: WebSocket): void {
           });
           break;
         }
+        case "share_context": {
+          const sc = msg as Extract<WSClientMessage, { type: "share_context" }>;
+          const memberInfo = conn.memberPubkey
+            ? await findMemberByPubkey(conn.meshId, conn.memberPubkey)
+            : null;
+          const ctxId = await shareContext(
+            conn.meshId,
+            presenceId,
+            memberInfo?.displayName,
+            sc.summary,
+            sc.filesRead,
+            sc.keyFindings,
+            sc.tags,
+          );
+          sendToPeer(presenceId, {
+            type: "context_shared",
+            id: ctxId,
+          });
+          // Notify all other peers in the mesh that context was shared.
+          for (const [pid, peer] of connections) {
+            if (pid === presenceId) continue;
+            if (peer.meshId !== conn.meshId) continue;
+            sendToPeer(pid, {
+              type: "state_change",
+              key: `_context:${memberInfo?.displayName ?? "unknown"}`,
+              value: sc.summary,
+              updatedBy: memberInfo?.displayName ?? "unknown",
+            });
+          }
+          log.info("ws share_context", {
+            presence_id: presenceId,
+            context_id: ctxId,
+          });
+          break;
+        }
+        case "get_context": {
+          const gc = msg as Extract<WSClientMessage, { type: "get_context" }>;
+          const contexts = await getContext(conn.meshId, gc.query);
+          sendToPeer(presenceId, {
+            type: "context_results",
+            contexts: contexts.map((c) => ({
+              peerName: c.peerName,
+              summary: c.summary,
+              filesRead: c.filesRead,
+              keyFindings: c.keyFindings,
+              tags: c.tags,
+              updatedAt: c.updatedAt.toISOString(),
+            })),
+          });
+          log.info("ws get_context", {
+            presence_id: presenceId,
+            query: gc.query.slice(0, 80),
+            results: contexts.length,
+          });
+          break;
+        }
+        case "list_contexts": {
+          const allContexts = await listContexts(conn.meshId);
+          sendToPeer(presenceId, {
+            type: "context_list",
+            contexts: allContexts.map((c) => ({
+              peerName: c.peerName,
+              summary: c.summary,
+              tags: c.tags,
+              updatedAt: c.updatedAt.toISOString(),
+            })),
+          });
+          log.info("ws list_contexts", {
+            presence_id: presenceId,
+            mesh_id: conn.meshId,
+            count: allContexts.length,
+          });
+          break;
+        }
+        case "create_task": {
+          const ct = msg as Extract<WSClientMessage, { type: "create_task" }>;
+          const memberInfo = conn.memberPubkey
+            ? await findMemberByPubkey(conn.meshId, conn.memberPubkey)
+            : null;
+          const taskId = await createTask(
+            conn.meshId,
+            ct.title,
+            ct.assignee,
+            ct.priority,
+            ct.tags,
+            memberInfo?.displayName,
+          );
+          sendToPeer(presenceId, {
+            type: "task_created",
+            id: taskId,
+          });
+          log.info("ws create_task", {
+            presence_id: presenceId,
+            task_id: taskId,
+            title: ct.title.slice(0, 80),
+          });
+          break;
+        }
+        case "claim_task": {
+          const clm = msg as Extract<WSClientMessage, { type: "claim_task" }>;
+          const memberInfo = conn.memberPubkey
+            ? await findMemberByPubkey(conn.meshId, conn.memberPubkey)
+            : null;
+          const claimed = await claimTask(
+            conn.meshId,
+            clm.taskId,
+            presenceId,
+            memberInfo?.displayName,
+          );
+          if (!claimed) {
+            sendError(conn.ws, "task_not_claimable", "task is not open or does not exist");
+            break;
+          }
+          // Return updated task list so caller sees the change.
+          const tasksAfterClaim = await listTasks(conn.meshId);
+          sendToPeer(presenceId, {
+            type: "task_list",
+            tasks: tasksAfterClaim.map((t) => ({
+              id: t.id,
+              title: t.title,
+              assignee: t.assignee,
+              claimedBy: t.claimedBy,
+              status: t.status,
+              priority: t.priority,
+              createdBy: t.createdBy,
+              tags: t.tags,
+              createdAt: t.createdAt.toISOString(),
+            })),
+          });
+          log.info("ws claim_task", {
+            presence_id: presenceId,
+            task_id: clm.taskId,
+          });
+          break;
+        }
+        case "complete_task": {
+          const cpt = msg as Extract<WSClientMessage, { type: "complete_task" }>;
+          const completed = await completeTask(
+            conn.meshId,
+            cpt.taskId,
+            cpt.result,
+          );
+          if (!completed) {
+            sendError(conn.ws, "task_not_found", "task not found in this mesh");
+            break;
+          }
+          // Return updated task list.
+          const tasksAfterComplete = await listTasks(conn.meshId);
+          sendToPeer(presenceId, {
+            type: "task_list",
+            tasks: tasksAfterComplete.map((t) => ({
+              id: t.id,
+              title: t.title,
+              assignee: t.assignee,
+              claimedBy: t.claimedBy,
+              status: t.status,
+              priority: t.priority,
+              createdBy: t.createdBy,
+              tags: t.tags,
+              createdAt: t.createdAt.toISOString(),
+            })),
+          });
+          log.info("ws complete_task", {
+            presence_id: presenceId,
+            task_id: cpt.taskId,
+          });
+          break;
+        }
+        case "list_tasks": {
+          const lt = msg as Extract<WSClientMessage, { type: "list_tasks" }>;
+          const tasks = await listTasks(conn.meshId, lt.status, lt.assignee);
+          sendToPeer(presenceId, {
+            type: "task_list",
+            tasks: tasks.map((t) => ({
+              id: t.id,
+              title: t.title,
+              assignee: t.assignee,
+              claimedBy: t.claimedBy,
+              status: t.status,
+              priority: t.priority,
+              createdBy: t.createdBy,
+              tags: t.tags,
+              createdAt: t.createdAt.toISOString(),
+            })),
+          });
+          log.info("ws list_tasks", {
+            presence_id: presenceId,
+            mesh_id: conn.meshId,
+            count: tasks.length,
+          });
+          break;
+        }
+
+        // --- Streams ---
+
+        case "create_stream": {
+          const cs = msg as Extract<WSClientMessage, { type: "create_stream" }>;
+          const memberInfo = conn.memberPubkey
+            ? await findMemberByPubkey(conn.meshId, conn.memberPubkey)
+            : null;
+          const streamId = await createStream(
+            conn.meshId,
+            cs.name,
+            memberInfo?.displayName ?? "peer",
+          );
+          sendToPeer(presenceId, {
+            type: "stream_created",
+            id: streamId,
+            name: cs.name,
+          });
+          log.info("ws create_stream", {
+            presence_id: presenceId,
+            stream: cs.name,
+          });
+          break;
+        }
+
+        case "subscribe": {
+          const sub = msg as Extract<WSClientMessage, { type: "subscribe" }>;
+          const key = `${conn.meshId}:${sub.stream}`;
+          if (!streamSubscriptions.has(key))
+            streamSubscriptions.set(key, new Set());
+          streamSubscriptions.get(key)!.add(presenceId);
+          log.info("ws subscribe", {
+            presence_id: presenceId,
+            stream: sub.stream,
+          });
+          break;
+        }
+
+        case "unsubscribe": {
+          const unsub = msg as Extract<
+            WSClientMessage,
+            { type: "unsubscribe" }
+          >;
+          const key = `${conn.meshId}:${unsub.stream}`;
+          streamSubscriptions.get(key)?.delete(presenceId);
+          log.info("ws unsubscribe", {
+            presence_id: presenceId,
+            stream: unsub.stream,
+          });
+          break;
+        }
+
+        case "publish": {
+          const pub = msg as Extract<WSClientMessage, { type: "publish" }>;
+          const key = `${conn.meshId}:${pub.stream}`;
+          const subs = streamSubscriptions.get(key);
+          if (subs) {
+            const memberInfo = conn.memberPubkey
+              ? await findMemberByPubkey(conn.meshId, conn.memberPubkey)
+              : null;
+            const push: WSServerMessage = {
+              type: "stream_data",
+              stream: pub.stream,
+              data: pub.data,
+              publishedBy: memberInfo?.displayName ?? "peer",
+            };
+            for (const subPid of subs) {
+              if (subPid === presenceId) continue; // don't echo to publisher
+              sendToPeer(subPid, push);
+            }
+          }
+          metrics.messagesRoutedTotal.inc({ priority: "stream" });
+          break;
+        }
+
+        case "list_streams": {
+          const streams = await listStreams(conn.meshId);
+          sendToPeer(presenceId, {
+            type: "stream_list",
+            streams: streams.map((s) => {
+              const key = `${conn.meshId}:${s.name}`;
+              return {
+                id: s.id,
+                name: s.name,
+                createdBy: s.createdBy ?? "",
+                createdAt: s.createdAt.toISOString(),
+                subscriberCount: streamSubscriptions.get(key)?.size ?? 0,
+              };
+            }),
+          });
+          log.info("ws list_streams", {
+            presence_id: presenceId,
+            mesh_id: conn.meshId,
+            count: streams.length,
+          });
+          break;
+        }
+
+        // --- Vector storage ---
+
+        case "vector_store": {
+          const vs = msg as Extract<WSClientMessage, { type: "vector_store" }>;
+          const collName = meshCollectionName(conn.meshId, vs.collection);
+          await ensureCollection(collName);
+          const { generateId } = await import("@turbostarter/shared/utils");
+          const pointId = generateId();
+          // Store text + metadata as payload. Use a zero vector as placeholder
+          // — real embeddings should be computed client-side and sent directly
+          // to Qdrant in a future version.
+          const zeroVector = new Array(1536).fill(0) as number[];
+          await qdrant.upsert(collName, {
+            wait: true,
+            points: [
+              {
+                id: pointId,
+                vector: zeroVector,
+                payload: {
+                  text: vs.text,
+                  mesh_id: conn.meshId,
+                  stored_by: conn.memberPubkey,
+                  stored_at: new Date().toISOString(),
+                  ...(vs.metadata ?? {}),
+                },
+              },
+            ],
+          });
+          sendToPeer(presenceId, {
+            type: "ack" as const,
+            id: pointId,
+            messageId: pointId,
+            queued: false,
+          });
+          log.info("ws vector_store", {
+            presence_id: presenceId,
+            collection: vs.collection,
+            point_id: pointId,
+          });
+          break;
+        }
+        case "vector_search": {
+          const vq = msg as Extract<WSClientMessage, { type: "vector_search" }>;
+          const searchCollName = meshCollectionName(conn.meshId, vq.collection);
+          const searchLimit = vq.limit ?? 10;
+          try {
+            // Keyword search via payload scroll + filter.
+            // Full vector similarity requires client-computed embeddings (future).
+            const queryLower = vq.query.toLowerCase();
+            const scrollResult = await qdrant.scroll(searchCollName, {
+              limit: 100,
+              with_payload: true,
+              with_vector: false,
+            });
+            const matches = (scrollResult.points ?? [])
+              .filter((p) => {
+                const text = (p.payload as Record<string, unknown>)?.text;
+                return typeof text === "string" && text.toLowerCase().includes(queryLower);
+              })
+              .slice(0, searchLimit)
+              .map((p) => {
+                const payload = p.payload as Record<string, unknown>;
+                return {
+                  id: String(p.id),
+                  text: (payload.text as string) ?? "",
+                  score: 1.0, // keyword match — no vector similarity score
+                  metadata: payload,
+                };
+              });
+            sendToPeer(presenceId, {
+              type: "vector_results",
+              results: matches,
+            });
+          } catch {
+            // Collection may not exist yet — return empty results.
+            sendToPeer(presenceId, {
+              type: "vector_results",
+              results: [],
+            });
+          }
+          log.info("ws vector_search", {
+            presence_id: presenceId,
+            collection: vq.collection,
+            query: vq.query.slice(0, 80),
+          });
+          break;
+        }
+        case "vector_delete": {
+          const vd = msg as Extract<WSClientMessage, { type: "vector_delete" }>;
+          const deleteCollName = meshCollectionName(conn.meshId, vd.collection);
+          try {
+            await qdrant.delete(deleteCollName, {
+              wait: true,
+              points: [vd.id],
+            });
+          } catch {
+            /* collection or point may not exist — idempotent */
+          }
+          sendToPeer(presenceId, {
+            type: "ack" as const,
+            id: vd.id,
+            messageId: vd.id,
+            queued: false,
+          });
+          log.info("ws vector_delete", {
+            presence_id: presenceId,
+            collection: vd.collection,
+            point_id: vd.id,
+          });
+          break;
+        }
+        case "list_collections": {
+          try {
+            const qdrantResponse = await qdrant.getCollections();
+            const prefix = `mesh_${conn.meshId}_`.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+            const meshCollections = (qdrantResponse.collections ?? [])
+              .map((c) => c.name)
+              .filter((name) => name.startsWith(prefix))
+              .map((name) => name.slice(prefix.length));
+            sendToPeer(presenceId, {
+              type: "collection_list",
+              collections: meshCollections,
+            });
+          } catch {
+            sendToPeer(presenceId, {
+              type: "collection_list",
+              collections: [],
+            });
+          }
+          log.info("ws list_collections", {
+            presence_id: presenceId,
+            mesh_id: conn.meshId,
+          });
+          break;
+        }
+
+        // --- Graph database ---
+
+        case "graph_query": {
+          const gq = msg as Extract<WSClientMessage, { type: "graph_query" }>;
+          const gqDbName = meshDbName(conn.meshId);
+          let gqSession;
+          try {
+            await ensureDatabase(gqDbName);
+            gqSession = neo4jDriver.session({ database: gqDbName });
+          } catch {
+            // Community edition — fall back to default db.
+            gqSession = neo4jDriver.session();
+          }
+          try {
+            const gqResult = await gqSession.run(gq.cypher);
+            const gqRecords = gqResult.records.map((r) => {
+              const obj: Record<string, unknown> = {};
+              for (const key of r.keys) {
+                obj[key] = r.get(key);
+              }
+              return obj;
+            });
+            sendToPeer(presenceId, {
+              type: "graph_result",
+              records: gqRecords,
+            });
+          } catch (gqErr) {
+            sendError(conn.ws, "graph_error", gqErr instanceof Error ? gqErr.message : String(gqErr));
+          } finally {
+            await gqSession.close();
+          }
+          log.info("ws graph_query", {
+            presence_id: presenceId,
+            cypher: gq.cypher.slice(0, 80),
+          });
+          break;
+        }
+        case "graph_execute": {
+          const ge = msg as Extract<WSClientMessage, { type: "graph_execute" }>;
+          const geDbName = meshDbName(conn.meshId);
+          let geSession;
+          try {
+            await ensureDatabase(geDbName);
+            geSession = neo4jDriver.session({ database: geDbName });
+          } catch {
+            geSession = neo4jDriver.session();
+          }
+          try {
+            const geResult = await geSession.run(ge.cypher);
+            const geRecords = geResult.records.map((r) => {
+              const obj: Record<string, unknown> = {};
+              for (const key of r.keys) {
+                obj[key] = r.get(key);
+              }
+              return obj;
+            });
+            sendToPeer(presenceId, {
+              type: "graph_result",
+              records: geRecords,
+            });
+          } catch (geErr) {
+            sendError(conn.ws, "graph_error", geErr instanceof Error ? geErr.message : String(geErr));
+          } finally {
+            await geSession.close();
+          }
+          log.info("ws graph_execute", {
+            presence_id: presenceId,
+            cypher: ge.cypher.slice(0, 80),
+          });
+          break;
+        }
+
+        // --- Mesh database (per-mesh PostgreSQL schema) ---
+
+        case "mesh_query": {
+          const mq = msg as Extract<WSClientMessage, { type: "mesh_query" }>;
+          try {
+            const result = await meshQuery(conn.meshId, mq.sql);
+            sendToPeer(presenceId, { type: "mesh_query_result", ...result });
+          } catch (e) {
+            sendError(
+              conn.ws,
+              "query_error",
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+          log.info("ws mesh_query", {
+            presence_id: presenceId,
+            sql: mq.sql.slice(0, 80),
+          });
+          break;
+        }
+        case "mesh_execute": {
+          const me = msg as Extract<WSClientMessage, { type: "mesh_execute" }>;
+          try {
+            const result = await meshExecute(conn.meshId, me.sql);
+            sendToPeer(presenceId, {
+              type: "mesh_query_result",
+              columns: [],
+              rows: [],
+              rowCount: result.rowCount,
+            });
+          } catch (e) {
+            sendError(
+              conn.ws,
+              "execute_error",
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+          log.info("ws mesh_execute", {
+            presence_id: presenceId,
+            sql: me.sql.slice(0, 80),
+          });
+          break;
+        }
+        case "mesh_schema": {
+          try {
+            const tables = await meshSchema(conn.meshId);
+            sendToPeer(presenceId, { type: "mesh_schema_result", tables });
+          } catch (e) {
+            sendError(
+              conn.ws,
+              "schema_error",
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+          log.info("ws mesh_schema", { presence_id: presenceId });
+          break;
+        }
+        case "mesh_info": {
+          const [peers, stateEntries, memCount, fileCount, taskCounts, streams, tables] = await Promise.all([
+            listPeersInMesh(conn.meshId),
+            listState(conn.meshId),
+            db.execute(sql`SELECT COUNT(*) as n FROM mesh.memory WHERE mesh_id = ${conn.meshId} AND forgotten_at IS NULL`).then(r => Number(((r.rows ?? r) as any[])[0]?.n ?? 0)),
+            db.execute(sql`SELECT COUNT(*) as n FROM mesh.file WHERE mesh_id = ${conn.meshId} AND deleted_at IS NULL`).then(r => Number(((r.rows ?? r) as any[])[0]?.n ?? 0)),
+            db.execute(sql`SELECT status, COUNT(*) as n FROM mesh.task WHERE mesh_id = ${conn.meshId} GROUP BY status`).then(r => {
+              const rows = (r.rows ?? r) as Array<{ status: string; n: string }>;
+              const counts = { open: 0, claimed: 0, done: 0 };
+              for (const row of rows) counts[row.status as keyof typeof counts] = Number(row.n);
+              return counts;
+            }),
+            listStreams(conn.meshId),
+            meshSchema(conn.meshId).catch(() => []),
+          ]);
+          const allGroups = new Set<string>();
+          for (const p of peers) for (const g of p.groups) allGroups.add(`@${g.name}`);
+          const myPresence = peers.find(p => p.sessionId === [...connections.entries()].find(([pid]) => pid === presenceId)?.[1]?.sessionPubkey);
+          const peerConn = connections.get(presenceId);
+          sendToPeer(presenceId, {
+            type: "mesh_info_result",
+            mesh: conn.meshId,
+            peers: peers.length,
+            groups: [...allGroups],
+            stateKeys: stateEntries.map((e: any) => e.key),
+            memoryCount: memCount,
+            fileCount: fileCount,
+            tasks: taskCounts,
+            streams: streams.map(s => s.name),
+            tables: tables.map((t: any) => t.name),
+            collections: [],
+            yourName: peerConn?.groups?.[0]?.name ?? "unknown",
+            yourGroups: peerConn?.groups ?? [],
+          });
+          log.info("ws mesh_info", { presence_id: presenceId });
+          break;
+        }
       }
     } catch (e) {
       metrics.messagesRejectedTotal.inc({ reason: "parse_or_handler" });
@@ -1081,6 +1691,11 @@ function handleConnection(ws: WebSocket): void {
       connections.delete(presenceId);
       if (conn) decMeshCount(conn.meshId);
       await disconnectPresence(presenceId);
+      // Clean up stream subscriptions for this peer
+      for (const [key, subs] of streamSubscriptions) {
+        subs.delete(presenceId);
+        if (subs.size === 0) streamSubscriptions.delete(key);
+      }
       log.info("ws close", { presence_id: presenceId });
     }
   });

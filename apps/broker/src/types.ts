@@ -230,6 +230,133 @@ export interface WSMemoryResultsMessage {
   }>;
 }
 
+// --- Vector storage messages ---
+
+/** Client → broker: store a text document in a vector collection. */
+export interface WSVectorStoreMessage {
+  type: "vector_store";
+  collection: string;
+  text: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Client → broker: search a vector collection. */
+export interface WSVectorSearchMessage {
+  type: "vector_search";
+  collection: string;
+  query: string;
+  limit?: number;
+}
+
+/** Client → broker: delete a point from a vector collection. */
+export interface WSVectorDeleteMessage {
+  type: "vector_delete";
+  collection: string;
+  id: string;
+}
+
+/** Client → broker: list all vector collections for this mesh. */
+export interface WSListCollectionsMessage {
+  type: "list_collections";
+}
+
+// --- Graph database messages ---
+
+/** Client → broker: run a read-only Cypher query. */
+export interface WSGraphQueryMessage {
+  type: "graph_query";
+  cypher: string;
+}
+
+/** Client → broker: run a write Cypher statement. */
+export interface WSGraphExecuteMessage {
+  type: "graph_execute";
+  cypher: string;
+}
+
+// --- Mesh database (per-mesh PostgreSQL schema) messages ---
+
+/** Client → broker: run a SELECT query in the mesh's schema. */
+export interface WSMeshQueryMessage {
+  type: "mesh_query";
+  sql: string;
+}
+
+/** Client → broker: run a DDL/DML statement in the mesh's schema. */
+export interface WSMeshExecuteMessage {
+  type: "mesh_execute";
+  sql: string;
+}
+
+/** Client → broker: list tables and columns in the mesh's schema. */
+export interface WSMeshSchemaMessage {
+  type: "mesh_schema";
+}
+
+// --- Vector/Graph response messages ---
+
+/** Broker → client: vector search results. */
+export interface WSVectorResultsMessage {
+  type: "vector_results";
+  results: Array<{
+    id: string;
+    text: string;
+    score: number;
+    metadata?: Record<string, unknown>;
+  }>;
+}
+
+/** Broker → client: list of vector collections. */
+export interface WSCollectionListMessage {
+  type: "collection_list";
+  collections: string[];
+}
+
+/** Broker → client: graph query results. */
+export interface WSGraphResultMessage {
+  type: "graph_result";
+  records: Array<Record<string, unknown>>;
+}
+
+/** Broker → client: mesh SQL query results. */
+export interface WSMeshQueryResultMessage {
+  type: "mesh_query_result";
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  rowCount: number;
+}
+
+/** Broker → client: mesh schema introspection results. */
+export interface WSMeshSchemaResultMessage {
+  type: "mesh_schema_result";
+  tables: Array<{
+    name: string;
+    columns: Array<{ name: string; type: string; nullable: boolean }>;
+  }>;
+}
+
+/** Client → broker: get full mesh overview. */
+export interface WSMeshInfoMessage {
+  type: "mesh_info";
+}
+
+/** Broker → client: aggregated mesh overview. */
+export interface WSMeshInfoResultMessage {
+  type: "mesh_info_result";
+  mesh: string;
+  peers: number;
+  groups: string[];
+  stateKeys: string[];
+  memoryCount: number;
+  fileCount: number;
+  tasks: { open: number; claimed: number; done: number };
+  streams: string[];
+  tables: string[];
+  collections: string[];
+  yourName: string;
+  yourGroups: Array<{ name: string; role?: string }>;
+}
+
 /** Client → broker: check delivery status of a message. */
 export interface WSMessageStatusMessage {
   type: "message_status";
@@ -309,6 +436,170 @@ export interface WSFileStatusResultMessage {
   }>;
 }
 
+// --- Context sharing messages ---
+
+/** Client → broker: share current working context. */
+export interface WSShareContextMessage {
+  type: "share_context";
+  summary: string;
+  filesRead?: string[];
+  keyFindings?: string[];
+  tags?: string[];
+}
+
+/** Client → broker: search contexts by query. */
+export interface WSGetContextMessage {
+  type: "get_context";
+  query: string;
+}
+
+/** Client → broker: list all contexts in the mesh. */
+export interface WSListContextsMessage {
+  type: "list_contexts";
+}
+
+/** Broker → client: acknowledgement for share_context. */
+export interface WSContextSharedMessage {
+  type: "context_shared";
+  id: string;
+}
+
+/** Broker → client: response to get_context. */
+export interface WSContextResultsMessage {
+  type: "context_results";
+  contexts: Array<{
+    peerName: string;
+    summary: string;
+    filesRead: string[];
+    keyFindings: string[];
+    tags: string[];
+    updatedAt: string;
+  }>;
+}
+
+/** Broker → client: response to list_contexts. */
+export interface WSContextListMessage {
+  type: "context_list";
+  contexts: Array<{
+    peerName: string;
+    summary: string;
+    tags: string[];
+    updatedAt: string;
+  }>;
+}
+
+// --- Task messages ---
+
+/** Client → broker: create a task. */
+export interface WSCreateTaskMessage {
+  type: "create_task";
+  title: string;
+  assignee?: string;
+  priority?: string;
+  tags?: string[];
+}
+
+/** Client → broker: claim an open task. */
+export interface WSClaimTaskMessage {
+  type: "claim_task";
+  taskId: string;
+}
+
+/** Client → broker: mark a task as done. */
+export interface WSCompleteTaskMessage {
+  type: "complete_task";
+  taskId: string;
+  result?: string;
+}
+
+/** Client → broker: list tasks with optional filters. */
+export interface WSListTasksMessage {
+  type: "list_tasks";
+  status?: string;
+  assignee?: string;
+}
+
+/** Broker → client: acknowledgement for create_task. */
+export interface WSTaskCreatedMessage {
+  type: "task_created";
+  id: string;
+}
+
+/** Broker → client: response to list_tasks, claim_task, complete_task. */
+export interface WSTaskListMessage {
+  type: "task_list";
+  tasks: Array<{
+    id: string;
+    title: string;
+    assignee: string | null;
+    claimedBy: string | null;
+    status: string;
+    priority: string;
+    createdBy: string | null;
+    tags: string[];
+    createdAt: string;
+  }>;
+}
+
+// --- Stream messages ---
+
+/** Client → broker: create a named real-time stream. */
+export interface WSCreateStreamMessage {
+  type: "create_stream";
+  name: string;
+}
+
+/** Client → broker: publish data to a stream. */
+export interface WSPublishMessage {
+  type: "publish";
+  stream: string;
+  data: unknown;
+}
+
+/** Client → broker: subscribe to a stream. */
+export interface WSSubscribeMessage {
+  type: "subscribe";
+  stream: string;
+}
+
+/** Client → broker: unsubscribe from a stream. */
+export interface WSUnsubscribeMessage {
+  type: "unsubscribe";
+  stream: string;
+}
+
+/** Client → broker: list all streams in the mesh. */
+export interface WSListStreamsMessage {
+  type: "list_streams";
+}
+
+/** Broker → client: acknowledgement for create_stream. */
+export interface WSStreamCreatedMessage {
+  type: "stream_created";
+  id: string;
+  name: string;
+}
+
+/** Broker → client: real-time data pushed from a stream. */
+export interface WSStreamDataMessage {
+  type: "stream_data";
+  stream: string;
+  data: unknown;
+  publishedBy: string;
+}
+
+/** Broker → client: response to list_streams. */
+export interface WSStreamListMessage {
+  type: "stream_list";
+  streams: Array<{
+    id: string;
+    name: string;
+    createdBy: string;
+    createdAt: string;
+    subscriberCount: number;
+  }>;
+}
+
 /** Broker → client: structured error. */
 export interface WSErrorMessage {
   type: "error";
@@ -335,7 +626,29 @@ export type WSClientMessage =
   | WSGetFileMessage
   | WSListFilesMessage
   | WSFileStatusMessage
-  | WSDeleteFileMessage;
+  | WSDeleteFileMessage
+  | WSShareContextMessage
+  | WSGetContextMessage
+  | WSListContextsMessage
+  | WSCreateTaskMessage
+  | WSClaimTaskMessage
+  | WSCompleteTaskMessage
+  | WSListTasksMessage
+  | WSVectorStoreMessage
+  | WSVectorSearchMessage
+  | WSVectorDeleteMessage
+  | WSListCollectionsMessage
+  | WSGraphQueryMessage
+  | WSGraphExecuteMessage
+  | WSMeshQueryMessage
+  | WSMeshExecuteMessage
+  | WSMeshSchemaMessage
+  | WSCreateStreamMessage
+  | WSPublishMessage
+  | WSSubscribeMessage
+  | WSUnsubscribeMessage
+  | WSListStreamsMessage
+  | WSMeshInfoMessage;
 
 export type WSServerMessage =
   | WSHelloAckMessage
@@ -351,4 +664,18 @@ export type WSServerMessage =
   | WSFileUrlMessage
   | WSFileListMessage
   | WSFileStatusResultMessage
+  | WSContextSharedMessage
+  | WSContextResultsMessage
+  | WSContextListMessage
+  | WSTaskCreatedMessage
+  | WSTaskListMessage
+  | WSVectorResultsMessage
+  | WSCollectionListMessage
+  | WSGraphResultMessage
+  | WSMeshQueryResultMessage
+  | WSMeshSchemaResultMessage
+  | WSStreamCreatedMessage
+  | WSStreamDataMessage
+  | WSStreamListMessage
+  | WSMeshInfoResultMessage
   | WSErrorMessage;

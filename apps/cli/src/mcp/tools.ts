@@ -269,4 +269,290 @@ export const TOOLS: Tool[] = [
       required: ["id"],
     },
   },
+
+  // --- Vector tools ---
+  {
+    name: "vector_store",
+    description:
+      "Store an embedding in a per-mesh Qdrant collection. Auto-creates the collection on first use.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        collection: { type: "string", description: "Collection name" },
+        text: { type: "string", description: "Text to embed and store" },
+        metadata: {
+          type: "object",
+          description: "Optional metadata to attach",
+        },
+      },
+      required: ["collection", "text"],
+    },
+  },
+  {
+    name: "vector_search",
+    description: "Semantic search over stored embeddings in a collection.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        collection: { type: "string", description: "Collection name" },
+        query: { type: "string", description: "Search query text" },
+        limit: {
+          type: "number",
+          description: "Max results (default: 10)",
+        },
+      },
+      required: ["collection", "query"],
+    },
+  },
+  {
+    name: "vector_delete",
+    description: "Remove an embedding from a collection.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        collection: { type: "string", description: "Collection name" },
+        id: { type: "string", description: "Embedding ID to delete" },
+      },
+      required: ["collection", "id"],
+    },
+  },
+  {
+    name: "list_collections",
+    description: "List vector collections in this mesh.",
+    inputSchema: { type: "object", properties: {} },
+  },
+
+  // --- Graph tools ---
+  {
+    name: "graph_query",
+    description:
+      "Run a read-only Cypher query on the per-mesh Neo4j database.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cypher: { type: "string", description: "Cypher MATCH query" },
+      },
+      required: ["cypher"],
+    },
+  },
+  {
+    name: "graph_execute",
+    description:
+      "Run a write Cypher query (CREATE, MERGE, DELETE) on the per-mesh Neo4j database.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cypher: { type: "string", description: "Cypher write query" },
+      },
+      required: ["cypher"],
+    },
+  },
+
+  // --- Mesh Database tools ---
+  {
+    name: "mesh_query",
+    description:
+      "Run a SELECT query on the per-mesh shared database.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sql: { type: "string", description: "SQL SELECT query" },
+      },
+      required: ["sql"],
+    },
+  },
+  {
+    name: "mesh_execute",
+    description:
+      "Run DDL/DML on the per-mesh database (CREATE TABLE, INSERT, UPDATE, DELETE).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        sql: { type: "string", description: "SQL statement" },
+      },
+      required: ["sql"],
+    },
+  },
+  {
+    name: "mesh_schema",
+    description:
+      "List tables and columns in the per-mesh shared database.",
+    inputSchema: { type: "object", properties: {} },
+  },
+
+  // --- Stream tools ---
+  {
+    name: "create_stream",
+    description:
+      "Create a real-time data stream in the mesh.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Stream name" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "publish",
+    description:
+      "Push data to a stream. Subscribers receive it in real-time.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        stream: { type: "string", description: "Stream name" },
+        data: { description: "Any JSON data to publish" },
+      },
+      required: ["stream", "data"],
+    },
+  },
+  {
+    name: "subscribe",
+    description:
+      "Subscribe to a stream. Data pushes arrive as channel notifications.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        stream: { type: "string", description: "Stream name" },
+      },
+      required: ["stream"],
+    },
+  },
+  {
+    name: "list_streams",
+    description:
+      "List active streams in the mesh.",
+    inputSchema: { type: "object", properties: {} },
+  },
+
+  // --- Context tools ---
+  {
+    name: "share_context",
+    description:
+      "Share your session understanding with the mesh. Call after exploring a codebase area.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        summary: {
+          type: "string",
+          description: "Summary of what you explored/learned",
+        },
+        files_read: {
+          type: "array",
+          items: { type: "string" },
+          description: "File paths you read",
+        },
+        key_findings: {
+          type: "array",
+          items: { type: "string" },
+          description: "Key findings or insights",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags for categorization",
+        },
+      },
+      required: ["summary"],
+    },
+  },
+  {
+    name: "get_context",
+    description:
+      "Find context from peers who explored an area. Check before re-reading files another peer already analyzed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query (file path, topic, etc.)",
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "list_contexts",
+    description: "See what all peers currently know about the codebase.",
+    inputSchema: { type: "object", properties: {} },
+  },
+
+  // --- Task tools ---
+  {
+    name: "create_task",
+    description: "Create a work item for the mesh.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Task title" },
+        assignee: {
+          type: "string",
+          description: "Peer name to assign (optional)",
+        },
+        priority: {
+          type: "string",
+          enum: ["low", "normal", "high", "urgent"],
+          description: "Priority level (default: normal)",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags for categorization",
+        },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "claim_task",
+    description: "Claim an unclaimed task to take ownership.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Task ID" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "complete_task",
+    description: "Mark a task as done with an optional result summary.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Task ID" },
+        result: {
+          type: "string",
+          description: "Summary of what was done",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "list_tasks",
+    description: "List tasks filtered by status and/or assignee.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["open", "claimed", "completed"],
+          description: "Filter by status",
+        },
+        assignee: {
+          type: "string",
+          description: "Filter by assignee name",
+        },
+      },
+    },
+  },
+
+  // --- Mesh info ---
+  {
+    name: "mesh_info",
+    description:
+      "Get a complete overview of the mesh: peers, groups, state, memory, files, tasks, streams, tables. Call on session start for full situational awareness.",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];

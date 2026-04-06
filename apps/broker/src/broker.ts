@@ -34,9 +34,12 @@ import {
   mesh,
   meshFile,
   meshFileAccess,
+  meshContext,
   meshMember as memberTable,
   meshMemory,
   meshState,
+  meshStream,
+  meshTask,
   messageQueue,
   pendingStatus,
   presence,
@@ -889,6 +892,334 @@ export async function deleteFile(
     );
 }
 
+// --- Context sharing ---
+
+/**
+ * Upsert a context snapshot for a peer. Each (meshId, presenceId) pair
+ * has at most one context row — repeated calls update it in place.
+ */
+export async function shareContext(
+  meshId: string,
+  presenceId: string,
+  peerName: string | undefined,
+  summary: string,
+  filesRead?: string[],
+  keyFindings?: string[],
+  tags?: string[],
+): Promise<string> {
+  const now = new Date();
+  // Try to find existing context for this presence in this mesh.
+  const [existing] = await db
+    .select({ id: meshContext.id })
+    .from(meshContext)
+    .where(
+      and(
+        eq(meshContext.meshId, meshId),
+        eq(meshContext.presenceId, presenceId),
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    await db
+      .update(meshContext)
+      .set({
+        peerName: peerName ?? null,
+        summary,
+        filesRead: filesRead ?? [],
+        keyFindings: keyFindings ?? [],
+        tags: tags ?? [],
+        updatedAt: now,
+      })
+      .where(eq(meshContext.id, existing.id));
+    return existing.id;
+  }
+
+  const [row] = await db
+    .insert(meshContext)
+    .values({
+      meshId,
+      presenceId,
+      peerName: peerName ?? null,
+      summary,
+      filesRead: filesRead ?? [],
+      keyFindings: keyFindings ?? [],
+      tags: tags ?? [],
+      updatedAt: now,
+    })
+    .returning({ id: meshContext.id });
+  if (!row) throw new Error("failed to insert context");
+  return row.id;
+}
+
+/**
+ * Search contexts by tag match or summary ILIKE.
+ */
+export async function getContext(
+  meshId: string,
+  query: string,
+): Promise<
+  Array<{
+    peerName: string;
+    summary: string;
+    filesRead: string[];
+    keyFindings: string[];
+    tags: string[];
+    updatedAt: Date;
+  }>
+> {
+  const result = await db.execute<{
+    peer_name: string | null;
+    summary: string;
+    files_read: string[] | null;
+    key_findings: string[] | null;
+    tags: string[] | null;
+    updated_at: string | Date;
+  }>(sql`
+    SELECT peer_name, summary, files_read, key_findings, tags, updated_at
+    FROM mesh.context
+    WHERE mesh_id = ${meshId}
+      AND (
+        summary ILIKE ${"%" + query + "%"}
+        OR ${query} = ANY(tags)
+      )
+    ORDER BY updated_at DESC
+    LIMIT 20
+  `);
+  const rows = (result.rows ?? result) as Array<{
+    peer_name: string | null;
+    summary: string;
+    files_read: string[] | null;
+    key_findings: string[] | null;
+    tags: string[] | null;
+    updated_at: string | Date;
+  }>;
+  return rows.map((r) => ({
+    peerName: r.peer_name ?? "unknown",
+    summary: r.summary,
+    filesRead: r.files_read ?? [],
+    keyFindings: r.key_findings ?? [],
+    tags: r.tags ?? [],
+    updatedAt:
+      r.updated_at instanceof Date ? r.updated_at : new Date(r.updated_at),
+  }));
+}
+
+/**
+ * List all contexts for a mesh, ordered by most recently updated.
+ */
+export async function listContexts(
+  meshId: string,
+): Promise<
+  Array<{
+    peerName: string;
+    summary: string;
+    tags: string[];
+    updatedAt: Date;
+  }>
+> {
+  const rows = await db
+    .select({
+      peerName: meshContext.peerName,
+      summary: meshContext.summary,
+      tags: meshContext.tags,
+      updatedAt: meshContext.updatedAt,
+    })
+    .from(meshContext)
+    .where(eq(meshContext.meshId, meshId))
+    .orderBy(desc(meshContext.updatedAt));
+  return rows.map((r) => ({
+    peerName: r.peerName ?? "unknown",
+    summary: r.summary,
+    tags: (r.tags ?? []) as string[],
+    updatedAt: r.updatedAt,
+  }));
+}
+
+// --- Tasks ---
+
+/**
+ * Create a new task in a mesh. Returns the generated id.
+ */
+export async function createTask(
+  meshId: string,
+  title: string,
+  assignee?: string,
+  priority?: string,
+  tags?: string[],
+  createdByName?: string,
+): Promise<string> {
+  const [row] = await db
+    .insert(meshTask)
+    .values({
+      meshId,
+      title,
+      assignee: assignee ?? null,
+      priority: priority ?? "normal",
+      status: "open",
+      tags: tags ?? [],
+      createdByName: createdByName ?? null,
+    })
+    .returning({ id: meshTask.id });
+  if (!row) throw new Error("failed to insert task");
+  return row.id;
+}
+
+/**
+ * Claim an open task. Sets status to 'claimed' and records who claimed it.
+ * Only succeeds if the task is currently 'open'.
+ */
+export async function claimTask(
+  meshId: string,
+  taskId: string,
+  presenceId: string,
+  peerName?: string,
+): Promise<boolean> {
+  const now = new Date();
+  const result = await db
+    .update(meshTask)
+    .set({
+      status: "claimed",
+      claimedByPresence: presenceId,
+      claimedByName: peerName ?? null,
+      claimedAt: now,
+    })
+    .where(
+      and(
+        eq(meshTask.id, taskId),
+        eq(meshTask.meshId, meshId),
+        eq(meshTask.status, "open"),
+      ),
+    )
+    .returning({ id: meshTask.id });
+  return result.length > 0;
+}
+
+/**
+ * Complete a task. Sets status to 'done', records the result and timestamp.
+ */
+export async function completeTask(
+  meshId: string,
+  taskId: string,
+  result?: string,
+): Promise<boolean> {
+  const now = new Date();
+  const rows = await db
+    .update(meshTask)
+    .set({
+      status: "done",
+      result: result ?? null,
+      completedAt: now,
+    })
+    .where(
+      and(
+        eq(meshTask.id, taskId),
+        eq(meshTask.meshId, meshId),
+      ),
+    )
+    .returning({ id: meshTask.id });
+  return rows.length > 0;
+}
+
+/**
+ * List tasks in a mesh with optional status and assignee filters.
+ */
+export async function listTasks(
+  meshId: string,
+  status?: string,
+  assignee?: string,
+): Promise<
+  Array<{
+    id: string;
+    title: string;
+    assignee: string | null;
+    claimedBy: string | null;
+    status: string;
+    priority: string;
+    createdBy: string | null;
+    tags: string[];
+    createdAt: Date;
+  }>
+> {
+  const conditions = [eq(meshTask.meshId, meshId)];
+  if (status) {
+    conditions.push(eq(meshTask.status, status));
+  }
+  if (assignee) {
+    conditions.push(eq(meshTask.assignee, assignee));
+  }
+  const rows = await db
+    .select({
+      id: meshTask.id,
+      title: meshTask.title,
+      assignee: meshTask.assignee,
+      claimedByName: meshTask.claimedByName,
+      status: meshTask.status,
+      priority: meshTask.priority,
+      createdByName: meshTask.createdByName,
+      tags: meshTask.tags,
+      createdAt: meshTask.createdAt,
+    })
+    .from(meshTask)
+    .where(and(...conditions))
+    .orderBy(desc(meshTask.createdAt))
+    .limit(100);
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    assignee: r.assignee,
+    claimedBy: r.claimedByName,
+    status: r.status,
+    priority: r.priority,
+    createdBy: r.createdByName,
+    tags: (r.tags ?? []) as string[],
+    createdAt: r.createdAt,
+  }));
+}
+
+// --- Streams ---
+
+/**
+ * Create a named real-time stream in a mesh. Upsert semantics: if a
+ * stream with the same (meshId, name) already exists, return its id.
+ */
+export async function createStream(
+  meshId: string,
+  name: string,
+  createdByName: string,
+): Promise<string> {
+  const existing = await db
+    .select({ id: meshStream.id })
+    .from(meshStream)
+    .where(and(eq(meshStream.meshId, meshId), eq(meshStream.name, name)));
+  if (existing.length > 0) return existing[0]!.id;
+  const [row] = await db
+    .insert(meshStream)
+    .values({ meshId, name, createdByName })
+    .returning({ id: meshStream.id });
+  return row!.id;
+}
+
+/**
+ * List all streams in a mesh, ordered by creation time.
+ */
+export async function listStreams(
+  meshId: string,
+): Promise<
+  Array<{ id: string; name: string; createdBy: string | null; createdAt: Date }>
+> {
+  return db
+    .select({
+      id: meshStream.id,
+      name: meshStream.name,
+      createdBy: meshStream.createdByName,
+      createdAt: meshStream.createdAt,
+    })
+    .from(meshStream)
+    .where(eq(meshStream.meshId, meshId))
+    .orderBy(asc(meshStream.createdAt));
+}
+
 // --- Message queueing + delivery ---
 
 export interface QueueParams {
@@ -1238,4 +1569,119 @@ export async function findMemberByPubkey(
     )
     .limit(1);
   return row ?? null;
+}
+
+// --- Mesh databases (per-mesh PostgreSQL schemas) ---
+
+function meshSchemaName(meshId: string): string {
+  return `meshdb_${meshId.toLowerCase().replace(/[^a-z0-9]/g, "_")}`;
+}
+
+/** Validate that user-provided SQL doesn't contain dangerous operations. */
+function validateMeshSql(userSql: string): void {
+  const upper = userSql.toUpperCase();
+  const forbidden = [
+    "DROP SCHEMA",
+    "CREATE SCHEMA",
+    "SET SEARCH_PATH",
+    "SET ROLE",
+    "SET SESSION",
+    "SET LOCAL",
+    "GRANT",
+    "REVOKE",
+  ];
+  for (const f of forbidden) {
+    if (upper.includes(f))
+      throw new Error(`Forbidden SQL operation: ${f}`);
+  }
+}
+
+/** Ensure the per-mesh schema exists. */
+export async function ensureMeshSchema(meshId: string): Promise<string> {
+  const schema = meshSchemaName(meshId);
+  await db.execute(
+    sql`CREATE SCHEMA IF NOT EXISTS ${sql.raw('"' + schema + '"')}`,
+  );
+  return schema;
+}
+
+/** Run a SELECT query in the mesh's schema. */
+export async function meshQuery(
+  meshId: string,
+  query: string,
+): Promise<{
+  columns: string[];
+  rows: Array<Record<string, unknown>>;
+  rowCount: number;
+}> {
+  validateMeshSql(query);
+  const schema = await ensureMeshSchema(meshId);
+  // Use a transaction so SET LOCAL is scoped and automatically reset.
+  return await db.transaction(async (tx) => {
+    await tx.execute(
+      sql.raw(`SET LOCAL search_path TO "${schema}"`)
+    );
+    const result = await tx.execute(sql.raw(query));
+    const rows = (result.rows ?? []) as Array<Record<string, unknown>>;
+    const columns = rows.length > 0 ? Object.keys(rows[0]!) : [];
+    return { columns, rows, rowCount: rows.length };
+  });
+}
+
+/** Run a DDL/DML statement in the mesh's schema. */
+export async function meshExecute(
+  meshId: string,
+  statement: string,
+): Promise<{ rowCount: number }> {
+  validateMeshSql(statement);
+  const schema = await ensureMeshSchema(meshId);
+  return await db.transaction(async (tx) => {
+    await tx.execute(
+      sql.raw(`SET LOCAL search_path TO "${schema}"`)
+    );
+    const result = await tx.execute(sql.raw(statement));
+    return { rowCount: (result as any).rowCount ?? 0 };
+  });
+}
+
+/** List tables and columns in the mesh's schema. */
+export async function meshSchema(
+  meshId: string,
+): Promise<
+  Array<{
+    name: string;
+    columns: Array<{ name: string; type: string; nullable: boolean }>;
+  }>
+> {
+  const schema = meshSchemaName(meshId);
+  const result = await db.execute<{
+    table_name: string;
+    column_name: string;
+    data_type: string;
+    is_nullable: string;
+  }>(sql`
+    SELECT table_name, column_name, data_type, is_nullable
+    FROM information_schema.columns
+    WHERE table_schema = ${schema}
+    ORDER BY table_name, ordinal_position
+  `);
+  const rows = (result.rows ?? result) as Array<{
+    table_name: string;
+    column_name: string;
+    data_type: string;
+    is_nullable: string;
+  }>;
+  const tables = new Map<
+    string,
+    Array<{ name: string; type: string; nullable: boolean }>
+  >();
+  for (const r of rows) {
+    if (!tables.has(r.table_name)) tables.set(r.table_name, []);
+    tables.get(r.table_name)!.push({
+      name: r.column_name,
+      type: r.data_type,
+      nullable: r.is_nullable === "YES",
+    });
+  }
+  return [...tables.entries()].map(([name, columns]) => ({ name, columns }));
 }

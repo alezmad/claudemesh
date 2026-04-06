@@ -327,6 +327,68 @@ export const meshFileAccess = meshSchema.table("file_access", {
   accessedAt: timestamp().defaultNow().notNull(),
 });
 
+/**
+ * Per-peer context snapshot. Each peer (presence) has at most one context
+ * entry per mesh, upserted on each share_context call. Allows peers to
+ * discover what others are working on, which files they've read, and
+ * key findings — without sending a direct message.
+ */
+export const meshContext = meshSchema.table("context", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  meshId: text()
+    .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .notNull(),
+  presenceId: text().references(() => presence.id, { onDelete: "cascade" }),
+  peerName: text(),
+  summary: text().notNull(),
+  filesRead: text().array().default([]),
+  keyFindings: text().array().default([]),
+  tags: text().array().default([]),
+  updatedAt: timestamp().defaultNow().notNull(),
+});
+
+/**
+ * Mesh-scoped task board. Peers can create tasks, claim them, and mark
+ * them done. Lightweight project management for multi-agent workflows.
+ */
+export const meshTask = meshSchema.table("task", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  meshId: text()
+    .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .notNull(),
+  title: text().notNull(),
+  assignee: text(),
+  claimedByName: text(),
+  claimedByPresence: text().references(() => presence.id),
+  priority: text().notNull().default("normal"),
+  status: text().notNull().default("open"),
+  tags: text().array().default([]),
+  result: text(),
+  createdByName: text(),
+  createdAt: timestamp().defaultNow().notNull(),
+  claimedAt: timestamp(),
+  completedAt: timestamp(),
+});
+
+/**
+ * Named real-time data channels within a mesh. One peer publishes, all
+ * subscribers receive. No message history — streams are live.
+ * Use cases: build logs, deploy status, monitoring data, live code diffs.
+ */
+export const meshStream = meshSchema.table(
+  "stream",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    name: text().notNull(),
+    createdByName: text(),
+    createdAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("stream_mesh_name_idx").on(table.meshId, table.name)],
+);
+
 export const meshRelations = relations(mesh, ({ one, many }) => ({
   owner: one(user, {
     fields: [mesh.ownerUserId],
@@ -469,3 +531,45 @@ export type SelectMeshFile = typeof meshFile.$inferSelect;
 export type InsertMeshFile = typeof meshFile.$inferInsert;
 export type SelectMeshFileAccess = typeof meshFileAccess.$inferSelect;
 export type InsertMeshFileAccess = typeof meshFileAccess.$inferInsert;
+export const selectMeshContextSchema = createSelectSchema(meshContext);
+export const insertMeshContextSchema = createInsertSchema(meshContext);
+export const selectMeshTaskSchema = createSelectSchema(meshTask);
+export const insertMeshTaskSchema = createInsertSchema(meshTask);
+export type SelectMeshContext = typeof meshContext.$inferSelect;
+export type InsertMeshContext = typeof meshContext.$inferInsert;
+export type SelectMeshTask = typeof meshTask.$inferSelect;
+export type InsertMeshTask = typeof meshTask.$inferInsert;
+
+export const meshContextRelations = relations(meshContext, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [meshContext.meshId],
+    references: [mesh.id],
+  }),
+  presence: one(presence, {
+    fields: [meshContext.presenceId],
+    references: [presence.id],
+  }),
+}));
+
+export const meshTaskRelations = relations(meshTask, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [meshTask.meshId],
+    references: [mesh.id],
+  }),
+  claimedPresence: one(presence, {
+    fields: [meshTask.claimedByPresence],
+    references: [presence.id],
+  }),
+}));
+
+export const meshStreamRelations = relations(meshStream, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [meshStream.meshId],
+    references: [mesh.id],
+  }),
+}));
+
+export const selectMeshStreamSchema = createSelectSchema(meshStream);
+export const insertMeshStreamSchema = createInsertSchema(meshStream);
+export type SelectMeshStream = typeof meshStream.$inferSelect;
+export type InsertMeshStream = typeof meshStream.$inferInsert;

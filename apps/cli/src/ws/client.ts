@@ -415,6 +415,19 @@ export class BrokerClient {
   private fileUrlResolvers: Array<(result: { url: string; name: string } | null) => void> = [];
   private fileListResolvers: Array<(files: Array<{ id: string; name: string; size: number; tags: string[]; uploadedBy: string; uploadedAt: string; persistent: boolean }>) => void> = [];
   private fileStatusResolvers: Array<(accesses: Array<{ peerName: string; accessedAt: string }>) => void> = [];
+  private vectorStoredResolvers: Array<(id: string | null) => void> = [];
+  private vectorResultsResolvers: Array<(results: Array<{ id: string; text: string; score: number; metadata?: Record<string, unknown> }>) => void> = [];
+  private collectionListResolvers: Array<(collections: string[]) => void> = [];
+  private graphResultResolvers: Array<(rows: Array<Record<string, unknown>>) => void> = [];
+  private contextListResolvers: Array<(contexts: Array<{ peerName: string; summary: string; tags: string[]; updatedAt: string }>) => void> = [];
+  private contextResultsResolvers: Array<(contexts: Array<{ peerName: string; summary: string; filesRead: string[]; keyFindings: string[]; tags: string[]; updatedAt: string }>) => void> = [];
+  private taskCreatedResolvers: Array<(id: string | null) => void> = [];
+  private taskListResolvers: Array<(tasks: Array<{ id: string; title: string; assignee: string; status: string; priority: string; createdBy: string }>) => void> = [];
+  private meshQueryResolvers: Array<(result: { columns: string[]; rows: Array<Record<string, unknown>>; rowCount: number } | null) => void> = [];
+  private meshSchemaResolvers: Array<(tables: Array<{ name: string; columns: Array<{ name: string; type: string; nullable: boolean }> }>) => void> = [];
+  private streamCreatedResolvers: Array<(id: string | null) => void> = [];
+  private streamListResolvers: Array<(streams: Array<{ id: string; name: string; createdBy: string; subscriberCount: number }>) => void> = [];
+  private streamDataHandlers = new Set<(data: { stream: string; data: unknown; publishedBy: string }) => void>();
 
   async messageStatus(messageId: string): Promise<{ messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
@@ -517,10 +530,260 @@ export class BrokerClient {
     return body.fileId ?? null;
   }
 
+  // --- Vectors ---
+
+  /** Store an embedding in a per-mesh Qdrant collection. */
+  async vectorStore(collection: string, text: string, metadata?: Record<string, unknown>): Promise<string | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      this.vectorStoredResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "vector_store", collection, text, metadata }));
+      setTimeout(() => {
+        const idx = this.vectorStoredResolvers.indexOf(resolve);
+        if (idx !== -1) { this.vectorStoredResolvers.splice(idx, 1); resolve(null); }
+      }, 5_000);
+    });
+  }
+
+  /** Semantic search over stored embeddings. */
+  async vectorSearch(collection: string, query: string, limit?: number): Promise<Array<{ id: string; text: string; score: number; metadata?: Record<string, unknown> }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.vectorResultsResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "vector_search", collection, query, limit }));
+      setTimeout(() => {
+        const idx = this.vectorResultsResolvers.indexOf(resolve);
+        if (idx !== -1) { this.vectorResultsResolvers.splice(idx, 1); resolve([]); }
+      }, 5_000);
+    });
+  }
+
+  /** Remove an embedding from a collection. */
+  async vectorDelete(collection: string, id: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "vector_delete", collection, id }));
+  }
+
+  /** List vector collections in this mesh. */
+  async listCollections(): Promise<string[]> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.collectionListResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "list_collections" }));
+      setTimeout(() => {
+        const idx = this.collectionListResolvers.indexOf(resolve);
+        if (idx !== -1) { this.collectionListResolvers.splice(idx, 1); resolve([]); }
+      }, 5_000);
+    });
+  }
+
+  // --- Graph ---
+
+  /** Run a read query on the per-mesh Neo4j database. */
+  async graphQuery(cypher: string): Promise<Array<Record<string, unknown>>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.graphResultResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "graph_query", cypher }));
+      setTimeout(() => {
+        const idx = this.graphResultResolvers.indexOf(resolve);
+        if (idx !== -1) { this.graphResultResolvers.splice(idx, 1); resolve([]); }
+      }, 5_000);
+    });
+  }
+
+  /** Run a write query (CREATE, MERGE, DELETE) on the per-mesh Neo4j database. */
+  async graphExecute(cypher: string): Promise<Array<Record<string, unknown>>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.graphResultResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "graph_execute", cypher }));
+      setTimeout(() => {
+        const idx = this.graphResultResolvers.indexOf(resolve);
+        if (idx !== -1) { this.graphResultResolvers.splice(idx, 1); resolve([]); }
+      }, 5_000);
+    });
+  }
+
+  // --- Context ---
+
+  /** Share session understanding with the mesh. */
+  async shareContext(summary: string, filesRead?: string[], keyFindings?: string[], tags?: string[]): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "share_context", summary, filesRead, keyFindings, tags }));
+  }
+
+  /** Find context from peers who explored an area. */
+  async getContext(query: string): Promise<Array<{ peerName: string; summary: string; filesRead: string[]; keyFindings: string[]; tags: string[]; updatedAt: string }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.contextResultsResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "get_context", query }));
+      setTimeout(() => {
+        const idx = this.contextResultsResolvers.indexOf(resolve);
+        if (idx !== -1) { this.contextResultsResolvers.splice(idx, 1); resolve([]); }
+      }, 5_000);
+    });
+  }
+
+  /** See what all peers currently know. */
+  async listContexts(): Promise<Array<{ peerName: string; summary: string; tags: string[]; updatedAt: string }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.contextListResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "list_contexts" }));
+      setTimeout(() => {
+        const idx = this.contextListResolvers.indexOf(resolve);
+        if (idx !== -1) { this.contextListResolvers.splice(idx, 1); resolve([]); }
+      }, 5_000);
+    });
+  }
+
+  // --- Tasks ---
+
+  /** Create a work item. */
+  async createTask(title: string, assignee?: string, priority?: string, tags?: string[]): Promise<string | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      this.taskCreatedResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "create_task", title, assignee, priority, tags }));
+      setTimeout(() => {
+        const idx = this.taskCreatedResolvers.indexOf(resolve);
+        if (idx !== -1) { this.taskCreatedResolvers.splice(idx, 1); resolve(null); }
+      }, 5_000);
+    });
+  }
+
+  /** Claim an unclaimed task. */
+  async claimTask(id: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "claim_task", id }));
+  }
+
+  /** Mark a task done with optional result. */
+  async completeTask(id: string, result?: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "complete_task", id, result }));
+  }
+
+  /** List tasks filtered by status/assignee. */
+  async listTasks(status?: string, assignee?: string): Promise<Array<{ id: string; title: string; assignee: string; status: string; priority: string; createdBy: string }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.taskListResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "list_tasks", status, assignee }));
+      setTimeout(() => {
+        const idx = this.taskListResolvers.indexOf(resolve);
+        if (idx !== -1) { this.taskListResolvers.splice(idx, 1); resolve([]); }
+      }, 5_000);
+    });
+  }
+
+  // --- Mesh Database ---
+
+  /** Run a SELECT query on the per-mesh shared database. */
+  async meshQuery(sql: string): Promise<{ columns: string[]; rows: Array<Record<string, unknown>>; rowCount: number } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      this.meshQueryResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "mesh_query", sql }));
+      setTimeout(() => {
+        const idx = this.meshQueryResolvers.indexOf(resolve);
+        if (idx !== -1) { this.meshQueryResolvers.splice(idx, 1); resolve(null); }
+      }, 5_000);
+    });
+  }
+
+  /** Run DDL/DML on the per-mesh database (CREATE TABLE, INSERT, UPDATE, DELETE). */
+  async meshExecute(sql: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "mesh_execute", sql }));
+  }
+
+  /** List tables and columns in the per-mesh shared database. */
+  async meshSchema(): Promise<Array<{ name: string; columns: Array<{ name: string; type: string; nullable: boolean }> }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.meshSchemaResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "mesh_schema" }));
+      setTimeout(() => {
+        const idx = this.meshSchemaResolvers.indexOf(resolve);
+        if (idx !== -1) { this.meshSchemaResolvers.splice(idx, 1); resolve([]); }
+      }, 5_000);
+    });
+  }
+
+  // --- Streams ---
+
+  /** Create a real-time data stream in the mesh. */
+  async createStream(name: string): Promise<string | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      this.streamCreatedResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "create_stream", name }));
+      setTimeout(() => {
+        const idx = this.streamCreatedResolvers.indexOf(resolve);
+        if (idx !== -1) { this.streamCreatedResolvers.splice(idx, 1); resolve(null); }
+      }, 5_000);
+    });
+  }
+
+  /** Push data to a stream. Subscribers receive it in real-time. */
+  async publish(stream: string, data: unknown): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "publish", stream, data }));
+  }
+
+  /** Subscribe to a stream. Data pushes arrive via onStreamData handler. */
+  async subscribe(stream: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "subscribe", stream }));
+  }
+
+  /** Unsubscribe from a stream. */
+  async unsubscribe(stream: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "unsubscribe", stream }));
+  }
+
+  /** List active streams in the mesh. */
+  async listStreams(): Promise<Array<{ id: string; name: string; createdBy: string; subscriberCount: number }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.streamListResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "list_streams" }));
+      setTimeout(() => {
+        const idx = this.streamListResolvers.indexOf(resolve);
+        if (idx !== -1) { this.streamListResolvers.splice(idx, 1); resolve([]); }
+      }, 5_000);
+    });
+  }
+
+  /** Subscribe to stream data pushes. Returns an unsubscribe function. */
+  onStreamData(handler: (data: { stream: string; data: unknown; publishedBy: string }) => void): () => void {
+    this.streamDataHandlers.add(handler);
+    return () => this.streamDataHandlers.delete(handler);
+  }
+
   /** Subscribe to state change notifications. Returns an unsubscribe function. */
   onStateChange(handler: (change: { key: string; value: unknown; updatedBy: string }) => void): () => void {
     this.stateChangeHandlers.add(handler);
     return () => this.stateChangeHandlers.delete(handler);
+  }
+
+  // --- Mesh info ---
+  private meshInfoResolvers: Array<(result: Record<string, unknown> | null) => void> = [];
+
+  async meshInfo(): Promise<Record<string, unknown> | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      this.meshInfoResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "mesh_info" }));
+      setTimeout(() => {
+        const idx = this.meshInfoResolvers.indexOf(resolve);
+        if (idx !== -1) { this.meshInfoResolvers.splice(idx, 1); resolve(null); }
+      }, 5_000);
+    });
   }
 
   close(): void {
@@ -696,6 +959,100 @@ export class BrokerClient {
       const accesses = (msg.accesses as Array<{ peerName: string; accessedAt: string }>) ?? [];
       const resolver = this.fileStatusResolvers.shift();
       if (resolver) resolver(accesses);
+      return;
+    }
+    if (msg.type === "vector_stored") {
+      const resolver = this.vectorStoredResolvers.shift();
+      if (resolver) resolver(msg.id ? String(msg.id) : null);
+      return;
+    }
+    if (msg.type === "vector_results") {
+      const results = (msg.results as Array<{ id: string; text: string; score: number; metadata?: Record<string, unknown> }>) ?? [];
+      const resolver = this.vectorResultsResolvers.shift();
+      if (resolver) resolver(results);
+      return;
+    }
+    if (msg.type === "collection_list") {
+      const collections = (msg.collections as string[]) ?? [];
+      const resolver = this.collectionListResolvers.shift();
+      if (resolver) resolver(collections);
+      return;
+    }
+    if (msg.type === "graph_result") {
+      const rows = (msg.rows as Array<Record<string, unknown>>) ?? [];
+      const resolver = this.graphResultResolvers.shift();
+      if (resolver) resolver(rows);
+      return;
+    }
+    if (msg.type === "context_list") {
+      const contexts = (msg.contexts as Array<{ peerName: string; summary: string; tags: string[]; updatedAt: string }>) ?? [];
+      const resolver = this.contextListResolvers.shift();
+      if (resolver) resolver(contexts);
+      return;
+    }
+    if (msg.type === "context_results") {
+      const contexts = (msg.contexts as Array<{ peerName: string; summary: string; filesRead: string[]; keyFindings: string[]; tags: string[]; updatedAt: string }>) ?? [];
+      const resolver = this.contextResultsResolvers.shift();
+      if (resolver) resolver(contexts);
+      return;
+    }
+    if (msg.type === "task_created") {
+      const resolver = this.taskCreatedResolvers.shift();
+      if (resolver) resolver(msg.id ? String(msg.id) : null);
+      return;
+    }
+    if (msg.type === "task_list") {
+      const tasks = (msg.tasks as Array<{ id: string; title: string; assignee: string; status: string; priority: string; createdBy: string }>) ?? [];
+      const resolver = this.taskListResolvers.shift();
+      if (resolver) resolver(tasks);
+      return;
+    }
+    if (msg.type === "mesh_query_result") {
+      const resolver = this.meshQueryResolvers.shift();
+      if (resolver) {
+        if (msg.columns) {
+          resolver({
+            columns: (msg.columns as string[]) ?? [],
+            rows: (msg.rows as Array<Record<string, unknown>>) ?? [],
+            rowCount: (msg.rowCount as number) ?? 0,
+          });
+        } else {
+          resolver(null);
+        }
+      }
+      return;
+    }
+    if (msg.type === "mesh_schema_result") {
+      const tables = (msg.tables as Array<{ name: string; columns: Array<{ name: string; type: string; nullable: boolean }> }>) ?? [];
+      const resolver = this.meshSchemaResolvers.shift();
+      if (resolver) resolver(tables);
+      return;
+    }
+    if (msg.type === "stream_created") {
+      const resolver = this.streamCreatedResolvers.shift();
+      if (resolver) resolver(msg.id ? String(msg.id) : null);
+      return;
+    }
+    if (msg.type === "stream_list") {
+      const streams = (msg.streams as Array<{ id: string; name: string; createdBy: string; subscriberCount: number }>) ?? [];
+      const resolver = this.streamListResolvers.shift();
+      if (resolver) resolver(streams);
+      return;
+    }
+    if (msg.type === "stream_data") {
+      const evt = {
+        stream: String(msg.stream ?? ""),
+        data: msg.data,
+        publishedBy: String(msg.publishedBy ?? ""),
+      };
+      for (const h of this.streamDataHandlers) {
+        try { h(evt); } catch { /* handler errors are not the transport's problem */ }
+      }
+      return;
+    }
+    if (msg.type === "mesh_info_result") {
+      const resolver = this.meshInfoResolvers.shift();
+      if (resolver) resolver(msg as Record<string, unknown>);
       return;
     }
     if (msg.type === "error") {
