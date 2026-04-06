@@ -722,54 +722,56 @@ Your message mode is "${messageMode}".
   // any mesh's broker connection becomes a <channel source="claudemesh">
   // system reminder injected into Claude Code's context.
   for (const client of allClients()) {
-    client.onPush(async (msg) => {
-      // In "off" mode, silently skip notification — messages are still
-      // buffered in pushBuffer and accessible via check_messages.
-      if (messageMode === "off") return;
+    // Poll-based push: drain pushBuffer every 1s and emit channel notifications.
+    // This is the proven approach from claude-intercom. The WS onPush handler
+    // fires instantly but server.notification() may not flush stdio reliably
+    // from an async WS callback. Polling on a timer ensures consistent delivery.
+    if (messageMode !== "off") {
+      const pushPollTimer = setInterval(async () => {
+        const buffered = client.drainPushBuffer();
+        for (const msg of buffered) {
+          const fromPubkey = msg.senderPubkey || "";
+          const fromName = fromPubkey
+            ? await resolvePeerName(client, fromPubkey)
+            : "unknown";
 
-      const fromPubkey = msg.senderPubkey || "";
-      // Resolve sender's display name from the cached peer list.
-      const fromName = fromPubkey
-        ? await resolvePeerName(client, fromPubkey)
-        : "unknown";
+          if (messageMode === "inbox") {
+            try {
+              await server.notification({
+                method: "notifications/claude/channel",
+                params: {
+                  content: `[inbox] New message from ${fromName}. Use check_messages to read.`,
+                  meta: { kind: "inbox_notification", from_name: fromName },
+                },
+              });
+            } catch { /* best effort */ }
+            continue;
+          }
 
-      if (messageMode === "inbox") {
-        // Count-only notification, no content
-        try {
-          await server.notification({
-            method: "notifications/claude/channel",
-            params: {
-              content: `[inbox] New message from ${fromName}. Use check_messages to read.`,
-              meta: { kind: "inbox_notification", from_name: fromName },
-            },
-          });
-        } catch { /* best effort */ }
-        return;
-      }
-
-      // push mode — full content notification
-      const content = msg.plaintext ?? decryptFailedWarning(fromPubkey);
-      try {
-        await server.notification({
-          method: "notifications/claude/channel",
-          params: {
-            content,
-            meta: {
-              from_id: fromPubkey,
-              from_name: fromName,
-              mesh_slug: client.meshSlug,
-              mesh_id: client.meshId,
-              priority: msg.priority,
-              sent_at: msg.createdAt,
-              delivered_at: msg.receivedAt,
-              kind: msg.kind,
-            },
-          },
-        });
-      } catch {
-        /* channel push is best-effort; check_messages is the fallback */
-      }
-    });
+          // push mode — full content
+          const content = msg.plaintext ?? decryptFailedWarning(fromPubkey);
+          try {
+            await server.notification({
+              method: "notifications/claude/channel",
+              params: {
+                content,
+                meta: {
+                  from_id: fromPubkey,
+                  from_name: fromName,
+                  mesh_slug: client.meshSlug,
+                  mesh_id: client.meshId,
+                  priority: msg.priority,
+                  sent_at: msg.createdAt,
+                  delivered_at: msg.receivedAt,
+                  kind: msg.kind,
+                },
+              },
+            });
+          } catch { /* best effort */ }
+        }
+      }, 1_000);
+      pushPollTimer.unref();
+    }
 
     client.onStreamData(async (evt) => {
       try {
