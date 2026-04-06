@@ -45,7 +45,7 @@ export const Features = () => {
             style={{ fontFamily: "var(--cm-font-mono)" }}
           >
             <span className="text-[var(--cm-clay)]">$</span>
-            <span>curl -fsSL claudemesh.sh/install | bash</span>
+            <span>curl -fsSL claudemesh.com/install | bash</span>
             <button
               className="ml-2 rounded border border-[var(--cm-border)] px-1.5 py-0.5 text-[10px] text-[var(--cm-fg-tertiary)] transition-colors hover:border-[var(--cm-fg)] hover:text-[var(--cm-fg)]"
               aria-label="Copy"

@@ -242,7 +242,7 @@ const USE_CASES: UseCase[] = [
     title: "Bug Alice fixed, Bob rediscovers",
     before:
       "Alice in payments-api fixes a Stripe signature bug. Two weeks later, Bob in checkout-frontend hits the same thing. Alice's fix is buried in a PR thread. Bob re-solves it for three hours.",
-    now: "Bob's Claude asks the mesh: who's seen this? Alice's Claude self-nominates with context. Bob solves in ten minutes. Alice isn't interrupted — her Claude surfaces the history on its own.",
+    now: "Bob's Claude asks the mesh: who's seen this? Alice's Claude volunteers with context. Bob solves in ten minutes. Alice isn't interrupted — her Claude shares the history on its own.",
     limits:
       "Each Claude stays inside its own repo. Nobody's reading anyone else's files. Information flows at the agent layer, with a human still on the PR.",
   },
