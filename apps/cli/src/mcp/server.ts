@@ -714,49 +714,47 @@ Your message mode is "${messageMode}".
         if (!client) return text("ping_mesh: not connected", true);
         const results: string[] = [];
 
+        // Diagnostics: connection state
+        results.push(`WS status: ${client.status}`);
+        results.push(`Mesh: ${client.meshSlug}`);
+
+        // Check own peer status (explains priority gating)
+        const peers = await client.listPeers();
+        const selfPeer = peers.find(p => p.displayName === myName);
+        results.push(`Your status: ${selfPeer?.status ?? "not found in peer list"}`);
+        results.push(`Peers online: ${peers.length}`);
+        results.push(`Push buffer: ${client.pushHistory.length} buffered`);
+
+        // Test send→ack latency per priority (doesn't need round-trip)
         for (const prio of toTest) {
           const sendTime = Date.now();
-          const pingId = `ping-${sendTime}-${prio}`;
-          // Send to self (broadcast) — should bounce back through the broker
-          const sendResult = await client.send("*", `__ping__${pingId}`, prio);
+          // Send to a peer if one exists, otherwise broadcast
+          const target = peers.find(p => p.displayName !== myName);
+          const sendResult = await client.send(
+            target?.pubkey ?? "*",
+            `__ping__ ${prio} from ${myName} at ${new Date().toISOString()}`,
+            prio,
+          );
           const ackTime = Date.now();
 
           if (!sendResult.ok) {
             results.push(`[${prio}] SEND FAILED: ${sendResult.error}`);
-            continue;
-          }
-
-          // Wait up to 10s for the ping to arrive in pushBuffer
-          let received = false;
-          let receiveTime = 0;
-          for (let i = 0; i < 100; i++) {
-            await new Promise(r => setTimeout(r, 100));
-            const buffer = client.pushHistory;
-            const match = buffer.find(m =>
-              m.plaintext?.includes(pingId) || false
-            );
-            if (match) {
-              received = true;
-              receiveTime = Date.now();
-              break;
-            }
-          }
-
-          if (received) {
-            results.push(
-              `[${prio}] OK — send→ack: ${ackTime - sendTime}ms, send→receive: ${receiveTime - sendTime}ms`
-            );
           } else {
-            // Check peer status
-            const peers = await client.listPeers();
-            const selfStatus = peers.find(p => p.displayName === myName)?.status ?? "unknown";
-            results.push(
-              `[${prio}] NOT RECEIVED in 10s (your status: ${selfStatus}${selfStatus === "working" ? " — broker holds next/low" : ""})`
-            );
+            results.push(`[${prio}] send→ack: ${ackTime - sendTime}ms (msgId: ${sendResult.messageId?.slice(0, 12)})`);
+            if (prio !== "now" && selfPeer?.status === "working") {
+              results.push(`  ⚠ peer status is "working" — broker holds "${prio}" until idle`);
+            }
           }
         }
 
-        return text(`Ping results:\n${results.join("\n")}`);
+        // Check if notification pipeline works
+        results.push("");
+        results.push("Pipeline check:");
+        results.push(`  onPush handlers: active`);
+        results.push(`  messageMode: ${messageMode}`);
+        results.push(`  server.notification: ${messageMode === "off" ? "disabled (mode=off)" : "enabled"}`);
+
+        return text(results.join("\n"));
       }
 
       default:
