@@ -855,7 +855,63 @@ The broker:
 
 ---
 
-## 13. Encryption
+## 13. Claude Code Integration — How Push Delivery Works
+
+Understanding how Claude Code processes channel notifications is critical for claudemesh reliability.
+
+### The notification pipeline
+
+```
+MCP server (claudemesh-cli)
+  └─ server.notification("notifications/claude/channel", { content, meta })
+      └─ writes JSON-RPC to stdout
+          └─ Claude Code reads from MCP process stdout
+              └─ setNotificationHandler fires
+                  └─ enqueue({ mode: "prompt", value: wrappedContent, origin: { kind: "channel" } })
+                      └─ React useSyncExternalStore triggers re-render
+                          └─ useQueueProcessor effect fires
+                              └─ processQueueIfReady() → executeInput()
+                                  └─ Claude sees ← claudemesh: ...
+```
+
+### Key requirements (from Claude Code source)
+
+1. **Feature gate**: `feature('KAIROS') || feature('KAIROS_CHANNELS')` must be true. `KAIROS_CHANNELS` is external (GrowthBook). `--dangerously-load-development-channels` sets `entry.dev = true` which bypasses the allowlist check but still requires the feature gate.
+
+2. **OAuth auth required**: Channel notifications require `claude.ai` authentication (OAuth tokens). API key users are blocked. This means `claude login --for-claude-ai` must have been run.
+
+3. **Server name must match**: The MCP server's declared name (`new Server({ name: "claudemesh" })`) must match the channel entry from `--dangerously-load-development-channels server:claudemesh`.
+
+4. **Meta keys**: Must match `/^[a-zA-Z_][a-zA-Z0-9_]*$/`. No hyphens. All values must be strings.
+
+5. **Capability declaration**: Server must declare `experimental: { "claude/channel": {} }` in capabilities.
+
+6. **Queue processing is event-driven**: `enqueue()` triggers a React store update → `useEffect` fires → processes immediately. No polling needed on the Claude Code side. The 1s poll timer in claudemesh is for draining the WS push buffer into notifications — Claude Code handles the rest instantly.
+
+### Priority gating on the broker
+
+The broker holds `"next"` and `"low"` priority messages when the peer's status is `"working"`. Only `"now"` messages deliver immediately regardless of status. This is by design — but can cause perceived "push not working" when the hook reports `working` status.
+
+```
+Status: idle    → delivers: now, next, low
+Status: working → delivers: now only
+Status: dnd     → delivers: now only
+```
+
+If a peer appears to not receive messages, check their status in `list_peers`. A peer stuck in `"working"` (e.g., stale hook) will only receive `"now"` priority messages.
+
+### Common issues
+
+| Symptom | Likely cause |
+|---------|-------------|
+| Messages never arrive | Session started before CLI update — restart with `claudemesh launch` |
+| Messages arrive with 5+ minute delay | Peer status stuck on `"working"` — `next` messages held until idle |
+| `← claudemesh:` never appears in idle session | Feature gate `KAIROS_CHANNELS` not enabled, or not OAuth-authenticated |
+| Messages arrive only on `check_messages` | Channel handler not registered — check `--dangerously-load-development-channels` flag |
+
+---
+
+## 14. Encryption
 
 ### Direct messages
 

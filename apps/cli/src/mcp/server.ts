@@ -722,62 +722,56 @@ Your message mode is "${messageMode}".
   // any mesh's broker connection becomes a <channel source="claudemesh">
   // system reminder injected into Claude Code's context.
   for (const client of allClients()) {
-    // Poll-based push: drain pushBuffer every 1s and emit channel notifications.
-    // This is the proven approach from claude-intercom. The WS onPush handler
-    // fires instantly but server.notification() may not flush stdio reliably
-    // from an async WS callback. Polling on a timer ensures consistent delivery.
-    if (messageMode !== "off") {
-      const pushPollTimer = setInterval(async () => {
-        const buffered = client.drainPushBuffer();
-        if (buffered.length > 0) {
-          process.stderr.write(`[claudemesh] poll: ${buffered.length} message(s) to push\n`);
-        }
-        for (const msg of buffered) {
-          const fromPubkey = msg.senderPubkey || "";
-          const fromName = fromPubkey
-            ? await resolvePeerName(client, fromPubkey)
-            : "unknown";
+    // Event-driven push: WS onPush fires immediately when a message arrives.
+    // Claude Code's setNotificationHandler → enqueue → React useEffect pipeline
+    // processes notifications instantly (no polling needed on Claude's side).
+    // The old poll-based approach was an overcorrection — Claude Code source
+    // confirms event-driven notification processing.
+    client.onPush(async (msg) => {
+      if (messageMode === "off") return;
 
-          if (messageMode === "inbox") {
-            try {
-              await server.notification({
-                method: "notifications/claude/channel",
-                params: {
-                  content: `[inbox] New message from ${fromName}. Use check_messages to read.`,
-                  meta: { kind: "inbox_notification", from_name: fromName },
-                },
-              });
-            } catch { /* best effort */ }
-            continue;
-          }
+      const fromPubkey = msg.senderPubkey || "";
+      const fromName = fromPubkey
+        ? await resolvePeerName(client, fromPubkey)
+        : "unknown";
 
-          // push mode — full content
-          const content = msg.plaintext ?? decryptFailedWarning(fromPubkey);
-          try {
-            await server.notification({
-              method: "notifications/claude/channel",
-              params: {
-                content,
-                meta: {
-                  from_id: fromPubkey,
-                  from_name: fromName,
-                  mesh_slug: client.meshSlug,
-                  mesh_id: client.meshId,
-                  priority: msg.priority,
-                  sent_at: msg.createdAt,
-                  delivered_at: msg.receivedAt,
-                  kind: msg.kind,
-                },
-              },
-            });
-            process.stderr.write(`[claudemesh] pushed: from=${fromName} content=${content.slice(0, 60)}\n`);
-          } catch (pushErr) {
-            process.stderr.write(`[claudemesh] push FAILED: ${pushErr}\n`);
-          }
-        }
-      }, 1_000);
-      pushPollTimer.unref();
-    }
+      if (messageMode === "inbox") {
+        try {
+          await server.notification({
+            method: "notifications/claude/channel",
+            params: {
+              content: `[inbox] New message from ${fromName}. Use check_messages to read.`,
+              meta: { kind: "inbox_notification", from_name: fromName },
+            },
+          });
+        } catch { /* best effort */ }
+        return;
+      }
+
+      // push mode — full content
+      const content = msg.plaintext ?? decryptFailedWarning(fromPubkey);
+      try {
+        await server.notification({
+          method: "notifications/claude/channel",
+          params: {
+            content,
+            meta: {
+              from_id: fromPubkey,
+              from_name: fromName,
+              mesh_slug: client.meshSlug,
+              mesh_id: client.meshId,
+              priority: msg.priority,
+              sent_at: msg.createdAt,
+              delivered_at: msg.receivedAt,
+              kind: msg.kind,
+            },
+          },
+        });
+        process.stderr.write(`[claudemesh] pushed: from=${fromName} content=${content.slice(0, 60)}\n`);
+      } catch (pushErr) {
+        process.stderr.write(`[claudemesh] push FAILED: ${pushErr}\n`);
+      }
+    });
 
     client.onStreamData(async (evt) => {
       try {
