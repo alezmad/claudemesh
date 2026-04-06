@@ -1,5 +1,6 @@
 import { relations } from "drizzle-orm";
 import {
+  boolean,
   integer,
   jsonb,
   pgSchema,
@@ -289,6 +290,43 @@ export const meshMemory = meshSchema.table("memory", {
   forgottenAt: timestamp(),
 });
 
+/**
+ * File metadata for shared files in a mesh. Actual bytes live in MinIO;
+ * this table tracks ownership, access control, and soft-deletion.
+ */
+export const meshFile = meshSchema.table("file", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  meshId: text()
+    .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .notNull(),
+  name: text().notNull(),
+  sizeBytes: integer().notNull(),
+  mimeType: text(),
+  minioKey: text().notNull(),
+  tags: text().array().default([]),
+  persistent: boolean().notNull().default(true),
+  uploadedByName: text(),
+  uploadedByMember: text().references(() => meshMember.id),
+  targetSpec: text(), // null = entire mesh
+  uploadedAt: timestamp().defaultNow().notNull(),
+  expiresAt: timestamp(),
+  deletedAt: timestamp(),
+});
+
+/**
+ * Access log for file downloads. Tracks which peer accessed which file
+ * and when, for auditability and read-receipt semantics.
+ */
+export const meshFileAccess = meshSchema.table("file_access", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  fileId: text()
+    .references(() => meshFile.id, { onDelete: "cascade" })
+    .notNull(),
+  peerSessionPubkey: text(),
+  peerName: text(),
+  accessedAt: timestamp().defaultNow().notNull(),
+});
+
 export const meshRelations = relations(mesh, ({ one, many }) => ({
   owner: one(user, {
     fields: [mesh.ownerUserId],
@@ -367,6 +405,25 @@ export const meshMemoryRelations = relations(meshMemory, ({ one }) => ({
   }),
 }));
 
+export const meshFileRelations = relations(meshFile, ({ one, many }) => ({
+  mesh: one(mesh, {
+    fields: [meshFile.meshId],
+    references: [mesh.id],
+  }),
+  uploader: one(meshMember, {
+    fields: [meshFile.uploadedByMember],
+    references: [meshMember.id],
+  }),
+  accesses: many(meshFileAccess),
+}));
+
+export const meshFileAccessRelations = relations(meshFileAccess, ({ one }) => ({
+  file: one(meshFile, {
+    fields: [meshFileAccess.fileId],
+    references: [meshFile.id],
+  }),
+}));
+
 export const selectMeshSchema = createSelectSchema(mesh);
 export const insertMeshSchema = createInsertSchema(mesh);
 export const selectMemberSchema = createSelectSchema(meshMember);
@@ -404,3 +461,11 @@ export type SelectMeshState = typeof meshState.$inferSelect;
 export type InsertMeshState = typeof meshState.$inferInsert;
 export type SelectMeshMemory = typeof meshMemory.$inferSelect;
 export type InsertMeshMemory = typeof meshMemory.$inferInsert;
+export const selectMeshFileSchema = createSelectSchema(meshFile);
+export const insertMeshFileSchema = createInsertSchema(meshFile);
+export const selectMeshFileAccessSchema = createSelectSchema(meshFileAccess);
+export const insertMeshFileAccessSchema = createInsertSchema(meshFileAccess);
+export type SelectMeshFile = typeof meshFile.$inferSelect;
+export type InsertMeshFile = typeof meshFile.$inferInsert;
+export type SelectMeshFileAccess = typeof meshFileAccess.$inferSelect;
+export type InsertMeshFileAccess = typeof meshFileAccess.$inferInsert;

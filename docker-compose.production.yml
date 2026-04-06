@@ -28,6 +28,26 @@ services:
     networks:
       - claudemesh-internal
 
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    restart: always
+    volumes:
+      - minio-data:/data
+    environment:
+      MINIO_ROOT_USER: claudemesh
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-changeme}
+    expose:
+      - "9000"
+    networks:
+      - claudemesh-internal
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
   broker:
     image: ${BROKER_IMAGE:-claudemesh-broker:latest}
     restart: always
@@ -40,11 +60,18 @@ services:
       MAX_CONNECTIONS_PER_MESH: ${MAX_CONNECTIONS_PER_MESH:-100}
       MAX_MESSAGE_BYTES: ${MAX_MESSAGE_BYTES:-65536}
       HOOK_RATE_LIMIT_PER_MIN: ${HOOK_RATE_LIMIT_PER_MIN:-30}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: claudemesh
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-changeme}
+      MINIO_USE_SSL: "false"
     expose:
       - "7900"
     networks:
       - coolify
       - claudemesh-internal
+    depends_on:
+      minio:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://localhost:7900/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"]
       interval: 15s
@@ -84,6 +111,9 @@ services:
       timeout: 5s
       start_period: 20s
       retries: 3
+
+volumes:
+  minio-data:
 
 networks:
   # Coolify's shared Traefik network — must already exist on the host

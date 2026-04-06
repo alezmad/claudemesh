@@ -17,8 +17,11 @@ export const TOOLS: Tool[] = [
       type: "object",
       properties: {
         to: {
-          type: "string",
-          description: "Peer name, pubkey, @group, or #channel",
+          oneOf: [
+            { type: "string", description: "Peer name, pubkey, @group" },
+            { type: "array", items: { type: "string" }, description: "Multiple targets" },
+          ],
+          description: "Single target or array of targets",
         },
         message: { type: "string", description: "Message text" },
         priority: {
@@ -191,6 +194,77 @@ export const TOOLS: Tool[] = [
       type: "object",
       properties: {
         id: { type: "string", description: "Memory ID to forget" },
+      },
+      required: ["id"],
+    },
+  },
+
+  // --- File tools ---
+  {
+    name: "share_file",
+    description:
+      "Share a persistent file with the mesh. All current and future peers can access it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Local file path to share" },
+        name: {
+          type: "string",
+          description: "Display name (defaults to filename)",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags for categorization",
+        },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    name: "get_file",
+    description: "Download a shared file to a local path.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "File ID" },
+        save_to: {
+          type: "string",
+          description: "Local path to save the file",
+        },
+      },
+      required: ["id", "save_to"],
+    },
+  },
+  {
+    name: "list_files",
+    description: "List files shared in the mesh.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search by name or tags" },
+        from: { type: "string", description: "Filter by uploader name" },
+      },
+    },
+  },
+  {
+    name: "file_status",
+    description: "Check who has accessed a shared file.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "File ID" },
+      },
+      required: ["id"],
+    },
+  },
+  {
+    name: "delete_file",
+    description: "Remove a shared file from the mesh.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "File ID" },
       },
       required: ["id"],
     },

@@ -20,6 +20,10 @@ const envSchema = z.object({
   MAX_CONNECTIONS_PER_MESH: z.coerce.number().int().positive().default(100),
   MAX_MESSAGE_BYTES: z.coerce.number().int().positive().default(65_536),
   HOOK_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(30),
+  MINIO_ENDPOINT: z.string().default("minio:9000"),
+  MINIO_ACCESS_KEY: z.string().default("claudemesh"),
+  MINIO_SECRET_KEY: z.string().default("changeme"),
+  MINIO_USE_SSL: z.coerce.boolean().default(false),
   NODE_ENV: z
     .enum(["development", "production", "test"])
     .default("development"),

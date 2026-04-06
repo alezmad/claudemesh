@@ -161,8 +161,23 @@ When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATEL
 | remember(content, tags?) | Store persistent knowledge with optional tags. |
 | recall(query) | Full-text search over mesh memory. |
 | forget(id) | Soft-delete a memory entry. |
+| share_file(path, name?, tags?) | Share a persistent file with the mesh. |
+| get_file(id, save_to) | Download a shared file to a local path. |
+| list_files(query?, from?) | Find files shared in the mesh. |
+| file_status(id) | Check who has accessed a file. |
+| delete_file(id) | Remove a shared file from the mesh. |
 
 If multiple meshes are joined, prefix \`to\` with \`<mesh-slug>:\` to disambiguate (e.g. \`dev-team:Alice\`).
+
+Multi-target: send_message accepts an array of targets for the 'to' field.
+  send_message(to: ["Alice", "@backend"], message: "sprint starts")
+Targets are deduplicated — each peer receives the message once.
+
+Targeted views: when different audiences need different details about the same event,
+send tailored messages instead of one generic broadcast:
+  send_message(to: "@frontend", message: "Auth v2: useAuth hook changed, see src/auth/")
+  send_message(to: "@backend", message: "Auth v2: new /api/auth/v2 endpoints, v1 deprecated")
+  send_message(to: "@pm", message: "Auth v2 done. 3 points, no blockers.")
 
 ## Groups
 Groups are routing labels. Send to @groupname to multicast to all members. Roles are metadata that peers interpret: a "lead" gathers input before synthesizing a response, a "member" contributes when asked, an "observer" watches silently. Join and leave groups dynamically with join_group/leave_group. Check list_peers to see who belongs to which groups and their roles.
@@ -172,6 +187,10 @@ Shared key-value store scoped to the mesh. Use get_state/set_state for live coor
 
 ## Memory
 Persistent knowledge that survives across sessions. Use remember(content, tags?) to store lessons, decisions, and incidents. Use recall(query) to search before asking peers. New peers should recall at session start to load institutional knowledge.
+
+## Files
+share_file for persistent references, send_message(file:) for ephemeral attachments.
+Tags on shared files make them searchable. Use list_files to find what peers shared.
 
 ## Priority
 - "now": interrupt immediately, even if recipient is in DND (use for urgent: broken deploy, blocking issue)
@@ -201,22 +220,32 @@ Call list_peers at session start to understand who is online, their roles, and w
         const { to, message, priority } = (args ?? {}) as SendMessageArgs;
         if (!to || !message)
           return text("send_message: `to` and `message` required", true);
-        const { client, targetSpec, error } = await resolveClient(to);
-        if (!client)
-          return text(`send_message: ${error ?? "no client resolved"}`, true);
-        const result = await client.send(
-          targetSpec,
-          message,
-          (priority ?? "next") as Priority,
-        );
-        if (!result.ok)
-          return text(
-            `send_message failed (${client.meshSlug}): ${result.error}`,
-            true,
+
+        // Handle multi-target: to can be string or string[]
+        const targets = Array.isArray(to) ? to : [to];
+        const results: string[] = [];
+        const seen = new Set<string>(); // dedup by resolved pubkey
+
+        for (const target of targets) {
+          const { client, targetSpec, error } = await resolveClient(target);
+          if (!client) {
+            results.push(`✗ ${target}: ${error ?? "no client resolved"}`);
+            continue;
+          }
+          if (seen.has(targetSpec)) continue; // dedup
+          seen.add(targetSpec);
+          const result = await client.send(
+            targetSpec,
+            message,
+            (priority ?? "next") as Priority,
           );
-        return text(
-          `Sent to ${targetSpec} via ${client.meshSlug} [${priority ?? "next"}] → ${result.messageId}`,
-        );
+          if (!result.ok) {
+            results.push(`✗ ${target}: ${result.error}`);
+          } else {
+            results.push(`✓ ${target} → ${result.messageId}`);
+          }
+        }
+        return text(results.join("\n"));
       }
 
       case "list_peers": {
@@ -361,6 +390,69 @@ Call list_peers at session start to understand who is online, their roles, and w
         if (!client) return text("forget: not connected", true);
         await client.forget(id);
         return text(`Forgotten: ${id}`);
+      }
+
+      // --- Files ---
+      case "share_file": {
+        const { path: filePath, name: fileName, tags } = (args ?? {}) as { path?: string; name?: string; tags?: string[] };
+        if (!filePath) return text("share_file: `path` required", true);
+        const { existsSync } = await import("node:fs");
+        if (!existsSync(filePath)) return text(`share_file: file not found: ${filePath}`, true);
+        const client = allClients()[0];
+        if (!client) return text("share_file: not connected", true);
+        const fileId = await client.uploadFile(filePath, client.meshId, client.meshSlug, {
+          name: fileName, tags, persistent: true,
+        });
+        if (!fileId) return text("share_file: upload failed", true);
+        return text(`Shared: ${fileName ?? filePath} (${fileId})`);
+      }
+
+      case "get_file": {
+        const { id, save_to } = (args ?? {}) as { id?: string; save_to?: string };
+        if (!id || !save_to) return text("get_file: `id` and `save_to` required", true);
+        const client = allClients()[0];
+        if (!client) return text("get_file: not connected", true);
+        const result = await client.getFile(id);
+        if (!result) return text(`get_file: file ${id} not found`, true);
+        const res = await fetch(result.url, { signal: AbortSignal.timeout(30_000) });
+        if (!res.ok) return text(`get_file: download failed (${res.status})`, true);
+        const { writeFileSync, mkdirSync } = await import("node:fs");
+        const { dirname } = await import("node:path");
+        mkdirSync(dirname(save_to), { recursive: true });
+        writeFileSync(save_to, Buffer.from(await res.arrayBuffer()));
+        return text(`Downloaded: ${result.name} → ${save_to}`);
+      }
+
+      case "list_files": {
+        const { query, from } = (args ?? {}) as { query?: string; from?: string };
+        const client = allClients()[0];
+        if (!client) return text("list_files: not connected", true);
+        const files = await client.listFiles(query, from);
+        if (files.length === 0) return text("No files found.");
+        const lines = files.map(f =>
+          `- **${f.name}** (${f.id.slice(0, 8)}…, ${f.size} bytes) by ${f.uploadedBy}${f.tags.length ? ` [${f.tags.join(", ")}]` : ""}`
+        );
+        return text(lines.join("\n"));
+      }
+
+      case "file_status": {
+        const { id } = (args ?? {}) as { id?: string };
+        if (!id) return text("file_status: `id` required", true);
+        const client = allClients()[0];
+        if (!client) return text("file_status: not connected", true);
+        const accesses = await client.fileStatus(id);
+        if (accesses.length === 0) return text("No one has accessed this file yet.");
+        const lines = accesses.map(a => `- ${a.peerName} at ${a.accessedAt}`);
+        return text(`Accessed by:\n${lines.join("\n")}`);
+      }
+
+      case "delete_file": {
+        const { id } = (args ?? {}) as { id?: string };
+        if (!id) return text("delete_file: `id` required", true);
+        const client = allClients()[0];
+        if (!client) return text("delete_file: not connected", true);
+        await client.deleteFile(id);
+        return text(`Deleted: ${id}`);
       }
 
       default:

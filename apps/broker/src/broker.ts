@@ -32,6 +32,8 @@ import { db } from "./db";
 import {
   invite as inviteTable,
   mesh,
+  meshFile,
+  meshFileAccess,
   meshMember as memberTable,
   meshMemory,
   meshState,
@@ -691,6 +693,198 @@ export async function forgetMemory(
         eq(meshMemory.id, memoryId),
         eq(meshMemory.meshId, meshId),
         isNull(meshMemory.forgottenAt),
+      ),
+    );
+}
+
+// --- File sharing ---
+
+/**
+ * Insert a file metadata row after upload to MinIO.
+ */
+export async function uploadFile(args: {
+  meshId: string;
+  name: string;
+  sizeBytes: number;
+  mimeType?: string;
+  minioKey: string;
+  tags?: string[];
+  persistent?: boolean;
+  uploadedByName?: string;
+  uploadedByMember?: string;
+  targetSpec?: string;
+  expiresAt?: Date;
+}): Promise<string> {
+  const [row] = await db
+    .insert(meshFile)
+    .values({
+      meshId: args.meshId,
+      name: args.name,
+      sizeBytes: args.sizeBytes,
+      mimeType: args.mimeType ?? null,
+      minioKey: args.minioKey,
+      tags: args.tags ?? [],
+      persistent: args.persistent ?? true,
+      uploadedByName: args.uploadedByName ?? null,
+      uploadedByMember: args.uploadedByMember ?? null,
+      targetSpec: args.targetSpec ?? null,
+      expiresAt: args.expiresAt ?? null,
+    })
+    .returning({ id: meshFile.id });
+  if (!row) throw new Error("failed to insert file row");
+  return row.id;
+}
+
+/**
+ * Get a single file by id, check it belongs to the mesh and is not deleted.
+ */
+export async function getFile(
+  meshId: string,
+  fileId: string,
+): Promise<{
+  id: string;
+  name: string;
+  sizeBytes: number;
+  mimeType: string | null;
+  minioKey: string;
+  tags: string[];
+  persistent: boolean;
+  uploadedByName: string | null;
+  targetSpec: string | null;
+  uploadedAt: Date;
+} | null> {
+  const [row] = await db
+    .select({
+      id: meshFile.id,
+      name: meshFile.name,
+      sizeBytes: meshFile.sizeBytes,
+      mimeType: meshFile.mimeType,
+      minioKey: meshFile.minioKey,
+      tags: meshFile.tags,
+      persistent: meshFile.persistent,
+      uploadedByName: meshFile.uploadedByName,
+      targetSpec: meshFile.targetSpec,
+      uploadedAt: meshFile.uploadedAt,
+    })
+    .from(meshFile)
+    .where(
+      and(
+        eq(meshFile.id, fileId),
+        eq(meshFile.meshId, meshId),
+        isNull(meshFile.deletedAt),
+      ),
+    )
+    .limit(1);
+  if (!row) return null;
+  return {
+    ...row,
+    tags: (row.tags ?? []) as string[],
+  };
+}
+
+/**
+ * List files in a mesh. Optionally filter by query (name ILIKE) or uploader.
+ */
+export async function listFiles(
+  meshId: string,
+  query?: string,
+  from?: string,
+): Promise<
+  Array<{
+    id: string;
+    name: string;
+    sizeBytes: number;
+    tags: string[];
+    uploadedBy: string;
+    uploadedAt: Date;
+    persistent: boolean;
+  }>
+> {
+  const conditions = [
+    eq(meshFile.meshId, meshId),
+    isNull(meshFile.deletedAt),
+  ];
+  if (query) {
+    conditions.push(sql`${meshFile.name} ILIKE ${"%" + query + "%"}`);
+  }
+  if (from) {
+    conditions.push(eq(meshFile.uploadedByName, from));
+  }
+  const rows = await db
+    .select({
+      id: meshFile.id,
+      name: meshFile.name,
+      sizeBytes: meshFile.sizeBytes,
+      tags: meshFile.tags,
+      uploadedByName: meshFile.uploadedByName,
+      uploadedAt: meshFile.uploadedAt,
+      persistent: meshFile.persistent,
+    })
+    .from(meshFile)
+    .where(and(...conditions))
+    .orderBy(desc(meshFile.uploadedAt))
+    .limit(100);
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    sizeBytes: r.sizeBytes,
+    tags: (r.tags ?? []) as string[],
+    uploadedBy: r.uploadedByName ?? "unknown",
+    uploadedAt: r.uploadedAt,
+    persistent: r.persistent,
+  }));
+}
+
+/**
+ * Record a file access event (download/presigned URL generation).
+ */
+export async function recordFileAccess(
+  fileId: string,
+  sessionPubkey?: string,
+  peerName?: string,
+): Promise<void> {
+  await db.insert(meshFileAccess).values({
+    fileId,
+    peerSessionPubkey: sessionPubkey ?? null,
+    peerName: peerName ?? null,
+  });
+}
+
+/**
+ * Get access log for a file.
+ */
+export async function getFileStatus(
+  fileId: string,
+): Promise<Array<{ peerName: string; accessedAt: Date }>> {
+  const rows = await db
+    .select({
+      peerName: meshFileAccess.peerName,
+      accessedAt: meshFileAccess.accessedAt,
+    })
+    .from(meshFileAccess)
+    .where(eq(meshFileAccess.fileId, fileId))
+    .orderBy(desc(meshFileAccess.accessedAt));
+  return rows.map((r) => ({
+    peerName: r.peerName ?? "unknown",
+    accessedAt: r.accessedAt,
+  }));
+}
+
+/**
+ * Soft-delete a file by setting deleted_at.
+ */
+export async function deleteFile(
+  meshId: string,
+  fileId: string,
+): Promise<void> {
+  await db
+    .update(meshFile)
+    .set({ deletedAt: new Date() })
+    .where(
+      and(
+        eq(meshFile.id, fileId),
+        eq(meshFile.meshId, meshId),
+        isNull(meshFile.deletedAt),
       ),
     );
 }

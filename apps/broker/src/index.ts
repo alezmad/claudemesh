@@ -21,20 +21,25 @@ import { db } from "./db";
 import { messageQueue } from "@turbostarter/db/schema/mesh";
 import {
   connectPresence,
+  deleteFile,
   disconnectPresence,
   drainForMember,
   findMemberByPubkey,
   forgetMemory,
+  getFile,
+  getFileStatus,
   getState,
   handleHookSetStatus,
   heartbeat,
   joinGroup,
   joinMesh,
   leaveGroup,
+  listFiles,
   listPeersInMesh,
   listState,
   queueMessage,
   recallMemory,
+  recordFileAccess,
   refreshQueueDepth,
   refreshStatusFromJsonl,
   rememberMemory,
@@ -42,8 +47,10 @@ import {
   setState,
   startSweepers,
   stopSweepers,
+  uploadFile,
   writeStatus,
 } from "./broker";
+import { ensureBucket, meshBucketName, minioClient } from "./minio";
 import type {
   HookSetStatusRequest,
   WSClientMessage,
@@ -140,7 +147,7 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
   const started = Date.now();
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Mesh-Id, X-Member-Id, X-File-Name, X-Tags, X-Persistent, X-Target-Spec");
   if (req.method === "OPTIONS") {
     res.writeHead(204);
     res.end();
@@ -174,6 +181,11 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
 
   if (req.method === "POST" && req.url === "/join") {
     handleJoinPost(req, res, started);
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/upload") {
+    handleUploadPost(req, res, started);
     return;
   }
 
@@ -321,6 +333,119 @@ function handleJoinPost(
         error: e instanceof Error ? e.message : String(e),
       });
       log.error("join handler error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+}
+
+function handleUploadPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  started: number,
+): void {
+  const meshId = req.headers["x-mesh-id"] as string | undefined;
+  const memberId = req.headers["x-member-id"] as string | undefined;
+  const fileName = req.headers["x-file-name"] as string | undefined;
+  const tagsRaw = req.headers["x-tags"] as string | undefined;
+  const persistentRaw = req.headers["x-persistent"] as string | undefined;
+  const targetSpec = req.headers["x-target-spec"] as string | undefined;
+
+  if (!meshId || !memberId || !fileName) {
+    writeJson(res, 400, {
+      ok: false,
+      error: "X-Mesh-Id, X-Member-Id, and X-File-Name headers required",
+    });
+    return;
+  }
+
+  const persistent = persistentRaw !== "false";
+  let tags: string[] = [];
+  if (tagsRaw) {
+    try {
+      tags = JSON.parse(tagsRaw);
+    } catch {
+      tags = [];
+    }
+  }
+
+  const MAX_UPLOAD_SIZE = 50 * 1024 * 1024; // 50MB
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let aborted = false;
+
+  req.on("data", (chunk: Buffer) => {
+    if (aborted) return;
+    total += chunk.length;
+    if (total > MAX_UPLOAD_SIZE) {
+      aborted = true;
+      writeJson(res, 413, { ok: false, error: "file too large (max 50MB)" });
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+
+  req.on("end", async () => {
+    if (aborted) return;
+    try {
+      const body = Buffer.concat(chunks);
+      if (body.length === 0) {
+        writeJson(res, 400, { ok: false, error: "empty body" });
+        return;
+      }
+
+      // Generate a file ID for the MinIO key
+      const { generateId } = await import("@turbostarter/shared/utils");
+      const fileId = generateId();
+      const dateStr = new Date().toISOString().split("T")[0];
+      const keyPrefix = persistent
+        ? `shared/${fileId}`
+        : `ephemeral/${dateStr}/${fileId}`;
+      const minioKey = `${keyPrefix}/${fileName}`;
+      const bucket = meshBucketName(meshId);
+
+      // Ensure bucket exists + upload
+      await ensureBucket(bucket);
+      await minioClient.putObject(
+        bucket,
+        minioKey,
+        body,
+        body.length,
+        req.headers["content-type"]
+          ? { "Content-Type": req.headers["content-type"] }
+          : undefined,
+      );
+
+      // Insert DB row
+      const dbFileId = await uploadFile({
+        meshId,
+        name: fileName,
+        sizeBytes: body.length,
+        mimeType: (req.headers["content-type"] as string) || undefined,
+        minioKey,
+        tags,
+        persistent,
+        uploadedByMember: memberId,
+        targetSpec: targetSpec || undefined,
+      });
+
+      writeJson(res, 200, { ok: true, fileId: dbFileId });
+      log.info("upload", {
+        route: "POST /upload",
+        mesh_id: meshId,
+        file_id: dbFileId,
+        name: fileName,
+        size: body.length,
+        persistent,
+        latency_ms: Date.now() - started,
+      });
+    } catch (e) {
+      writeJson(res, 500, {
+        ok: false,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      log.error("upload handler error", {
         error: e instanceof Error ? e.message : String(e),
       });
     }
@@ -772,6 +897,106 @@ function handleConnection(ws: WebSocket): void {
           log.info("ws forget", {
             presence_id: presenceId,
             memory_id: fg.memoryId,
+          });
+          break;
+        }
+        case "get_file": {
+          const gf = msg as Extract<WSClientMessage, { type: "get_file" }>;
+          const file = await getFile(conn.meshId, gf.fileId);
+          if (!file) {
+            sendError(conn.ws, "not_found", "file not found");
+            break;
+          }
+          // Access control: if targetSpec is set, verify peer matches
+          if (file.targetSpec) {
+            const matches =
+              file.targetSpec === conn.memberPubkey ||
+              file.targetSpec === conn.sessionPubkey ||
+              file.targetSpec === "*";
+            if (!matches) {
+              sendError(conn.ws, "forbidden", "file not targeted at you");
+              break;
+            }
+          }
+          // Generate presigned URL (60s expiry)
+          const bucket = meshBucketName(conn.meshId);
+          const presignedUrl = await minioClient.presignedGetObject(
+            bucket,
+            file.minioKey,
+            60,
+          );
+          // Record access
+          const memberInfo = conn.memberPubkey
+            ? await findMemberByPubkey(conn.meshId, conn.memberPubkey)
+            : null;
+          await recordFileAccess(
+            gf.fileId,
+            conn.sessionPubkey ?? undefined,
+            memberInfo?.displayName,
+          );
+          sendToPeer(presenceId, {
+            type: "file_url",
+            fileId: gf.fileId,
+            url: presignedUrl,
+            name: file.name,
+          });
+          log.info("ws get_file", {
+            presence_id: presenceId,
+            file_id: gf.fileId,
+          });
+          break;
+        }
+        case "list_files": {
+          const lf = msg as Extract<WSClientMessage, { type: "list_files" }>;
+          const files = await listFiles(conn.meshId, lf.query, lf.from);
+          sendToPeer(presenceId, {
+            type: "file_list",
+            files: files.map((f) => ({
+              id: f.id,
+              name: f.name,
+              size: f.sizeBytes,
+              tags: f.tags,
+              uploadedBy: f.uploadedBy,
+              uploadedAt: f.uploadedAt.toISOString(),
+              persistent: f.persistent,
+            })),
+          });
+          log.info("ws list_files", {
+            presence_id: presenceId,
+            mesh_id: conn.meshId,
+            count: files.length,
+          });
+          break;
+        }
+        case "file_status": {
+          const fs = msg as Extract<WSClientMessage, { type: "file_status" }>;
+          const accesses = await getFileStatus(fs.fileId);
+          sendToPeer(presenceId, {
+            type: "file_status_result",
+            fileId: fs.fileId,
+            accesses: accesses.map((a) => ({
+              peerName: a.peerName,
+              accessedAt: a.accessedAt.toISOString(),
+            })),
+          });
+          log.info("ws file_status", {
+            presence_id: presenceId,
+            file_id: fs.fileId,
+          });
+          break;
+        }
+        case "delete_file": {
+          const df = msg as Extract<WSClientMessage, { type: "delete_file" }>;
+          await deleteFile(conn.meshId, df.fileId);
+          sendToPeer(presenceId, {
+            type: "ack" as const,
+            id: df.fileId,
+            messageId: df.fileId,
+            queued: false,
+          });
+          log.info("ws delete_file", {
+            presence_id: presenceId,
+            file_id: df.fileId,
           });
           break;
         }

@@ -412,6 +412,9 @@ export class BrokerClient {
 
   /** Check delivery status of a sent message. */
   private messageStatusResolvers: Array<(result: { messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null) => void> = [];
+  private fileUrlResolvers: Array<(result: { url: string; name: string } | null) => void> = [];
+  private fileListResolvers: Array<(files: Array<{ id: string; name: string; size: number; tags: string[]; uploadedBy: string; uploadedAt: string; persistent: boolean }>) => void> = [];
+  private fileStatusResolvers: Array<(accesses: Array<{ peerName: string; accessedAt: string }>) => void> = [];
 
   async messageStatus(messageId: string): Promise<{ messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
@@ -423,6 +426,95 @@ export class BrokerClient {
         if (idx !== -1) { this.messageStatusResolvers.splice(idx, 1); resolve(null); }
       }, 5_000);
     });
+  }
+
+  // --- Files ---
+
+  /** Get a download URL for a shared file. */
+  async getFile(fileId: string): Promise<{ url: string; name: string } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      this.fileUrlResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "get_file", fileId }));
+      setTimeout(() => {
+        const idx = this.fileUrlResolvers.indexOf(resolve);
+        if (idx !== -1) {
+          this.fileUrlResolvers.splice(idx, 1);
+          resolve(null);
+        }
+      }, 5_000);
+    });
+  }
+
+  /** List files shared in the mesh. */
+  async listFiles(query?: string, from?: string): Promise<Array<{ id: string; name: string; size: number; tags: string[]; uploadedBy: string; uploadedAt: string; persistent: boolean }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.fileListResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "list_files", query, from }));
+      setTimeout(() => {
+        const idx = this.fileListResolvers.indexOf(resolve);
+        if (idx !== -1) {
+          this.fileListResolvers.splice(idx, 1);
+          resolve([]);
+        }
+      }, 5_000);
+    });
+  }
+
+  /** Check who has accessed a shared file. */
+  async fileStatus(fileId: string): Promise<Array<{ peerName: string; accessedAt: string }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.fileStatusResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "file_status", fileId }));
+      setTimeout(() => {
+        const idx = this.fileStatusResolvers.indexOf(resolve);
+        if (idx !== -1) {
+          this.fileStatusResolvers.splice(idx, 1);
+          resolve([]);
+        }
+      }, 5_000);
+    });
+  }
+
+  /** Delete a shared file from the mesh. */
+  async deleteFile(fileId: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "delete_file", fileId }));
+  }
+
+  /** Upload a file to the broker via HTTP POST. Returns file ID or null. */
+  async uploadFile(filePath: string, meshId: string, memberId: string, opts: {
+    name?: string; tags?: string[]; persistent?: boolean; targetSpec?: string;
+  }): Promise<string | null> {
+    const { readFileSync } = await import("node:fs");
+    const { basename } = await import("node:path");
+    const data = readFileSync(filePath);
+    const fileName = opts.name ?? basename(filePath);
+
+    // Convert WS broker URL to HTTP
+    const brokerHttp = this.mesh.brokerUrl
+      .replace("wss://", "https://")
+      .replace("ws://", "http://")
+      .replace("/ws", "");
+
+    const res = await fetch(`${brokerHttp}/upload`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/octet-stream",
+        "X-Mesh-Id": meshId,
+        "X-Member-Id": memberId,
+        "X-File-Name": fileName,
+        "X-Tags": JSON.stringify(opts.tags ?? []),
+        "X-Persistent": String(opts.persistent ?? true),
+        "X-Target-Spec": opts.targetSpec ?? "",
+      },
+      body: data,
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = await res.json() as { ok?: boolean; fileId?: string };
+    return body.fileId ?? null;
   }
 
   /** Subscribe to state change notifications. Returns an unsubscribe function. */
@@ -581,6 +673,29 @@ export class BrokerClient {
     if (msg.type === "message_status_result") {
       const resolver = this.messageStatusResolvers.shift();
       if (resolver) resolver(msg as any);
+      return;
+    }
+    if (msg.type === "file_url") {
+      const resolver = this.fileUrlResolvers.shift();
+      if (resolver) {
+        if (msg.url) {
+          resolver({ url: String(msg.url), name: String(msg.name ?? "") });
+        } else {
+          resolver(null);
+        }
+      }
+      return;
+    }
+    if (msg.type === "file_list") {
+      const files = (msg.files as Array<{ id: string; name: string; size: number; tags: string[]; uploadedBy: string; uploadedAt: string; persistent: boolean }>) ?? [];
+      const resolver = this.fileListResolvers.shift();
+      if (resolver) resolver(files);
+      return;
+    }
+    if (msg.type === "file_status_result") {
+      const accesses = (msg.accesses as Array<{ peerName: string; accessedAt: string }>) ?? [];
+      const resolver = this.fileStatusResolvers.shift();
+      if (resolver) resolver(accesses);
       return;
     }
     if (msg.type === "error") {

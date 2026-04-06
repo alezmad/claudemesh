@@ -19,6 +19,7 @@
     "@turbostarter/shared": "workspace:*",
     "drizzle-orm": "0.44.7",
     "libsodium-wrappers": "0.7.15",
+    "minio": "8.0.7",
     "ws": "8.20.0",
     "zod": "catalog:"
   },

@@ -250,6 +250,65 @@ export interface WSMessageStatusResultMessage {
   }>;
 }
 
+// --- File sharing messages ---
+
+/** Client → broker: get a presigned download URL for a file. */
+export interface WSGetFileMessage {
+  type: "get_file";
+  fileId: string;
+}
+
+/** Client → broker: list files in the mesh. */
+export interface WSListFilesMessage {
+  type: "list_files";
+  query?: string;
+  from?: string;
+}
+
+/** Client → broker: get access log for a file. */
+export interface WSFileStatusMessage {
+  type: "file_status";
+  fileId: string;
+}
+
+/** Client → broker: soft-delete a file. */
+export interface WSDeleteFileMessage {
+  type: "delete_file";
+  fileId: string;
+}
+
+/** Broker → client: presigned URL for downloading a file. */
+export interface WSFileUrlMessage {
+  type: "file_url";
+  fileId: string;
+  url: string;
+  name: string;
+}
+
+/** Broker → client: list of files in the mesh. */
+export interface WSFileListMessage {
+  type: "file_list";
+  files: Array<{
+    id: string;
+    name: string;
+    size: number;
+    tags: string[];
+    uploadedBy: string;
+    uploadedAt: string;
+    persistent: boolean;
+  }>;
+}
+
+/** Broker → client: access log for a file. */
+export interface WSFileStatusResultMessage {
+  type: "file_status_result";
+  fileId: string;
+  accesses: Array<{
+    peerName: string;
+    accessedAt: string;
+  }>;
+}
+
 /** Broker → client: structured error. */
 export interface WSErrorMessage {
   type: "error";
@@ -272,7 +331,11 @@ export type WSClientMessage =
   | WSRememberMessage
   | WSRecallMessage
   | WSForgetMessage
-  | WSMessageStatusMessage;
+  | WSMessageStatusMessage
+  | WSGetFileMessage
+  | WSListFilesMessage
+  | WSFileStatusMessage
+  | WSDeleteFileMessage;
 
 export type WSServerMessage =
   | WSHelloAckMessage
@@ -285,4 +348,7 @@ export type WSServerMessage =
   | WSMemoryStoredMessage
   | WSMemoryResultsMessage
   | WSMessageStatusResultMessage
+  | WSFileUrlMessage
+  | WSFileListMessage
+  | WSFileStatusResultMessage
   | WSErrorMessage;

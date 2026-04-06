@@ -6,7 +6,7 @@ export type Priority = "now" | "next" | "low";
 export type PeerStatus = "idle" | "working" | "dnd";
 
 export interface SendMessageArgs {
-  to: string; // peer name, pubkey, or #channel
+  to: string | string[]; // peer name, pubkey, @group, or array of targets
   message: string;
   priority?: Priority;
 }

@@ -64,6 +64,13 @@
       "when": 1775477883426,
       "tag": "0008_add-state-and-memory",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1775480008546,
+      "tag": "0009_add-file-tables",
+      "breakpoints": true
     }
   ]
 }
