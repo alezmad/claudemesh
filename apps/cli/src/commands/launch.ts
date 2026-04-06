@@ -25,6 +25,7 @@ interface LaunchArgs {
   joinLink: string | null;
   meshSlug: string | null;
   quiet: boolean;
+  skipPermConfirm: boolean;
   claudeArgs: string[];
 }
 
@@ -34,6 +35,7 @@ function parseArgs(argv: string[]): LaunchArgs {
     joinLink: null,
     meshSlug: null,
     quiet: false,
+    skipPermConfirm: false,
     claudeArgs: [],
   };
 
@@ -54,6 +56,8 @@ function parseArgs(argv: string[]): LaunchArgs {
       result.meshSlug = arg.slice("--mesh=".length);
     } else if (arg === "--quiet") {
       result.quiet = true;
+    } else if (arg === "-y" || arg === "--yes") {
+      result.skipPermConfirm = true;
     } else if (arg === "--") {
       result.claudeArgs.push(...argv.slice(i + 1));
       break;
@@ -86,6 +90,44 @@ async function pickMesh(meshes: JoinedMesh[]): Promise<JoinedMesh> {
       } else {
         console.error("  Invalid choice, using first mesh.");
         resolve(meshes[0]!);
+      }
+    });
+  });
+}
+
+// --- Permission confirmation ---
+
+async function confirmPermissions(): Promise<void> {
+  const useColor =
+    !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
+  const bold = (s: string): string => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
+  const dim = (s: string): string => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
+  const yellow = (s: string): string => (useColor ? `\x1b[33m${s}\x1b[39m` : s);
+
+  console.log(yellow(bold("  Autonomous mode")));
+  console.log("");
+  console.log("  For peers to chat seamlessly, Claude needs to send and");
+  console.log("  receive messages without asking for approval each time.");
+  console.log("  This means tool calls (like sending a peer message) will");
+  console.log("  run automatically — the same as running claude with");
+  console.log("  --dangerously-skip-permissions.");
+  console.log("");
+  console.log(dim("  Claude still can't access anything outside your mesh —"));
+  console.log(dim("  peers only exchange text messages, not tool calls."));
+  console.log(dim("  Skip this prompt next time with: claudemesh launch -y"));
+  console.log("");
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve, reject) => {
+    rl.question(`  ${bold("Continue?")} [Y/n] `, (answer) => {
+      rl.close();
+      const a = answer.trim().toLowerCase();
+      if (a === "" || a === "y" || a === "yes") {
+        resolve();
+      } else {
+        console.log("\n  Aborted. Run without autonomous mode:");
+        console.log("    claude --dangerously-load-development-channels server:claudemesh\n");
+        process.exit(0);
       }
     });
   });
@@ -188,16 +230,22 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
     "utf-8",
   );
 
-  // 5. Banner.
-  if (!args.quiet) printBanner(displayName, mesh.slug);
+  // 5. Banner + permission confirmation.
+  if (!args.quiet) {
+    printBanner(displayName, mesh.slug);
+    // Auto-permissions confirmation — needed for autonomous peer messaging.
+    if (!args.skipPermConfirm) {
+      await confirmPermissions();
+    }
+  }
 
-  // 6. Spawn claude with ephemeral config + dev channel + display name.
-  //    Strip any user-supplied --dangerously-load-development-channels
-  //    to avoid duplicates — we always inject our own.
+  // 6. Spawn claude with ephemeral config + dev channel + auto-permissions.
+  //    Strip any user-supplied --dangerously flags to avoid duplicates.
   const filtered: string[] = [];
   for (let i = 0; i < args.claudeArgs.length; i++) {
-    if (args.claudeArgs[i] === "--dangerously-load-development-channels") {
-      i++; // skip the next arg (the channel value) too
+    if (args.claudeArgs[i] === "--dangerously-load-development-channels"
+        || args.claudeArgs[i] === "--dangerously-skip-permissions") {
+      if (args.claudeArgs[i] === "--dangerously-load-development-channels") i++;
       continue;
     }
     filtered.push(args.claudeArgs[i]!);
@@ -205,6 +253,7 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
   const claudeArgs = [
     "--dangerously-load-development-channels",
     "server:claudemesh",
+    "--dangerously-skip-permissions",
     ...filtered,
   ];
 
