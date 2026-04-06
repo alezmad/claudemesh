@@ -80,6 +80,12 @@ const config: NextConfig = {
   serverExternalPackages: [
     "better-sqlite3",
     "@mapbox/node-pre-gyp",
+    "esbuild",
+    "payload",
+    "@payloadcms/db-postgres",
+    "@payloadcms/db-sqlite",
+    "@payloadcms/richtext-lexical",
+    "sharp",
   ],
   images: {
     remotePatterns: [
