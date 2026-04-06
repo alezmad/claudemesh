@@ -87,6 +87,15 @@ const config: NextConfig = {
     "@payloadcms/richtext-lexical",
     "sharp",
   ],
+  turbopack: {
+    rules: {
+      "*.svg": {
+        loaders: ["@svgr/webpack"],
+        as: "*.js",
+      },
+    },
+  },
+
   images: {
     remotePatterns: [
       {
