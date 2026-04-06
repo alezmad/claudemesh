@@ -722,7 +722,140 @@ mesh.stream (
 
 ---
 
-## 11. Encryption
+## 11. Message Modes
+
+Peers choose how messages reach them. Tools (state, memory, files, etc.) always work regardless of mode.
+
+```bash
+claudemesh launch --name Alice                 # push (default)
+claudemesh launch --name Alice --inbox         # held until check_messages
+claudemesh launch --name Alice --no-messages   # tools only, silent
+```
+
+| Mode | Messages | Prompt injection risk | Use case |
+|------|----------|----------------------|----------|
+| `push` | Real-time into context | Yes | Active collaboration, role-play |
+| `inbox` | Count notification only | Minimal | Focused work, check when ready |
+| `off` | None (check_messages manual) | Zero | Data analysis, shared infra only |
+
+Wizard shows the choice when neither `--inbox` nor `--no-messages` is passed.
+
+---
+
+## 12. Shared MCPs
+
+MCP servers installed once at the mesh level, available to all peers. The broker runs MCP processes and proxies tool calls.
+
+### Why
+
+Today: each peer loads MCPs from `~/.claude.json`. Four peers = four instances of the GitHub MCP, each with its own credentials, its own connection, its own state. Wasteful and inconsistent.
+
+Mesh MCPs: the broker runs the MCP server once. Peers call tools through claudemesh. One install, every peer has access. Zero local config.
+
+### Architecture
+
+```
+Peer A ──┐                         ┌── GitHub MCP (one process)
+Peer B ──┤── Broker (MCP proxy) ──┤── Postgres MCP (one process)
+Peer C ──┘                         └── Slack MCP (one process)
+```
+
+### Admin installs MCPs
+
+```bash
+# From a peer with admin role, or the CLI
+claudemesh mcp-add --mesh dev-team github -- npx @modelcontextprotocol/server-github
+claudemesh mcp-add --mesh dev-team postgres -- npx @modelcontextprotocol/server-postgres
+claudemesh mcp-remove --mesh dev-team github
+claudemesh mcp-list --mesh dev-team
+```
+
+Or via MCP tools (admin peers only):
+
+```
+mesh_mcp_add(name: "github", command: "npx", args: ["@modelcontextprotocol/server-github"], env: {"GITHUB_TOKEN": "..."})
+mesh_mcp_remove(name: "github")
+```
+
+### Peer uses shared MCPs
+
+```
+list_mesh_mcps() → ["github (12 tools)", "postgres (8 tools)", "slack (6 tools)"]
+mesh_tool(mcp: "github", tool: "search_issues", args: { query: "auth bug" })
+```
+
+Two tools. `list_mesh_mcps` for discovery, `mesh_tool` for execution. Claude reads the tool list, picks the right one, calls it.
+
+### Broker internals
+
+```sql
+mesh.mcp_server (
+  id text PK,
+  mesh_id text FK,
+  name text NOT NULL,
+  command text NOT NULL,
+  args text[] DEFAULT '{}',
+  env jsonb DEFAULT '{}',
+  status text DEFAULT 'stopped',
+  installed_by text,
+  installed_at timestamp DEFAULT NOW(),
+  UNIQUE(mesh_id, name)
+)
+```
+
+The broker:
+1. Spawns each MCP as a child process with stdio transport
+2. Keeps a JSON-RPC connection to each
+3. On `list_mesh_mcps`: queries each MCP's `tools/list`
+4. On `mesh_tool`: forwards the `tools/call` to the right MCP, returns the result
+5. Restarts crashed MCPs automatically (like the WS reconnect logic)
+6. Stops MCPs when the mesh has zero connected peers (resource savings)
+
+### Credential isolation
+
+- Env vars stored encrypted in the DB (mesh.mcp_server.env)
+- Only the broker process reads them — never sent to peers
+- Peers see tool names and descriptions, never credentials
+- Admin can rotate credentials via `mesh_mcp_update`
+
+### Resource limits
+
+- Max N MCP servers per mesh (configurable, default 10)
+- Max M concurrent tool calls per peer (default 5)
+- Tool call timeout (default 30s)
+- MCP process memory limit via Docker/cgroup
+
+### WS protocol
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `list_mesh_mcps` | — | List shared MCPs and their tools |
+| `mesh_tool` | mcp, tool, args | Call a tool on a shared MCP |
+| `mesh_mcp_add` | name, command, args?, env? | Install an MCP (admin) |
+| `mesh_mcp_remove` | name | Uninstall an MCP (admin) |
+| `mesh_mcp_list_result` | mcps[] | Response with MCP names + tool lists |
+| `mesh_tool_result` | result | Tool call response |
+
+### MCP tools for shared MCPs
+
+| Tool | Description |
+|------|-------------|
+| `list_mesh_mcps()` | List shared MCPs with their tool summaries |
+| `mesh_tool(mcp, tool, args)` | Execute a tool on a shared MCP |
+| `mesh_mcp_add(name, command, args?, env?)` | Install a shared MCP (admin) |
+| `mesh_mcp_remove(name)` | Uninstall a shared MCP (admin) |
+
+### What this enables
+
+- **Team onboarding**: new peer joins mesh, instantly has all team tools
+- **Central credentials**: GitHub token, DB password — stored once on the broker
+- **Tool standardization**: everyone uses the same MCP version, same config
+- **Ephemeral peers**: a peer spun up for 5 minutes gets full tool access without any local setup
+- **AI self-provisioning** (future): a peer calls `mesh_mcp_add` to install a new tool it needs
+
+---
+
+## 13. Encryption
 
 ### Direct messages
 
@@ -742,7 +875,7 @@ The session keypair generates once on first connect and survives reconnects. Mes
 
 ---
 
-## 12. Production hardening (implemented)
+## 14. Production hardening (implemented)
 
 | Feature | Description |
 |---------|-------------|
@@ -757,7 +890,7 @@ The session keypair generates once on first connect and survives reconnects. Mes
 
 ---
 
-## 13. CLI commands
+## 15. CLI commands
 
 ```
 claudemesh install          Register MCP server + hooks in Claude Code
@@ -786,7 +919,7 @@ claudemesh mcp              Start MCP server (invoked by Claude Code, not users)
 
 ---
 
-## 14. Implementation status
+## 16. Implementation status
 
 | Phase | Version | Status | What |
 |-------|---------|--------|------|
@@ -807,17 +940,20 @@ claudemesh mcp              Start MCP server (invoked by Claude Code, not users)
 | **Files** | **v0.4.0** | **Done** | MinIO-backed file sharing + message attachments |
 | **Multi-target** | **v0.4.0** | **Done** | Array `to` field with deduplication |
 | **Targeted views** | **v0.4.0** | **Done** | MCP instruction pattern for per-audience messages |
-| Vectors | v0.5.0 | Planned | Qdrant per-mesh collections for semantic search |
-| Graph | v0.5.0 | Planned | Neo4j per-mesh databases for entity relationships |
-| Context sharing | v0.5.0 | Planned | Session understanding exchange between peers |
-| Tasks | v0.5.0 | Planned | First-class work items with claim/complete |
-| Mesh databases | v0.6.0 | Planned | Per-mesh PostgreSQL schemas for structured data |
-| Streams | v0.6.0 | Planned | Real-time pub/sub data channels |
+| **Vectors** | **v0.5.0** | **Done** | Qdrant per-mesh collections for semantic search |
+| **Graph** | **v0.5.0** | **Done** | Neo4j per-mesh databases for entity relationships |
+| **Context sharing** | **v0.5.0** | **Done** | Session understanding exchange between peers |
+| **Tasks** | **v0.5.0** | **Done** | First-class work items with claim/complete |
+| **Mesh databases** | **v0.5.0** | **Done** | Per-mesh PostgreSQL schemas for structured data |
+| **Streams** | **v0.5.0** | **Done** | Real-time pub/sub data channels |
+| **mesh_info** | **v0.5.0** | **Done** | One-call aggregated mesh overview |
+| Message modes | v0.5.1 | In progress | push/inbox/off modes for message delivery |
+| Shared MCPs | v0.6.0 | Planned | Mesh-level MCP servers, broker as proxy |
 | Dashboard | v0.7.0 | Planned | Live peers, state, memory, files, graphs in web UI |
 
 ---
 
-## 15. Design principles
+## 17. Design principles
 
 1. **The broker is a dumb pipe.** It routes messages, stores state, holds memory. It does not interpret roles, enforce protocols, or run agents.
 
