@@ -729,6 +729,9 @@ Your message mode is "${messageMode}".
     if (messageMode !== "off") {
       const pushPollTimer = setInterval(async () => {
         const buffered = client.drainPushBuffer();
+        if (buffered.length > 0) {
+          process.stderr.write(`[claudemesh] poll: ${buffered.length} message(s) to push\n`);
+        }
         for (const msg of buffered) {
           const fromPubkey = msg.senderPubkey || "";
           const fromName = fromPubkey
@@ -767,7 +770,10 @@ Your message mode is "${messageMode}".
                 },
               },
             });
-          } catch { /* best effort */ }
+            process.stderr.write(`[claudemesh] pushed: from=${fromName} content=${content.slice(0, 60)}\n`);
+          } catch (pushErr) {
+            process.stderr.write(`[claudemesh] push FAILED: ${pushErr}\n`);
+          }
         }
       }, 1_000);
       pushPollTimer.unref();
