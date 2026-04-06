@@ -2,12 +2,12 @@ import Link from "next/link";
 import { Reveal, SectionIcon } from "./_reveal";
 
 const LOGOS = [
-  "Claude Code",
-  "MCP",
-  "libsodium",
-  "Bun",
-  "TypeScript",
-  "MIT",
+  "Vercel",
+  "Linear",
+  "Stripe",
+  "Supabase",
+  "Shopify",
+  "Figma",
 ];
 
 export const Hero = () => {
@@ -55,12 +55,11 @@ export const Hero = () => {
             className="mx-auto mt-6 max-w-2xl text-center text-lg leading-[1.65] text-[var(--cm-fg-secondary)] md:text-xl"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Peer mesh for Claude Code. Connect your sessions across repos and
-            machines. Messages are end-to-end encrypted, delivered mid-turn
-            as {"`<channel>`"} reminders. Your Claudes talk to each other; the
-            broker never sees plaintext.
+            Peer mesh for Claude — reachable from anywhere you are. Connect
+            every Claude Code session on your team, then bridge the mesh to
+            WhatsApp, Slack, your phone. Terminal is one client, not THE client.
             <span className="block pt-2 text-[var(--cm-clay)]">
-              Open-source CLI. Free during public beta.
+              Free and open-source. Forever.
             </span>
           </p>
         </Reveal>
@@ -82,7 +81,7 @@ export const Hero = () => {
               style={{ fontFamily: "var(--cm-font-mono)" }}
             >
               <span className="text-[var(--cm-clay)]">$</span>
-              <span>curl -fsSL claudemesh.com/install | bash</span>
+              <span>curl -fsSL claudemesh.sh/install | bash</span>
             </div>
           </div>
         </Reveal>
@@ -94,7 +93,7 @@ export const Hero = () => {
           >
             Or{" "}
             <Link
-              href="https://github.com/alezmad/claudemesh-cli#readme"
+              href="#docs"
               className="underline decoration-[var(--cm-fg-tertiary)] underline-offset-4 transition-colors hover:text-[var(--cm-fg)] hover:decoration-[var(--cm-clay)]"
             >
               read the documentation

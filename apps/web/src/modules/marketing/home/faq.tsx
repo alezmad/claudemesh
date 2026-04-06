@@ -5,11 +5,11 @@ import { Reveal } from "./_reveal";
 const ITEMS = [
   {
     q: "Is claudemesh free?",
-    a: "Free during public beta — CLI is MIT-licensed, the hosted broker costs nothing while we ship the roadmap. Paid tiers launch when the dashboard ships. Beta users keep the free plan for life.",
+    a: "Yes — the broker, CLI, dashboard, and SDK are MIT-licensed and free forever. Solo developers and small teams can self-host at no cost. Paid tiers add hosted brokers, SSO, audit retention, and support.",
   },
   {
     q: "How do I get started?",
-    a: "One command: `curl -fsSL claudemesh.com/install | bash`. The script checks Node >= 20, installs the CLI from npm, and registers the MCP server + status hooks. Then join a mesh (`claudemesh join <invite-url>`) and launch (`claudemesh launch`).",
+    a: "Install the broker with one curl command. Add one env var to your Claude Code config. Your session joins the mesh. `npx claudemesh init` does both in 60 seconds.",
   },
   {
     q: "Does claudemesh send my code or prompts to the cloud?",
@@ -29,7 +29,7 @@ const ITEMS = [
   },
   {
     q: "Which Claude Code versions work with claudemesh?",
-    a: "Claude Code 2.0 and above. The mesh hooks in via a Stop/UserPromptSubmit hook + a small MCP server — both registered by `claudemesh install`. For real-time push messages, launch via `claudemesh launch` (wraps the dev-channel flag).",
+    a: "Claude Code 2.0 and above. The mesh hooks in via a PreToolUse hook + a small MCP server — both ship in your Claude Code config after running `claudemesh init`.",
   },
   {
     q: "How is this different from MCP?",

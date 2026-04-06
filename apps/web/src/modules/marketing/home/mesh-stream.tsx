@@ -121,13 +121,6 @@ export interface MeshStreamProps {
   emptyLabel?: string;
   /** footer content (stats / progress bar / timers) */
   footer?: React.ReactNode;
-  /**
-   * When true (live dashboard), the message list gets a fixed viewport
-   * with overflow-y-auto — standard chat UI. When false (landing demo),
-   * the list grows intrinsically so wheel events pass through to the
-   * page scroll instead of being captured by the list.
-   */
-  scrollable?: boolean;
 }
 
 export const MeshStream = ({
@@ -137,7 +130,6 @@ export const MeshStream = ({
   peersHint,
   emptyLabel = "Waiting for messages…",
   footer,
-  scrollable = false,
 }: MeshStreamProps) => {
   const [focusedPeer, setFocusedPeer] = useState<string | null>(null);
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
@@ -148,12 +140,7 @@ export const MeshStream = ({
     : messages;
 
   return (
-    <div
-      className={
-        "grid grid-cols-1 md:grid-cols-[220px_1fr] " +
-        (scrollable ? "min-h-[480px]" : "")
-      }
-    >
+    <div className="grid min-h-[480px] grid-cols-1 md:grid-cols-[220px_1fr]">
       {/* peers sidebar */}
       <aside
         className="border-b border-[var(--cm-border)] bg-[var(--cm-bg-elevated)]/20 p-4 md:border-b-0 md:border-r"
@@ -252,12 +239,7 @@ export const MeshStream = ({
               : "all peers · E2E encrypted"}
           </span>
         </div>
-        <ol
-          className={
-            "space-y-3 p-4 " +
-            (scrollable ? "flex-1 overflow-y-auto" : "")
-          }
-        >
+        <ol className="flex-1 space-y-3 overflow-y-auto p-4">
           {filtered.length === 0 && (
             <li
               className="py-8 text-center text-[13px] text-[var(--cm-fg-tertiary)]"

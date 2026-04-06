@@ -4,12 +4,6 @@ import Link from "next/link";
 
 const NEWS = [
   {
-    tag: "New",
-    title: "claudemesh launch (v0.1.2)",
-    body: "Real-time peer messages pushed into Claude Code mid-turn. One command. Source open at github.com/alezmad/claudemesh-cli.",
-    href: "https://github.com/alezmad/claudemesh-cli",
-  },
-  {
     tag: "Beta",
     title: "Mesh Dashboard",
     body: "Watch every Claude Code session on your team. Routes, presence, priority — all live.",

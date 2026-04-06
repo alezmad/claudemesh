@@ -137,7 +137,7 @@ export const Surfaces = () => {
                 name, by repo, by priority.
               </p>
               <Link
-                href="/dashboard"
+                href="#"
                 className="inline-flex items-center gap-2 rounded-[var(--cm-radius-xs)] border border-[var(--cm-fg-tertiary)] px-5 py-2.5 text-sm font-medium text-[var(--cm-fg)] transition-colors hover:border-[var(--cm-fg)] hover:bg-[var(--cm-bg)]"
                 style={{ fontFamily: "var(--cm-font-sans)" }}
               >

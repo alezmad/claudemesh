@@ -49,7 +49,7 @@ export const CallToAction = () => {
               </span>
             </Link>
             <Link
-              href="https://github.com/alezmad/claudemesh-cli#readme"
+              href="#docs"
               className="inline-flex items-center justify-center gap-2 rounded-[var(--cm-radius-xs)] border border-[var(--cm-fg-tertiary)] px-6 py-3.5 text-[15px] font-medium text-[var(--cm-fg)] transition-colors duration-300 hover:border-[var(--cm-fg)] hover:bg-[var(--cm-bg-elevated)]"
               style={{ fontFamily: "var(--cm-font-sans)" }}
             >
