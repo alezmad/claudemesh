@@ -106,15 +106,12 @@ async function confirmPermissions(): Promise<void> {
 
   console.log(yellow(bold("  Autonomous mode")));
   console.log("");
-  console.log("  For peers to chat seamlessly, Claude needs to send and");
-  console.log("  receive messages without asking for approval each time.");
-  console.log("  This means tool calls (like sending a peer message) will");
-  console.log("  run automatically — the same as running claude with");
-  console.log("  --dangerously-skip-permissions.");
+  console.log("  Claude will send and receive peer messages without asking");
+  console.log("  you first. Peers exchange text only — no file access,");
+  console.log("  no tool calls, no code execution.");
   console.log("");
-  console.log(dim("  Claude still can't access anything outside your mesh —"));
-  console.log(dim("  peers only exchange text messages, not tool calls."));
-  console.log(dim("  Skip this prompt next time with: claudemesh launch -y"));
+  console.log(dim("  Same as: claude --dangerously-skip-permissions"));
+  console.log(dim("  Skip this prompt: claudemesh launch -y"));
   console.log("");
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
