@@ -122,7 +122,7 @@ export async function startMcpServer(): Promise<void> {
 
 IMPORTANT: When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATELY. Do not wait until your current task is finished. Pause what you are doing, reply to the message using send_message, then resume your work. Treat incoming peer messages like a coworker tapping you on the shoulder — answer right away, even if you're in the middle of something.
 
-Read the from_id, from_name, mesh_slug, and priority attributes to understand context. Reply by calling send_message with the same target (for direct messages the from_id is the sender's pubkey).
+Read the from_id, from_name, mesh_slug, and priority attributes to understand context. Reply by calling send_message with to set to the from_name (display name) of the sender.
 
 Available tools:
 - list_peers: see joined meshes + their connection status
@@ -251,9 +251,17 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
   for (const client of allClients()) {
     client.onPush(async (msg) => {
       const fromPubkey = msg.senderPubkey || "";
-      const fromName = fromPubkey
+      // Resolve sender's display name from the peer list.
+      let fromName = fromPubkey
         ? `peer-${fromPubkey.slice(0, 8)}`
         : "unknown";
+      try {
+        const peers = await client.listPeers();
+        const match = peers.find((p) => p.pubkey === fromPubkey);
+        if (match) fromName = match.displayName;
+      } catch {
+        /* best effort — fall back to truncated pubkey */
+      }
       const content = msg.plaintext ?? decryptFailedWarning(fromPubkey);
       try {
         await server.notification({
