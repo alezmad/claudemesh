@@ -62,8 +62,8 @@ async function resolveClient(to: string): Promise<{
       target = rest;
     }
   }
-  // Pubkey, channel, or broadcast — pass through directly.
-  if (/^[0-9a-f]{64}$/.test(target) || target.startsWith("#") || target === "*") {
+  // Pubkey, channel, @group, or broadcast — pass through directly.
+  if (/^[0-9a-f]{64}$/.test(target) || target.startsWith("#") || target.startsWith("@") || target === "*") {
     if (targetClients.length === 1) {
       return { client: targetClients[0]!, targetSpec: target };
     }
@@ -140,14 +140,16 @@ export async function startMcpServer(): Promise<void> {
 
 IMPORTANT: When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATELY. Do not wait until your current task is finished. Pause what you are doing, reply to the message using send_message, then resume your work. Treat incoming peer messages like a coworker tapping you on the shoulder — answer right away, even if you're in the middle of something.
 
-Read the from_id, from_name, mesh_slug, and priority attributes to understand context. Reply by calling send_message with to set to the from_name (display name) of the sender.
+Read the from_id, from_name, mesh_slug, and priority attributes to understand context. Reply by calling send_message with to set to the from_name (display name) of the sender. The \`to\` field can be a peer name, pubkey, @group, or * for broadcast.
 
 Available tools:
 - list_peers: see joined meshes + their connection status
-- send_message: send to a peer by display name, pubkey, #channel, or * broadcast (priority: now/next/low)
+- send_message: send to a peer by display name, pubkey, @group, #channel, or * broadcast (priority: now/next/low)
 - check_messages: drain buffered inbound messages (usually auto-pushed)
 - set_summary: 1-2 sentence summary of what you're working on
 - set_status: manually override your status (idle/working/dnd)
+- join_group: join a @group with optional role
+- leave_group: leave a @group
 
 Message priority:
 - "now": delivered immediately regardless of recipient status (use sparingly)
@@ -215,7 +217,8 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
           } else {
             const peerLines = peers.map((p) => {
               const summary = p.summary ? ` — "${p.summary}"` : "";
-              return `- **${p.displayName}** [${p.status}] (${p.pubkey.slice(0, 12)}…)${summary}`;
+              const groupsStr = p.groups?.length ? ` [${p.groups.map(g => `@${g.name}${g.role ? ':' + g.role : ''}`).join(', ')}]` : "";
+              return `- **${p.displayName}** [${p.status}]${groupsStr} (${p.pubkey.slice(0, 12)}…)${summary}`;
             });
             sections.push(`${header}\n${peerLines.join("\n")}`);
           }
@@ -250,6 +253,20 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
         const s = status as PeerStatus;
         for (const c of allClients()) await c.setStatus(s);
         return text(`Status set to ${s} across ${allClients().length} mesh(es).`);
+      }
+
+      case "join_group": {
+        const { name: groupName, role } = (args ?? {}) as { name?: string; role?: string };
+        if (!groupName) return text("join_group: `name` required", true);
+        for (const c of allClients()) await c.joinGroup(groupName, role);
+        return text(`Joined @${groupName}${role ? ` as ${role}` : ""}`);
+      }
+
+      case "leave_group": {
+        const { name: groupName } = (args ?? {}) as { name?: string };
+        if (!groupName) return text("leave_group: `name` required", true);
+        for (const c of allClients()) await c.leaveGroup(groupName);
+        return text(`Left @${groupName}`);
       }
 
       default:

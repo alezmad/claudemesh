@@ -16,12 +16,14 @@ import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { loadConfig, getConfigPath } from "../state/config";
-import type { Config, JoinedMesh } from "../state/config";
+import type { Config, JoinedMesh, GroupEntry } from "../state/config";
 
 // --- Arg parsing ---
 
 interface LaunchArgs {
   name: string | null;
+  role: string | null;
+  groups: string | null; // comma-separated, e.g. "frontend:lead,reviewers:member"
   joinLink: string | null;
   meshSlug: string | null;
   quiet: boolean;
@@ -32,6 +34,8 @@ interface LaunchArgs {
 function parseArgs(argv: string[]): LaunchArgs {
   const result: LaunchArgs = {
     name: null,
+    role: null,
+    groups: null,
     joinLink: null,
     meshSlug: null,
     quiet: false,
@@ -46,6 +50,14 @@ function parseArgs(argv: string[]): LaunchArgs {
       result.name = argv[++i]!;
     } else if (arg.startsWith("--name=")) {
       result.name = arg.slice("--name=".length);
+    } else if (arg === "--role" && i + 1 < argv.length) {
+      result.role = argv[++i]!;
+    } else if (arg.startsWith("--role=")) {
+      result.role = arg.slice("--role=".length);
+    } else if (arg === "--groups" && i + 1 < argv.length) {
+      result.groups = argv[++i]!;
+    } else if (arg.startsWith("--groups=")) {
+      result.groups = arg.slice("--groups=".length);
     } else if (arg === "--join" && i + 1 < argv.length) {
       result.joinLink = argv[++i]!;
     } else if (arg.startsWith("--join=")) {
@@ -95,6 +107,33 @@ async function pickMesh(meshes: JoinedMesh[]): Promise<JoinedMesh> {
   });
 }
 
+// --- Group string parser ---
+
+/** Parse "frontend:lead,reviewers:member,all" → GroupEntry[] */
+function parseGroupsString(raw: string): GroupEntry[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((token) => {
+      const idx = token.indexOf(":");
+      if (idx === -1) return { name: token };
+      return { name: token.slice(0, idx), role: token.slice(idx + 1) };
+    });
+}
+
+// --- Interactive role/groups prompts ---
+
+function askLine(prompt: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
 // --- Permission confirmation ---
 
 async function confirmPermissions(): Promise<void> {
@@ -132,14 +171,19 @@ async function confirmPermissions(): Promise<void> {
 
 // --- Banner ---
 
-function printBanner(name: string, meshSlug: string): void {
+function printBanner(name: string, meshSlug: string, role: string | null, groups: GroupEntry[]): void {
   const useColor =
     !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
   const dim = (s: string): string => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
   const bold = (s: string): string => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
 
+  const roleSuffix = role ? ` (${role})` : "";
+  const groupTags = groups.length
+    ? " [" + groups.map((g) => `@${g.name}${g.role ? `:${g.role}` : ""}`).join(", ") + "]"
+    : "";
+
   const rule = "─".repeat(60);
-  console.log(bold(`claudemesh launch`) + dim(` — as ${name} on ${meshSlug}`));
+  console.log(bold(`claudemesh launch`) + dim(` — as ${name}${roleSuffix} on ${meshSlug}${groupTags}`));
   console.log(rule);
   console.log("Peer messages arrive as <channel> reminders in real-time.");
   console.log("Peers send text only — they cannot call tools or read files.");
@@ -210,10 +254,26 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
     mesh = await pickMesh(config.meshes);
   }
 
-  // 3. Session identity. The WS client auto-generates a per-session
-  //    ephemeral keypair on connect (sent in hello as sessionPubkey).
-  //    We just set the display name via env var.
+  // 3. Session identity + role/groups.
+  //    The WS client auto-generates a per-session ephemeral keypair on
+  //    connect (sent in hello as sessionPubkey). We set display name via env var.
   const displayName = args.name ?? `${hostname()}-${process.pid}`;
+
+  // Interactive wizard for role & groups (when not provided via flags and not --quiet).
+  let role: string | null = args.role;
+  let parsedGroups: GroupEntry[] = args.groups ? parseGroupsString(args.groups) : [];
+
+  if (!args.quiet) {
+    if (role === null) {
+      const answer = await askLine("  Role (optional): ");
+      if (answer) role = answer;
+    }
+    if (parsedGroups.length === 0 && args.groups === null) {
+      const answer = await askLine("  Groups (comma-separated, optional): ");
+      if (answer) parsedGroups = parseGroupsString(answer);
+    }
+    if (role || parsedGroups.length) console.log("");
+  }
 
   // Clean up orphaned tmpdirs from crashed sessions (older than 1 hour)
   const tmpBase = tmpdir();
@@ -232,6 +292,7 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
     version: 1,
     meshes: [mesh],
     displayName,
+    ...(parsedGroups.length > 0 ? { groups: parsedGroups } : {}),
   };
   writeFileSync(
     join(tmpDir, "config.json"),
@@ -241,7 +302,7 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
 
   // 5. Banner + permission confirmation.
   if (!args.quiet) {
-    printBanner(displayName, mesh.slug);
+    printBanner(displayName, mesh.slug, role, parsedGroups);
     // Auto-permissions confirmation — needed for autonomous peer messaging.
     if (!args.skipPermConfirm) {
       await confirmPermissions();

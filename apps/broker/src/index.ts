@@ -23,7 +23,9 @@ import {
   findMemberByPubkey,
   handleHookSetStatus,
   heartbeat,
+  joinGroup,
   joinMesh,
+  leaveGroup,
   listPeersInMesh,
   queueMessage,
   refreshQueueDepth,
@@ -58,6 +60,7 @@ interface PeerConn {
   memberPubkey: string;
   sessionPubkey: string | null;
   cwd: string;
+  groups: Array<{ name: string; role?: string }>;
 }
 
 const connections = new Map<string, PeerConn>();
@@ -99,6 +102,7 @@ async function maybePushQueuedMessages(
     status,
     conn.sessionPubkey ?? undefined,
     excludeSenderSessionPubkey,
+    conn.groups.map((g) => g.name),
   );
   for (const m of messages) {
     const push: WSPushMessage = {
@@ -403,6 +407,7 @@ async function handleHello(
     ws.close(1008, "unauthorized");
     return null;
   }
+  const initialGroups = hello.groups ?? [];
   const presenceId = await connectPresence({
     memberId: member.id,
     sessionId: hello.sessionId,
@@ -410,6 +415,7 @@ async function handleHello(
     displayName: hello.displayName,
     pid: hello.pid,
     cwd: hello.cwd,
+    groups: initialGroups,
   });
   connections.set(presenceId, {
     ws,
@@ -418,6 +424,7 @@ async function handleHello(
     memberPubkey: hello.pubkey,
     sessionPubkey: hello.sessionPubkey ?? null,
     cwd: hello.cwd,
+    groups: initialGroups,
   });
   incMeshCount(hello.meshId);
   const effectiveDisplayName = hello.displayName || member.displayName;
@@ -463,13 +470,31 @@ async function handleSend(
   }
 
   // Fan-out over connected peers in the same mesh — skip sender.
+  // Resolve @group routing: "@all" is alias for "*", "@<name>" matches
+  // peers whose in-memory groups array contains that group name.
+  const isGroupTarget = msg.targetSpec.startsWith("@");
+  const isBroadcast =
+    msg.targetSpec === "*" ||
+    (isGroupTarget && msg.targetSpec === "@all");
+  const groupName = isGroupTarget && !isBroadcast
+    ? msg.targetSpec.slice(1)
+    : null;
+
   for (const [pid, peer] of connections) {
     if (pid === senderPresenceId) continue;
     if (peer.meshId !== conn.meshId) continue;
-    if (msg.targetSpec !== "*"
-        && peer.memberPubkey !== msg.targetSpec
-        && peer.sessionPubkey !== msg.targetSpec)
-      continue;
+
+    if (isBroadcast) {
+      // broadcast — deliver to everyone
+    } else if (groupName) {
+      // group routing — deliver only if peer is in the group
+      if (!peer.groups.some((g) => g.name === groupName)) continue;
+    } else {
+      // direct routing — match by pubkey
+      if (peer.memberPubkey !== msg.targetSpec
+          && peer.sessionPubkey !== msg.targetSpec)
+        continue;
+    }
     void maybePushQueuedMessages(pid, conn.sessionPubkey ?? undefined);
   }
 }
@@ -525,6 +550,7 @@ function handleConnection(ws: WebSocket): void {
               displayName: p.displayName,
               status: p.status as "idle" | "working" | "dnd",
               summary: p.summary,
+              groups: p.groups,
               sessionId: p.sessionId,
               connectedAt: p.connectedAt.toISOString(),
             })),
@@ -543,6 +569,27 @@ function handleConnection(ws: WebSocket): void {
           log.info("ws set_summary", {
             presence_id: presenceId,
             summary: summary.slice(0, 80),
+          });
+          break;
+        }
+        case "join_group": {
+          const jg = msg as Extract<WSClientMessage, { type: "join_group" }>;
+          const updatedGroups = await joinGroup(presenceId, jg.name, jg.role);
+          conn.groups = updatedGroups;
+          log.info("ws join_group", {
+            presence_id: presenceId,
+            group: jg.name,
+            role: jg.role,
+          });
+          break;
+        }
+        case "leave_group": {
+          const lg = msg as Extract<WSClientMessage, { type: "leave_group" }>;
+          const updatedGroups = await leaveGroup(presenceId, lg.name);
+          conn.groups = updatedGroups;
+          log.info("ws leave_group", {
+            presence_id: presenceId,
+            group: lg.name,
           });
           break;
         }

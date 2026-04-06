@@ -31,6 +31,7 @@ export interface PeerInfo {
   displayName: string;
   status: string;
   summary: string | null;
+  groups: Array<{ name: string; role?: string }>;
   sessionId: string;
   connectedAt: string;
 }
@@ -310,6 +311,18 @@ export class BrokerClient {
   async setSummary(summary: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
     this.ws.send(JSON.stringify({ type: "set_summary", summary }));
+  }
+
+  /** Join a group with an optional role. */
+  async joinGroup(name: string, role?: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "join_group", name, role }));
+  }
+
+  /** Leave a group. */
+  async leaveGroup(name: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "leave_group", name }));
   }
 
   close(): void {

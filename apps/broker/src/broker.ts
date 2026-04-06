@@ -328,6 +328,7 @@ export interface ConnectParams {
   displayName?: string;
   pid: number;
   cwd: string;
+  groups?: Array<{ name: string; role?: string }>;
 }
 
 /** Create a presence row for a new WS connection. */
@@ -347,6 +348,7 @@ export async function connectPresence(
       status: "idle",
       statusSource: "jsonl",
       statusUpdatedAt: now,
+      groups: params.groups ?? [],
       connectedAt: now,
       lastPingAt: now,
     })
@@ -384,6 +386,7 @@ export async function listPeersInMesh(
     displayName: string;
     status: string;
     summary: string | null;
+    groups: Array<{ name: string; role?: string }>;
     sessionId: string;
     connectedAt: Date;
   }>
@@ -396,6 +399,7 @@ export async function listPeersInMesh(
       presenceDisplayName: presence.displayName,
       status: presence.status,
       summary: presence.summary,
+      groups: presence.groups,
       sessionId: presence.sessionId,
       connectedAt: presence.connectedAt,
     })
@@ -414,6 +418,7 @@ export async function listPeersInMesh(
     displayName: r.presenceDisplayName || r.memberDisplayName,
     status: r.status,
     summary: r.summary,
+    groups: (r.groups ?? []) as Array<{ name: string; role?: string }>,
     sessionId: r.sessionId,
     connectedAt: r.connectedAt,
   }));
@@ -428,6 +433,60 @@ export async function setSummary(
     .update(presence)
     .set({ summary })
     .where(eq(presence.id, presenceId));
+}
+
+// --- Group management ---
+
+/**
+ * Join a group (upsert). If the peer is already in the group, update the role.
+ * Returns the updated groups array.
+ */
+export async function joinGroup(
+  presenceId: string,
+  name: string,
+  role?: string,
+): Promise<Array<{ name: string; role?: string }>> {
+  const [row] = await db
+    .select({ groups: presence.groups })
+    .from(presence)
+    .where(eq(presence.id, presenceId));
+  if (!row) return [];
+  const groups = ((row.groups ?? []) as Array<{ name: string; role?: string }>).slice();
+  const idx = groups.findIndex((g) => g.name === name);
+  const entry: { name: string; role?: string } = { name };
+  if (role) entry.role = role;
+  if (idx >= 0) {
+    groups[idx] = entry;
+  } else {
+    groups.push(entry);
+  }
+  await db
+    .update(presence)
+    .set({ groups })
+    .where(eq(presence.id, presenceId));
+  return groups;
+}
+
+/**
+ * Leave a group. Returns the updated groups array.
+ */
+export async function leaveGroup(
+  presenceId: string,
+  name: string,
+): Promise<Array<{ name: string; role?: string }>> {
+  const [row] = await db
+    .select({ groups: presence.groups })
+    .from(presence)
+    .where(eq(presence.id, presenceId));
+  if (!row) return [];
+  const groups = ((row.groups ?? []) as Array<{ name: string; role?: string }>).filter(
+    (g) => g.name !== name,
+  );
+  await db
+    .update(presence)
+    .set({ groups })
+    .where(eq(presence.id, presenceId));
+  return groups;
 }
 
 // --- Message queueing + delivery ---
@@ -493,6 +552,7 @@ export async function drainForMember(
   status: PeerStatus,
   sessionPubkey?: string,
   excludeSenderSessionPubkey?: string,
+  memberGroups?: string[],
 ): Promise<
   Array<{
     id: string;
@@ -508,6 +568,18 @@ export async function drainForMember(
   if (priorities.length === 0) return [];
   const priorityList = sql.raw(
     priorities.map((p) => `'${p}'`).join(","),
+  );
+
+  // Build group target matching: @all (broadcast alias) + @<groupname>
+  // for each group the peer belongs to.
+  const groupTargets = ["@all"];
+  if (memberGroups) {
+    for (const g of memberGroups) {
+      groupTargets.push(`@${g}`);
+    }
+  }
+  const groupTargetList = sql.raw(
+    groupTargets.map((t) => `'${t}'`).join(","),
   );
 
   // Atomic claim with SQL-side ordering. The CTE claims rows via
@@ -533,7 +605,7 @@ export async function drainForMember(
         WHERE mesh_id = ${meshId}
           AND delivered_at IS NULL
           AND priority::text IN (${priorityList})
-          AND (target_spec = ${memberPubkey} OR target_spec = '*'${sessionPubkey ? sql` OR target_spec = ${sessionPubkey}` : sql``})
+          AND (target_spec = ${memberPubkey} OR target_spec = '*'${sessionPubkey ? sql` OR target_spec = ${sessionPubkey}` : sql``} OR target_spec IN (${groupTargetList}))
           ${excludeSenderSessionPubkey ? sql`AND (sender_session_pubkey IS NULL OR sender_session_pubkey != ${excludeSenderSessionPubkey})` : sql``}
         ORDER BY created_at ASC, id ASC
         FOR UPDATE SKIP LOCKED

@@ -12,13 +12,13 @@ export const TOOLS: Tool[] = [
   {
     name: "send_message",
     description:
-      "Send a message to a peer in one of your joined meshes. `to` can be a peer display name (resolved via list_peers), hex pubkey, `#channel`, or `*` for broadcast. `priority` controls delivery: `now` bypasses busy gates, `next` waits for idle (default), `low` is pull-only.",
+      "Send a message to a peer in one of your joined meshes. `to` can be a peer display name (resolved via list_peers), hex pubkey, @group, `#channel`, or `*` for broadcast. `priority` controls delivery: `now` bypasses busy gates, `next` waits for idle (default), `low` is pull-only.",
     inputSchema: {
       type: "object",
       properties: {
         to: {
           type: "string",
-          description: "Peer name, pubkey, or #channel",
+          description: "Peer name, pubkey, @group, or #channel",
         },
         message: { type: "string", description: "Message text" },
         priority: {
@@ -76,6 +76,33 @@ export const TOOLS: Tool[] = [
         },
       },
       required: ["status"],
+    },
+  },
+  {
+    name: "join_group",
+    description:
+      "Join a group with an optional role. Other peers see your group membership in list_peers.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Group name (without @)" },
+        role: {
+          type: "string",
+          description: "Your role in the group (e.g. lead, member, observer)",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "leave_group",
+    description: "Leave a group.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Group name (without @)" },
+      },
+      required: ["name"],
     },
   },
 ];

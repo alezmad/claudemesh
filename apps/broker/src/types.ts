@@ -57,6 +57,8 @@ export interface WSHelloMessage {
   sessionId: string;
   pid: number;
   cwd: string;
+  /** Initial groups to join on connect. */
+  groups?: Array<{ name: string; role?: string }>;
   /** ms epoch; broker rejects if outside ±60s of its own clock. */
   timestamp: number;
   /** ed25519 signature (hex) over the canonical hello bytes:
@@ -103,6 +105,19 @@ export interface WSSetSummaryMessage {
   summary: string;
 }
 
+/** Client → broker: join a group with optional role. */
+export interface WSJoinGroupMessage {
+  type: "join_group";
+  name: string;
+  role?: string;
+}
+
+/** Client → broker: leave a group. */
+export interface WSLeaveGroupMessage {
+  type: "leave_group";
+  name: string;
+}
+
 /** Broker → client: acknowledgement for a send. */
 export interface WSAckMessage {
   type: "ack";
@@ -126,6 +141,7 @@ export interface WSPeersListMessage {
     displayName: string;
     status: PeerStatus;
     summary: string | null;
+    groups: Array<{ name: string; role?: string }>;
     sessionId: string;
     connectedAt: string;
   }>;
@@ -144,7 +160,9 @@ export type WSClientMessage =
   | WSSendMessage
   | WSSetStatusMessage
   | WSListPeersMessage
-  | WSSetSummaryMessage;
+  | WSSetSummaryMessage
+  | WSJoinGroupMessage
+  | WSLeaveGroupMessage;
 
 export type WSServerMessage =
   | WSHelloAckMessage
