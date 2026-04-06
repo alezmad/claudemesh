@@ -192,6 +192,7 @@ export const presence = meshSchema.table("presence", {
     .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),
   sessionId: text().notNull(),
+  sessionPubkey: text(),
   displayName: text(),
   pid: integer().notNull(),
   cwd: text().notNull(),

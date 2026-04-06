@@ -56,6 +56,7 @@ interface PeerConn {
   meshId: string;
   memberId: string;
   memberPubkey: string;
+  sessionPubkey: string | null;
   cwd: string;
 }
 
@@ -93,6 +94,7 @@ async function maybePushQueuedMessages(presenceId: string): Promise<void> {
     conn.memberId,
     conn.memberPubkey,
     status,
+    conn.sessionPubkey ?? undefined,
   );
   for (const m of messages) {
     const push: WSPushMessage = {
@@ -400,6 +402,7 @@ async function handleHello(
   const presenceId = await connectPresence({
     memberId: member.id,
     sessionId: hello.sessionId,
+    sessionPubkey: hello.sessionPubkey,
     displayName: hello.displayName,
     pid: hello.pid,
     cwd: hello.cwd,
@@ -409,6 +412,7 @@ async function handleHello(
     meshId: hello.meshId,
     memberId: member.id,
     memberPubkey: hello.pubkey,
+    sessionPubkey: hello.sessionPubkey ?? null,
     cwd: hello.cwd,
   });
   incMeshCount(hello.meshId);
@@ -450,7 +454,9 @@ async function handleSend(
   // Fan-out over connected peers in the same mesh.
   for (const [pid, peer] of connections) {
     if (peer.meshId !== conn.meshId) continue;
-    if (msg.targetSpec !== "*" && peer.memberPubkey !== msg.targetSpec)
+    if (msg.targetSpec !== "*"
+        && peer.memberPubkey !== msg.targetSpec
+        && peer.sessionPubkey !== msg.targetSpec)
       continue;
     void maybePushQueuedMessages(pid);
   }

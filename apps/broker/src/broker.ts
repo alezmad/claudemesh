@@ -307,6 +307,7 @@ export async function refreshStatusFromJsonl(
 export interface ConnectParams {
   memberId: string;
   sessionId: string;
+  sessionPubkey?: string;
   displayName?: string;
   pid: number;
   cwd: string;
@@ -322,6 +323,7 @@ export async function connectPresence(
     .values({
       memberId: params.memberId,
       sessionId: params.sessionId,
+      sessionPubkey: params.sessionPubkey ?? null,
       displayName: params.displayName ?? null,
       pid: params.pid,
       cwd: params.cwd,
@@ -371,7 +373,8 @@ export async function listPeersInMesh(
 > {
   const rows = await db
     .select({
-      pubkey: memberTable.peerPubkey,
+      memberPubkey: memberTable.peerPubkey,
+      sessionPubkey: presence.sessionPubkey,
       memberDisplayName: memberTable.displayName,
       presenceDisplayName: presence.displayName,
       status: presence.status,
@@ -388,9 +391,9 @@ export async function listPeersInMesh(
       ),
     )
     .orderBy(asc(presence.connectedAt));
-  // Prefer per-session displayName over member-level displayName.
+  // Prefer session pubkey for routing, session displayName for display.
   return rows.map((r) => ({
-    pubkey: r.pubkey,
+    pubkey: r.sessionPubkey || r.memberPubkey,
     displayName: r.presenceDisplayName || r.memberDisplayName,
     status: r.status,
     summary: r.summary,
@@ -469,6 +472,7 @@ export async function drainForMember(
   _memberId: string,
   memberPubkey: string,
   status: PeerStatus,
+  sessionPubkey?: string,
 ): Promise<
   Array<{
     id: string;
@@ -509,7 +513,7 @@ export async function drainForMember(
         WHERE mesh_id = ${meshId}
           AND delivered_at IS NULL
           AND priority::text IN (${priorityList})
-          AND (target_spec = ${memberPubkey} OR target_spec = '*')
+          AND (target_spec = ${memberPubkey} OR target_spec = '*'${sessionPubkey ? sql` OR target_spec = ${sessionPubkey}` : sql``})
         ORDER BY created_at ASC, id ASC
         FOR UPDATE SKIP LOCKED
       )

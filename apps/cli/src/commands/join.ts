@@ -14,7 +14,10 @@ import { parseInviteLink } from "../invite/parse";
 import { enrollWithBroker } from "../invite/enroll";
 import { generateKeypair } from "../crypto/keypair";
 import { loadConfig, saveConfig, getConfigPath } from "../state/config";
-import { hostname } from "node:os";
+import { writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { homedir, hostname } from "node:os";
+import { env } from "../env";
 
 export async function runJoin(args: string[]): Promise<void> {
   const link = args[0];
@@ -77,6 +80,16 @@ export async function runJoin(args: string[]): Promise<void> {
     joinedAt: new Date().toISOString(),
   });
   saveConfig(config);
+
+  // 4b. Store invite token for per-session re-enrollment (launch --name).
+  const configDir = env.CLAUDEMESH_CONFIG_DIR ?? join(homedir(), ".claudemesh");
+  const inviteFile = join(configDir, `invite-${payload.mesh_slug}.txt`);
+  try {
+    mkdirSync(dirname(inviteFile), { recursive: true });
+    writeFileSync(inviteFile, link, "utf-8");
+  } catch {
+    // Non-fatal — launch will fall back to shared identity.
+  }
 
   // 5. Report.
   console.log("");

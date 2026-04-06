@@ -21,6 +21,7 @@ import {
   isDirectTarget,
 } from "../crypto/envelope";
 import { signHello } from "../crypto/hello-sig";
+import { generateKeypair } from "../crypto/keypair";
 
 export type Priority = "now" | "next" | "low";
 export type ConnStatus = "connecting" | "open" | "closed" | "reconnecting";
@@ -74,6 +75,8 @@ export class BrokerClient {
   private pushHandlers = new Set<PushHandler>();
   private pushBuffer: InboundPush[] = [];
   private listPeersResolvers: Array<(peers: PeerInfo[]) => void> = [];
+  private sessionPubkey: string | null = null;
+  private sessionSecretKey: string | null = null;
   private closed = false;
   private reconnectAttempt = 0;
   private helloTimer: NodeJS.Timeout | null = null;
@@ -109,8 +112,13 @@ export class BrokerClient {
 
     return new Promise<void>((resolve, reject) => {
       const onOpen = async (): Promise<void> => {
-        this.debug("ws open → signing + sending hello");
+        this.debug("ws open → generating session keypair + signing hello");
         try {
+          // Generate per-session ephemeral keypair for message routing.
+          const sessionKP = await generateKeypair();
+          this.sessionPubkey = sessionKP.publicKey;
+          this.sessionSecretKey = sessionKP.secretKey;
+
           const { timestamp, signature } = await signHello(
             this.mesh.meshId,
             this.mesh.memberId,
@@ -123,6 +131,7 @@ export class BrokerClient {
               meshId: this.mesh.meshId,
               memberId: this.mesh.memberId,
               pubkey: this.mesh.pubkey,
+              sessionPubkey: this.sessionPubkey,
               displayName: process.env.CLAUDEMESH_DISPLAY_NAME || undefined,
               sessionId: `${process.pid}-${Date.now()}`,
               pid: process.pid,
@@ -203,7 +212,7 @@ export class BrokerClient {
       const env = await encryptDirect(
         message,
         targetSpec,
-        this.mesh.secretKey,
+        this.sessionSecretKey ?? this.mesh.secretKey,
       );
       nonce = env.nonce;
       ciphertext = env.ciphertext;
@@ -349,7 +358,7 @@ export class BrokerClient {
           plaintext = await decryptDirect(
             { nonce, ciphertext },
             senderPubkey,
-            this.mesh.secretKey,
+            this.sessionSecretKey ?? this.mesh.secretKey,
           );
         }
         // Legacy/broadcast path: no senderPubkey means the message

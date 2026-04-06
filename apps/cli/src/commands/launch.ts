@@ -17,9 +17,6 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { loadConfig, getConfigPath } from "../state/config";
 import type { Config, JoinedMesh } from "../state/config";
-import { generateKeypair } from "../crypto/keypair";
-import { enrollWithBroker } from "../invite/enroll";
-import { parseInviteLink } from "../invite/parse";
 
 // --- Arg parsing ---
 
@@ -174,12 +171,12 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
     mesh = await pickMesh(config.meshes);
   }
 
-  // 3. Set display name. Uses existing member identity — the broker
-  //    creates a separate presence row per session (sessionId + pid)
-  //    and stores the per-session displayName override.
+  // 3. Session identity. The WS client auto-generates a per-session
+  //    ephemeral keypair on connect (sent in hello as sessionPubkey).
+  //    We just set the display name via env var.
   const displayName = args.name ?? `${hostname()}-${process.pid}`;
 
-  // 4. Write session config to tmpdir (same mesh, same keypair).
+  // 4. Write session config to tmpdir (isolates mesh selection).
   const tmpDir = mkdtempSync(join(tmpdir(), "claudemesh-"));
   const sessionConfig: Config = {
     version: 1,

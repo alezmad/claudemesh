@@ -52,6 +52,7 @@ export interface WSHelloMessage {
   meshId: string;
   memberId: string;
   pubkey: string; // must match mesh.member.peerPubkey
+  sessionPubkey?: string; // ephemeral per-launch pubkey for message routing
   displayName?: string; // optional override for this session
   sessionId: string;
   pid: number;
