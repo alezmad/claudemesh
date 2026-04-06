@@ -81,7 +81,10 @@ function sendToPeer(presenceId: string, msg: WSServerMessage): void {
   }
 }
 
-async function maybePushQueuedMessages(presenceId: string): Promise<void> {
+async function maybePushQueuedMessages(
+  presenceId: string,
+  excludeSenderMemberId?: string,
+): Promise<void> {
   const conn = connections.get(presenceId);
   if (!conn) return;
   const status = await refreshStatusFromJsonl(
@@ -95,6 +98,7 @@ async function maybePushQueuedMessages(presenceId: string): Promise<void> {
     conn.memberPubkey,
     status,
     conn.sessionPubkey ?? undefined,
+    excludeSenderMemberId,
   );
   for (const m of messages) {
     const push: WSPushMessage = {
@@ -452,14 +456,21 @@ async function handleSend(
   };
   conn.ws.send(JSON.stringify(ack));
 
-  // Fan-out over connected peers in the same mesh.
+  // Find sender's presenceId to exclude from fan-out.
+  let senderPresenceId: string | undefined;
   for (const [pid, peer] of connections) {
+    if (peer.ws === conn.ws) { senderPresenceId = pid; break; }
+  }
+
+  // Fan-out over connected peers in the same mesh — skip sender.
+  for (const [pid, peer] of connections) {
+    if (pid === senderPresenceId) continue;
     if (peer.meshId !== conn.meshId) continue;
     if (msg.targetSpec !== "*"
         && peer.memberPubkey !== msg.targetSpec
         && peer.sessionPubkey !== msg.targetSpec)
       continue;
-    void maybePushQueuedMessages(pid);
+    void maybePushQueuedMessages(pid, conn.memberId);
   }
 }
 

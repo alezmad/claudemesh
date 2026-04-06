@@ -115,10 +115,12 @@ export class BrokerClient {
       const onOpen = async (): Promise<void> => {
         this.debug("ws open → generating session keypair + signing hello");
         try {
-          // Generate per-session ephemeral keypair for message routing.
-          const sessionKP = await generateKeypair();
-          this.sessionPubkey = sessionKP.publicKey;
-          this.sessionSecretKey = sessionKP.secretKey;
+          // Only generate session keypair on first connect, not reconnects
+          if (!this.sessionPubkey) {
+            const sessionKP = await generateKeypair();
+            this.sessionPubkey = sessionKP.publicKey;
+            this.sessionSecretKey = sessionKP.secretKey;
+          }
 
           const { timestamp, signature } = await signHello(
             this.mesh.meshId,
@@ -372,6 +374,19 @@ export class BrokerClient {
         if (plaintext === null && ciphertext && !senderPubkey) {
           try {
             plaintext = Buffer.from(ciphertext, "base64").toString("utf-8");
+          } catch {
+            plaintext = null;
+          }
+        }
+        // Fallback: if direct decrypt failed, try plaintext base64 decode.
+        // This handles broadcasts and key mismatches gracefully.
+        if (plaintext === null && ciphertext) {
+          try {
+            const decoded = Buffer.from(ciphertext, "base64").toString("utf-8");
+            // Sanity check: valid UTF-8 text (not binary garbage)
+            if (/^[\x20-\x7E\s\u00A0-\uFFFF]*$/.test(decoded) && decoded.length > 0) {
+              plaintext = decoded;
+            }
           } catch {
             plaintext = null;
           }

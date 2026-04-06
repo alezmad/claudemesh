@@ -265,6 +265,23 @@ export async function refreshQueueDepth(): Promise<void> {
   metrics.queueDepth.set(Number(row?.n ?? 0));
 }
 
+/**
+ * Sweep stale presences: mark as disconnected if last_ping_at is older
+ * than 90s (3 missed pings at the 30s interval = dead session).
+ */
+export async function sweepStalePresences(): Promise<void> {
+  const cutoff = new Date(Date.now() - 90_000); // 3 missed pings
+  await db
+    .update(presence)
+    .set({ disconnectedAt: new Date() })
+    .where(
+      and(
+        isNull(presence.disconnectedAt),
+        lt(presence.lastPingAt, cutoff),
+      ),
+    );
+}
+
 /** Sweep expired pending_status entries. */
 export async function sweepPendingStatuses(): Promise<void> {
   const cutoff = new Date(Date.now() - PENDING_TTL_MS);
@@ -475,6 +492,7 @@ export async function drainForMember(
   memberPubkey: string,
   status: PeerStatus,
   sessionPubkey?: string,
+  excludeSenderMemberId?: string,
 ): Promise<
   Array<{
     id: string;
@@ -516,6 +534,7 @@ export async function drainForMember(
           AND delivered_at IS NULL
           AND priority::text IN (${priorityList})
           AND (target_spec = ${memberPubkey} OR target_spec = '*'${sessionPubkey ? sql` OR target_spec = ${sessionPubkey}` : sql``})
+          ${excludeSenderMemberId ? sql`AND sender_member_id != ${excludeSenderMemberId}` : sql``}
         ORDER BY created_at ASC, id ASC
         FOR UPDATE SKIP LOCKED
       )
@@ -553,6 +572,7 @@ export async function drainForMember(
 
 let ttlTimer: ReturnType<typeof setInterval> | null = null;
 let pendingTimer: ReturnType<typeof setInterval> | null = null;
+let staleTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Start background sweepers. Idempotent. */
 export function startSweepers(): void {
@@ -565,14 +585,21 @@ export function startSweepers(): void {
       console.error("[broker] pending sweep:", e),
     );
   }, PENDING_SWEEP_INTERVAL_MS);
+  staleTimer = setInterval(() => {
+    sweepStalePresences().catch((e) =>
+      console.error("[broker] stale presence sweep:", e),
+    );
+  }, 30_000);
 }
 
 /** Stop background sweepers and mark all active presences disconnected. */
 export async function stopSweepers(): Promise<void> {
   if (ttlTimer) clearInterval(ttlTimer);
   if (pendingTimer) clearInterval(pendingTimer);
+  if (staleTimer) clearInterval(staleTimer);
   ttlTimer = null;
   pendingTimer = null;
+  staleTimer = null;
   await db
     .update(presence)
     .set({ disconnectedAt: new Date() })

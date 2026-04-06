@@ -11,7 +11,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, statSync } from "node:fs";
 import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -214,6 +214,17 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
   //    ephemeral keypair on connect (sent in hello as sessionPubkey).
   //    We just set the display name via env var.
   const displayName = args.name ?? `${hostname()}-${process.pid}`;
+
+  // Clean up orphaned tmpdirs from crashed sessions (older than 1 hour)
+  const tmpBase = tmpdir();
+  try {
+    for (const entry of readdirSync(tmpBase)) {
+      if (!entry.startsWith("claudemesh-")) continue;
+      const full = join(tmpBase, entry);
+      const age = Date.now() - statSync(full).mtimeMs;
+      if (age > 3600_000) rmSync(full, { recursive: true, force: true });
+    }
+  } catch { /* best effort */ }
 
   // 4. Write session config to tmpdir (isolates mesh selection).
   const tmpDir = mkdtempSync(join(tmpdir(), "claudemesh-"));

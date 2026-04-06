@@ -98,6 +98,24 @@ async function resolveClient(to: string): Promise<{
   };
 }
 
+// Peer name cache to avoid calling listPeers on every incoming push
+const peerNameCache = new Map<string, string>();
+let peerNameCacheAge = 0;
+const CACHE_TTL_MS = 30_000;
+
+async function resolvePeerName(client: BrokerClient, pubkey: string): Promise<string> {
+  const now = Date.now();
+  if (now - peerNameCacheAge > CACHE_TTL_MS) {
+    peerNameCache.clear();
+    try {
+      const peers = await client.listPeers();
+      for (const p of peers) peerNameCache.set(p.pubkey, p.displayName);
+    } catch { /* best effort */ }
+    peerNameCacheAge = now;
+  }
+  return peerNameCache.get(pubkey) ?? `peer-${pubkey.slice(0, 8)}`;
+}
+
 function decryptFailedWarning(senderPubkey: string): string {
   const who = senderPubkey ? senderPubkey.slice(0, 12) + "…" : "unknown sender";
   return `⚠ message from ${who} failed to decrypt (tampered or wrong keypair)`;
@@ -251,17 +269,10 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
   for (const client of allClients()) {
     client.onPush(async (msg) => {
       const fromPubkey = msg.senderPubkey || "";
-      // Resolve sender's display name from the peer list.
-      let fromName = fromPubkey
-        ? `peer-${fromPubkey.slice(0, 8)}`
+      // Resolve sender's display name from the cached peer list.
+      const fromName = fromPubkey
+        ? await resolvePeerName(client, fromPubkey)
         : "unknown";
-      try {
-        const peers = await client.listPeers();
-        const match = peers.find((p) => p.pubkey === fromPubkey);
-        if (match) fromName = match.displayName;
-      } catch {
-        /* best effort — fall back to truncated pubkey */
-      }
       const content = msg.plaintext ?? decryptFailedWarning(fromPubkey);
       try {
         await server.notification({
