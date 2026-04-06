@@ -526,8 +526,11 @@ export class BrokerClient {
       body: data,
       signal: AbortSignal.timeout(30_000),
     });
-    const body = await res.json() as { ok?: boolean; fileId?: string };
-    return body.fileId ?? null;
+    const body = await res.json() as { ok?: boolean; fileId?: string; error?: string };
+    if (!res.ok || !body.fileId) {
+      throw new Error(body.error ?? `HTTP ${res.status}`);
+    }
+    return body.fileId;
   }
 
   // --- Vectors ---

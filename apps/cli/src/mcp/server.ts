@@ -445,11 +445,14 @@ Your message mode is "${messageMode}".
         if (!existsSync(filePath)) return text(`share_file: file not found: ${filePath}`, true);
         const client = allClients()[0];
         if (!client) return text("share_file: not connected", true);
-        const fileId = await client.uploadFile(filePath, client.meshId, client.meshSlug, {
-          name: fileName, tags, persistent: true,
-        });
-        if (!fileId) return text("share_file: upload failed", true);
-        return text(`Shared: ${fileName ?? filePath} (${fileId})`);
+        try {
+          const fileId = await client.uploadFile(filePath, client.meshId, client.meshSlug, {
+            name: fileName, tags, persistent: true,
+          });
+          return text(`Shared: ${fileName ?? filePath} (${fileId})`);
+        } catch (e) {
+          return text(`share_file: upload failed — ${e instanceof Error ? e.message : String(e)}`, true);
+        }
       }
 
       case "get_file": {
@@ -856,7 +859,21 @@ Your message mode is "${messageMode}".
     });
   }
 
+  // Event loop keepalive: Node.js stdout to a pipe is buffered. Without
+  // periodic event loop activity, stdout.write() from WS callbacks may not
+  // flush until the next I/O event. This 1s interval keeps the event loop
+  // ticking so channel notifications flush promptly — same pattern that made
+  // claude-intercom's push delivery reliable (its 1s HTTP poll had this
+  // effect as a side effect). The interval does nothing except prevent the
+  // event loop from settling.
+  const keepalive = setInterval(() => {
+    // Intentionally empty — the interval itself keeps the event loop active.
+    // Do NOT call .unref() — that would defeat the purpose.
+  }, 1_000);
+  void keepalive; // suppress unused warning
+
   const shutdown = (): void => {
+    clearInterval(keepalive);
     stopAll();
     process.exit(0);
   };
