@@ -3,10 +3,6 @@
  *
  * Starts BrokerClient connections for every mesh in config on boot,
  * then routes the 5 MCP tools through them.
- *
- * list_peers is stubbed at the CLI level — the broker's WS protocol
- * does not yet carry a list-peers request type (Step 16). Until then,
- * it returns a note.
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -163,13 +159,21 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
               : "list_peers: no joined meshes",
             true,
           );
-        const lines = clients.map(
-          (c) =>
-            `- ${c!.meshSlug} (${c!.status}, mesh ${c!.meshId.slice(0, 8)}…)`,
-        );
-        return text(
-          `Connected meshes:\n${lines.join("\n")}\n\n(list_peers WS protocol lands in Step 16; only mesh status is shown for now.)`,
-        );
+        const sections: string[] = [];
+        for (const c of clients) {
+          const peers = await c!.listPeers();
+          const header = `## ${c!.meshSlug} (${c!.status}, mesh ${c!.meshId.slice(0, 8)}…)`;
+          if (peers.length === 0) {
+            sections.push(`${header}\nNo peers connected.`);
+          } else {
+            const peerLines = peers.map((p) => {
+              const summary = p.summary ? ` — "${p.summary}"` : "";
+              return `- **${p.displayName}** [${p.status}] (${p.pubkey.slice(0, 12)}…)${summary}`;
+            });
+            sections.push(`${header}\n${peerLines.join("\n")}`);
+          }
+        }
+        return text(sections.join("\n\n"));
       }
 
       case "check_messages": {
@@ -187,8 +191,9 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
       case "set_summary": {
         const { summary } = (args ?? {}) as SetSummaryArgs;
         if (!summary) return text("set_summary: `summary` required", true);
+        for (const c of allClients()) await c.setSummary(summary);
         return text(
-          `set_summary: summary recorded locally ("${summary}"). (Broker WS protocol for summaries lands in Step 16.)`,
+          `Summary set: "${summary}" (visible to ${allClients().length} mesh(es)).`,
         );
       }
 

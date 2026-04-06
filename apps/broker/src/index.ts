@@ -24,9 +24,11 @@ import {
   handleHookSetStatus,
   heartbeat,
   joinMesh,
+  listPeersInMesh,
   queueMessage,
   refreshQueueDepth,
   refreshStatusFromJsonl,
+  setSummary,
   startSweepers,
   stopSweepers,
   writeStatus,
@@ -494,6 +496,36 @@ function handleConnection(ws: WebSocket): void {
             status: msg.status,
           });
           break;
+        case "list_peers": {
+          const peers = await listPeersInMesh(conn.meshId);
+          const resp: WSServerMessage = {
+            type: "peers_list",
+            peers: peers.map((p) => ({
+              pubkey: p.pubkey,
+              displayName: p.displayName,
+              status: p.status as "idle" | "working" | "dnd",
+              summary: p.summary,
+              sessionId: p.sessionId,
+              connectedAt: p.connectedAt.toISOString(),
+            })),
+          };
+          conn.ws.send(JSON.stringify(resp));
+          log.info("ws list_peers", {
+            presence_id: presenceId,
+            mesh_id: conn.meshId,
+            count: peers.length,
+          });
+          break;
+        }
+        case "set_summary": {
+          const summary = (msg as { summary?: string }).summary ?? "";
+          await setSummary(presenceId, summary);
+          log.info("ws set_summary", {
+            presence_id: presenceId,
+            summary: summary.slice(0, 80),
+          });
+          break;
+        }
       }
     } catch (e) {
       metrics.messagesRejectedTotal.inc({ reason: "parse_or_handler" });

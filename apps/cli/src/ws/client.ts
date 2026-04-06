@@ -25,6 +25,15 @@ import { signHello } from "../crypto/hello-sig";
 export type Priority = "now" | "next" | "low";
 export type ConnStatus = "connecting" | "open" | "closed" | "reconnecting";
 
+export interface PeerInfo {
+  pubkey: string;
+  displayName: string;
+  status: string;
+  summary: string | null;
+  sessionId: string;
+  connectedAt: string;
+}
+
 export interface InboundPush {
   messageId: string;
   meshId: string;
@@ -64,6 +73,7 @@ export class BrokerClient {
   private outbound: Array<() => void> = []; // closures that send once ws is open
   private pushHandlers = new Set<PushHandler>();
   private pushBuffer: InboundPush[] = [];
+  private listPeersResolvers: Array<(peers: PeerInfo[]) => void> = [];
   private closed = false;
   private reconnectAttempt = 0;
   private helloTimer: NodeJS.Timeout | null = null;
@@ -266,6 +276,29 @@ export class BrokerClient {
     this.ws.send(JSON.stringify({ type: "set_status", status }));
   }
 
+  /** Request the list of connected peers from the broker. */
+  async listPeers(): Promise<PeerInfo[]> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.listPeersResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "list_peers" }));
+      // Timeout after 5s — return empty list rather than hang.
+      setTimeout(() => {
+        const idx = this.listPeersResolvers.indexOf(resolve);
+        if (idx !== -1) {
+          this.listPeersResolvers.splice(idx, 1);
+          resolve([]);
+        }
+      }, 5_000);
+    });
+  }
+
+  /** Update this session's summary visible to other peers. */
+  async setSummary(summary: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "set_summary", summary }));
+  }
+
   close(): void {
     this.closed = true;
     if (this.helloTimer) clearTimeout(this.helloTimer);
@@ -292,6 +325,12 @@ export class BrokerClient {
         });
         this.pendingSends.delete(pending.id);
       }
+      return;
+    }
+    if (msg.type === "peers_list") {
+      const peers = (msg.peers as PeerInfo[]) ?? [];
+      const resolver = this.listPeersResolvers.shift();
+      if (resolver) resolver(peers);
       return;
     }
     if (msg.type === "push") {

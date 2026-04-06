@@ -197,6 +197,7 @@ export const presence = meshSchema.table("presence", {
   status: presenceStatusEnum().notNull().default("idle"),
   statusSource: presenceStatusSourceEnum().notNull().default("jsonl"),
   statusUpdatedAt: timestamp().defaultNow().notNull(),
+  summary: text(),
   connectedAt: timestamp().defaultNow().notNull(),
   lastPingAt: timestamp().defaultNow().notNull(),
   disconnectedAt: timestamp(),

@@ -90,6 +90,17 @@ export interface WSSetStatusMessage {
   status: PeerStatus;
 }
 
+/** Client → broker: request list of connected peers in the same mesh. */
+export interface WSListPeersMessage {
+  type: "list_peers";
+}
+
+/** Client → broker: update the session's human-readable summary. */
+export interface WSSetSummaryMessage {
+  type: "set_summary";
+  summary: string;
+}
+
 /** Broker → client: acknowledgement for a send. */
 export interface WSAckMessage {
   type: "ack";
@@ -105,6 +116,19 @@ export interface WSHelloAckMessage {
   memberDisplayName: string;
 }
 
+/** Broker → client: list of connected peers in the same mesh. */
+export interface WSPeersListMessage {
+  type: "peers_list";
+  peers: Array<{
+    pubkey: string;
+    displayName: string;
+    status: PeerStatus;
+    summary: string | null;
+    sessionId: string;
+    connectedAt: string;
+  }>;
+}
+
 /** Broker → client: structured error. */
 export interface WSErrorMessage {
   type: "error";
@@ -116,10 +140,13 @@ export interface WSErrorMessage {
 export type WSClientMessage =
   | WSHelloMessage
   | WSSendMessage
-  | WSSetStatusMessage;
+  | WSSetStatusMessage
+  | WSListPeersMessage
+  | WSSetSummaryMessage;
 
 export type WSServerMessage =
   | WSHelloAckMessage
   | WSPushMessage
   | WSAckMessage
+  | WSPeersListMessage
   | WSErrorMessage;

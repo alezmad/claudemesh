@@ -1,33 +1,21 @@
 import Link from "next/link";
 
-export const dynamic = "force-dynamic";
-
 export const metadata = {
   title: "Blog — claudemesh",
   description: "Engineering notes on peer messaging, protocol design, and multi-agent security.",
 };
 
-async function getPosts() {
-  try {
-    const { getPayload } = await import("payload");
-    const config = (await import("@payload-config")).default;
-    const payload = await getPayload({ config });
-    const { docs } = await payload.find({
-      collection: "posts",
-      where: { status: { equals: "published" } },
-      sort: "-publishedAt",
-      limit: 20,
-      depth: 1,
-    });
-    return docs;
-  } catch {
-    return [];
-  }
-}
+const POSTS = [
+  {
+    slug: "peer-messaging-claude-code",
+    title: "Peer messaging for Claude Code: protocol, security, UX",
+    excerpt:
+      "How claudemesh connects Claude Code sessions over an encrypted mesh, using MCP dev-channels for real-time message injection.",
+    date: "2026-04-06",
+  },
+];
 
-export default async function BlogIndex() {
-  const posts = await getPosts();
-
+export default function BlogIndex() {
   return (
     <section className="mx-auto max-w-3xl px-6 py-24 md:py-32">
       <h1
@@ -44,25 +32,18 @@ export default async function BlogIndex() {
       </p>
 
       <div className="mt-12 space-y-10">
-        {posts.length === 0 && (
-          <p className="text-sm text-[var(--cm-fg-tertiary)]" style={{ fontFamily: "var(--cm-font-mono)" }}>
-            No posts yet. First one ships soon.
-          </p>
-        )}
-        {posts.map((post: any) => (
-          <article key={post.id} className="border-b border-[var(--cm-border)] pb-8">
+        {POSTS.map((post) => (
+          <article key={post.slug} className="border-b border-[var(--cm-border)] pb-8">
             <time
-              dateTime={post.publishedAt}
+              dateTime={post.date}
               className="text-[11px] uppercase tracking-wider text-[var(--cm-fg-tertiary)]"
               style={{ fontFamily: "var(--cm-font-mono)" }}
             >
-              {post.publishedAt
-                ? new Date(post.publishedAt).toLocaleDateString("en-US", {
-                    year: "numeric",
-                    month: "long",
-                    day: "numeric",
-                  })
-                : "Draft"}
+              {new Date(post.date).toLocaleDateString("en-US", {
+                year: "numeric",
+                month: "long",
+                day: "numeric",
+              })}
             </time>
             <h2 className="mt-2">
               <Link
@@ -73,14 +54,12 @@ export default async function BlogIndex() {
                 {post.title}
               </Link>
             </h2>
-            {post.excerpt && (
-              <p
-                className="mt-3 text-[14px] leading-[1.6] text-[var(--cm-fg-secondary)]"
-                style={{ fontFamily: "var(--cm-font-sans)" }}
-              >
-                {post.excerpt}
-              </p>
-            )}
+            <p
+              className="mt-3 text-[14px] leading-[1.6] text-[var(--cm-fg-secondary)]"
+              style={{ fontFamily: "var(--cm-font-sans)" }}
+            >
+              {post.excerpt}
+            </p>
           </article>
         ))}
       </div>

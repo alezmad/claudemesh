@@ -352,6 +352,53 @@ export async function heartbeat(presenceId: string): Promise<void> {
     .where(eq(presence.id, presenceId));
 }
 
+// --- Peer discovery ---
+
+/** Return all active (connected) presences in a mesh, joined with member info. */
+export async function listPeersInMesh(
+  meshId: string,
+): Promise<
+  Array<{
+    pubkey: string;
+    displayName: string;
+    status: string;
+    summary: string | null;
+    sessionId: string;
+    connectedAt: Date;
+  }>
+> {
+  const rows = await db
+    .select({
+      pubkey: memberTable.peerPubkey,
+      displayName: memberTable.displayName,
+      status: presence.status,
+      summary: presence.summary,
+      sessionId: presence.sessionId,
+      connectedAt: presence.connectedAt,
+    })
+    .from(presence)
+    .innerJoin(memberTable, eq(presence.memberId, memberTable.id))
+    .where(
+      and(
+        eq(memberTable.meshId, meshId),
+        isNull(presence.disconnectedAt),
+      ),
+    )
+    .orderBy(asc(presence.connectedAt));
+  return rows;
+}
+
+/** Update the summary text on a presence row. */
+export async function setSummary(
+  presenceId: string,
+  summary: string,
+): Promise<void> {
+  await db
+    .update(presence)
+    .set({ summary })
+    .where(eq(presence.id, presenceId));
+}
+
 // --- Message queueing + delivery ---
 
 export interface QueueParams {
