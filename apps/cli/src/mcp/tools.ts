@@ -12,7 +12,7 @@ export const TOOLS: Tool[] = [
   {
     name: "send_message",
     description:
-      "Send a message to a peer in one of your joined meshes. `to` is a peer display name, hex pubkey, or `#channel`. `priority` controls delivery: `now` bypasses busy gates, `next` waits for idle (default), `low` is pull-only.",
+      "Send a message to a peer in one of your joined meshes. `to` can be a peer display name (resolved via list_peers), hex pubkey, `#channel`, or `*` for broadcast. `priority` controls delivery: `now` bypasses busy gates, `next` waits for idle (default), `low` is pull-only.",
     inputSchema: {
       type: "object",
       properties: {

@@ -33,39 +33,68 @@ function text(msg: string, isError = false) {
 
 /**
  * Given a `to` string, pick which mesh to send from. Strategies:
- *   - If `to` looks like a pubkey hex (64 chars), try every client;
- *     caller is expected to know which mesh the pubkey lives in.
- *   - If `to` starts with `#`, treat as channel on the first mesh.
- *   - Otherwise try to match a displayName (TODO — needs list_peers).
+ *   - If `to` looks like a pubkey hex (64 chars), use as-is.
+ *   - If `to` starts with `#`, treat as channel.
+ *   - If `to` is `*`, treat as broadcast.
+ *   - Otherwise resolve as a display name via list_peers.
  *
- * For now the MVP: if only one mesh is joined, use that. Otherwise
- * require the caller to prefix with `<mesh-slug>:`.
+ * Explicit mesh prefix `<mesh-slug>:<target>` narrows to one mesh.
  */
-function resolveClient(to: string): {
+async function resolveClient(to: string): Promise<{
   client: BrokerClient | null;
   targetSpec: string;
   error?: string;
-} {
+}> {
   const clients = allClients();
   if (clients.length === 0) {
     return { client: null, targetSpec: to, error: "no meshes joined" };
   }
   // Explicit mesh prefix: "mesh-slug:targetspec"
+  let targetClients = clients;
+  let target = to;
   const colonIdx = to.indexOf(":");
   if (colonIdx > 0 && colonIdx < to.length - 1) {
     const slug = to.slice(0, colonIdx);
     const rest = to.slice(colonIdx + 1);
     const match = findClient(slug);
-    if (match) return { client: match, targetSpec: rest };
+    if (match) {
+      targetClients = [match];
+      target = rest;
+    }
   }
-  // Single-mesh fast path.
-  if (clients.length === 1) {
-    return { client: clients[0]!, targetSpec: to };
+  // Pubkey, channel, or broadcast — pass through directly.
+  if (/^[0-9a-f]{64}$/.test(target) || target.startsWith("#") || target === "*") {
+    if (targetClients.length === 1) {
+      return { client: targetClients[0]!, targetSpec: target };
+    }
+    return {
+      client: null,
+      targetSpec: target,
+      error: `multiple meshes joined; prefix target with "<mesh-slug>:" (joined: ${clients.map((c) => c.meshSlug).join(", ")})`,
+    };
+  }
+  // Name-based resolution: query each mesh's peer list for a matching displayName.
+  const nameLower = target.toLowerCase();
+  for (const c of targetClients) {
+    const peers = await c.listPeers();
+    const match = peers.find((p) => p.displayName.toLowerCase() === nameLower);
+    if (match) return { client: c, targetSpec: match.pubkey };
+    // Partial match: if only one peer's name contains the search string.
+    const partials = peers.filter((p) =>
+      p.displayName.toLowerCase().includes(nameLower),
+    );
+    if (partials.length === 1) {
+      return { client: c, targetSpec: partials[0]!.pubkey };
+    }
+  }
+  // Single-mesh fallback: let the broker try to resolve it.
+  if (targetClients.length === 1) {
+    return { client: targetClients[0]!, targetSpec: target };
   }
   return {
     client: null,
-    targetSpec: to,
-    error: `multiple meshes joined; prefix target with "<mesh-slug>:" (joined: ${clients.map((c) => c.meshSlug).join(", ")})`,
+    targetSpec: target,
+    error: `peer "${target}" not found in any mesh (joined: ${clients.map((c) => c.meshSlug).join(", ")})`,
   };
 }
 
@@ -97,7 +126,7 @@ Read the from_id, from_name, mesh_slug, and priority attributes to understand co
 
 Available tools:
 - list_peers: see joined meshes + their connection status
-- send_message: send to a peer pubkey, channel, or broadcast (priority: now/next/low)
+- send_message: send to a peer by display name, pubkey, #channel, or * broadcast (priority: now/next/low)
 - check_messages: drain buffered inbound messages (usually auto-pushed)
 - set_summary: 1-2 sentence summary of what you're working on
 - set_status: manually override your status (idle/working/dnd)
@@ -129,7 +158,7 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
         const { to, message, priority } = (args ?? {}) as SendMessageArgs;
         if (!to || !message)
           return text("send_message: `to` and `message` required", true);
-        const { client, targetSpec, error } = resolveClient(to);
+        const { client, targetSpec, error } = await resolveClient(to);
         if (!client)
           return text(`send_message: ${error ?? "no client resolved"}`, true);
         const result = await client.send(
