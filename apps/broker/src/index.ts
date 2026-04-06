@@ -123,7 +123,10 @@ async function maybePushQueuedMessages(
   excludeSenderSessionPubkey?: string,
 ): Promise<void> {
   const conn = connections.get(presenceId);
-  if (!conn) return;
+  if (!conn) {
+    log.debug("maybePush: no connection for presence", { presence_id: presenceId });
+    return;
+  }
   const status = await refreshStatusFromJsonl(
     presenceId,
     conn.cwd,
@@ -138,6 +141,13 @@ async function maybePushQueuedMessages(
     excludeSenderSessionPubkey,
     conn.groups.map((g) => g.name),
   );
+  log.info("maybePush", {
+    presence_id: presenceId,
+    status,
+    session_pubkey: conn.sessionPubkey?.slice(0, 12),
+    exclude: excludeSenderSessionPubkey?.slice(0, 12),
+    drained: messages.length,
+  });
   for (const m of messages) {
     const push: WSPushMessage = {
       type: "push",
