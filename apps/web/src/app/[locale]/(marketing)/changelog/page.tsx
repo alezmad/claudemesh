@@ -1,6 +1,3 @@
-import { getPayload } from "payload";
-import config from "@payload-config";
-
 export const dynamic = "force-dynamic";
 
 export const metadata = {
@@ -22,13 +19,24 @@ const TYPE_COLORS: Record<string, string> = {
   breaking: "bg-red-500",
 };
 
+async function getChangelog() {
+  try {
+    const { getPayload } = await import("payload");
+    const config = (await import("@payload-config")).default;
+    const payload = await getPayload({ config });
+    const { docs } = await payload.find({
+      collection: "changelog",
+      sort: "-date",
+      limit: 50,
+    });
+    return docs;
+  } catch {
+    return [];
+  }
+}
+
 export default async function ChangelogPage() {
-  const payload = await getPayload({ config });
-  const { docs: entries } = await payload.find({
-    collection: "changelog",
-    sort: "-date",
-    limit: 50,
-  });
+  const entries = await getChangelog();
 
   return (
     <section className="mx-auto max-w-3xl px-6 py-24 md:py-32">

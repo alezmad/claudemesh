@@ -1,40 +1,39 @@
 import { notFound } from "next/navigation";
-import { getPayload } from "payload";
-import config from "@payload-config";
-import { RichText } from "@payloadcms/richtext-lexical/react";
 
 export const dynamic = "force-dynamic";
 
 type Props = { params: Promise<{ slug: string }> };
 
+async function getPost(slug: string) {
+  try {
+    const { getPayload } = await import("payload");
+    const config = (await import("@payload-config")).default;
+    const payload = await getPayload({ config });
+    const { docs } = await payload.find({
+      collection: "posts",
+      where: { slug: { equals: slug }, status: { equals: "published" } },
+      limit: 1,
+      depth: 2,
+    });
+    return docs[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function generateMetadata({ params }: Props) {
   const { slug } = await params;
-  const payload = await getPayload({ config });
-  const { docs } = await payload.find({
-    collection: "posts",
-    where: { slug: { equals: slug }, status: { equals: "published" } },
-    limit: 1,
-    depth: 1,
-  });
-  const post = docs[0];
+  const post = await getPost(slug);
   if (!post) return { title: "Not found — claudemesh" };
   return {
-    title: `${post.title} — claudemesh`,
-    description: post.excerpt || post.seo?.metaDescription || undefined,
+    title: `${(post as any).title} — claudemesh`,
+    description: (post as any).excerpt || undefined,
   };
 }
 
 export default async function BlogPost({ params }: Props) {
   const { slug } = await params;
-  const payload = await getPayload({ config });
-  const { docs } = await payload.find({
-    collection: "posts",
-    where: { slug: { equals: slug }, status: { equals: "published" } },
-    limit: 1,
-    depth: 2,
-  });
-
-  const post = docs[0] as any;
+  const post = await getPost(slug) as any;
   if (!post) notFound();
 
   const author = typeof post.author === "object" ? post.author : null;
@@ -75,7 +74,11 @@ export default async function BlogPost({ params }: Props) {
         className="prose prose-invert max-w-none prose-headings:font-medium prose-a:text-[var(--cm-clay)] prose-a:no-underline hover:prose-a:underline prose-code:text-[var(--cm-fg-secondary)]"
         style={{ fontFamily: "var(--cm-font-serif)" }}
       >
-        {post.content && <RichText data={post.content} />}
+        {post.content && typeof post.content === "string" ? (
+          <div dangerouslySetInnerHTML={{ __html: post.content }} />
+        ) : (
+          <p className="text-[var(--cm-fg-tertiary)]">Content not available.</p>
+        )}
       </div>
     </article>
   );

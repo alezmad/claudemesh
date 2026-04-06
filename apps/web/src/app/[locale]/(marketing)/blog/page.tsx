@@ -1,6 +1,4 @@
 import Link from "next/link";
-import { getPayload } from "payload";
-import config from "@payload-config";
 
 export const dynamic = "force-dynamic";
 
@@ -9,15 +7,26 @@ export const metadata = {
   description: "Engineering notes on peer messaging, protocol design, and multi-agent security.",
 };
 
+async function getPosts() {
+  try {
+    const { getPayload } = await import("payload");
+    const config = (await import("@payload-config")).default;
+    const payload = await getPayload({ config });
+    const { docs } = await payload.find({
+      collection: "posts",
+      where: { status: { equals: "published" } },
+      sort: "-publishedAt",
+      limit: 20,
+      depth: 1,
+    });
+    return docs;
+  } catch {
+    return [];
+  }
+}
+
 export default async function BlogIndex() {
-  const payload = await getPayload({ config });
-  const { docs: posts } = await payload.find({
-    collection: "posts",
-    where: { status: { equals: "published" } },
-    sort: "-publishedAt",
-    limit: 20,
-    depth: 1,
-  });
+  const posts = await getPosts();
 
   return (
     <section className="mx-auto max-w-3xl px-6 py-24 md:py-32">
