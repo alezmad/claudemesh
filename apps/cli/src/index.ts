@@ -30,9 +30,12 @@ Commands:
   install         Register MCP + Stop/UserPromptSubmit status hooks
                   (add --no-hooks for bare MCP registration)
   uninstall       Remove MCP server + hooks
-  launch [args]   Launch Claude Code with real-time push messages enabled
-                  (add --quiet to skip the info banner; passes through
-                  extra flags, e.g. --model, --resume)
+  launch [opts]   Launch Claude Code with real-time push messages
+                  --name <name>   Display name for this session
+                  --mesh <slug>   Select mesh (picker if >1, omitted)
+                  --join <url>    Join a mesh before launching
+                  --quiet         Skip the info banner
+                  -- <args>       Pass remaining args to claude
   join <url>      Join a mesh via https://claudemesh.com/join/... URL
   list            Show all joined meshes
   leave <slug>    Leave a joined mesh
@@ -67,7 +70,7 @@ async function main(): Promise<void> {
       await runHook(args);
       return;
     case "launch":
-      runLaunch(args);
+      await runLaunch(args);
       return;
     case "join":
       await runJoin(args);

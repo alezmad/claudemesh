@@ -123,6 +123,7 @@ export class BrokerClient {
               meshId: this.mesh.meshId,
               memberId: this.mesh.memberId,
               pubkey: this.mesh.pubkey,
+              displayName: process.env.CLAUDEMESH_DISPLAY_NAME || undefined,
               sessionId: `${process.pid}-${Date.now()}`,
               pid: process.pid,
               cwd: process.cwd(),

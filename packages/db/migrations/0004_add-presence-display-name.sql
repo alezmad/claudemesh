@@ -1,0 +1,1 @@
+ALTER TABLE "mesh"."presence" ADD COLUMN "display_name" text;

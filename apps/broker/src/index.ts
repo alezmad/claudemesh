@@ -400,6 +400,7 @@ async function handleHello(
   const presenceId = await connectPresence({
     memberId: member.id,
     sessionId: hello.sessionId,
+    displayName: hello.displayName,
     pid: hello.pid,
     cwd: hello.cwd,
   });
@@ -411,9 +412,10 @@ async function handleHello(
     cwd: hello.cwd,
   });
   incMeshCount(hello.meshId);
+  const effectiveDisplayName = hello.displayName || member.displayName;
   log.info("ws hello", {
     mesh_id: hello.meshId,
-    member: member.displayName,
+    member: effectiveDisplayName,
     presence_id: presenceId,
     session_id: hello.sessionId,
   });
@@ -422,7 +424,7 @@ async function handleHello(
   // races the caller's closure assignment, causing subsequent client
   // messages to fail the "no_hello" check.
   void maybePushQueuedMessages(presenceId);
-  return { presenceId, memberDisplayName: member.displayName };
+  return { presenceId, memberDisplayName: effectiveDisplayName };
 }
 
 async function handleSend(

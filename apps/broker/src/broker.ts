@@ -307,6 +307,7 @@ export async function refreshStatusFromJsonl(
 export interface ConnectParams {
   memberId: string;
   sessionId: string;
+  displayName?: string;
   pid: number;
   cwd: string;
 }
@@ -321,6 +322,7 @@ export async function connectPresence(
     .values({
       memberId: params.memberId,
       sessionId: params.sessionId,
+      displayName: params.displayName ?? null,
       pid: params.pid,
       cwd: params.cwd,
       status: "idle",
@@ -370,7 +372,8 @@ export async function listPeersInMesh(
   const rows = await db
     .select({
       pubkey: memberTable.peerPubkey,
-      displayName: memberTable.displayName,
+      memberDisplayName: memberTable.displayName,
+      presenceDisplayName: presence.displayName,
       status: presence.status,
       summary: presence.summary,
       sessionId: presence.sessionId,
@@ -385,7 +388,15 @@ export async function listPeersInMesh(
       ),
     )
     .orderBy(asc(presence.connectedAt));
-  return rows;
+  // Prefer per-session displayName over member-level displayName.
+  return rows.map((r) => ({
+    pubkey: r.pubkey,
+    displayName: r.presenceDisplayName || r.memberDisplayName,
+    status: r.status,
+    summary: r.summary,
+    sessionId: r.sessionId,
+    connectedAt: r.connectedAt,
+  }));
 }
 
 /** Update the summary text on a presence row. */
