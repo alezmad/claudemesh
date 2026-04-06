@@ -1,5 +1,4 @@
 import type { NextConfig } from "next";
-import { withPayload } from "@payloadcms/next/withPayload";
 
 import env from "./env.config";
 
@@ -116,4 +115,4 @@ const withBundleAnalyzer = require("@next/bundle-analyzer")({
   enabled: env.ANALYZE,
 });
 
-export default withPayload(withBundleAnalyzer(config));
+export default withBundleAnalyzer(config);
