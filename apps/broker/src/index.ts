@@ -1658,6 +1658,9 @@ function handleConnection(ws: WebSocket): void {
           for (const p of peers) for (const g of p.groups) allGroups.add(`@${g.name}`);
           const myPresence = peers.find(p => p.sessionId === [...connections.entries()].find(([pid]) => pid === presenceId)?.[1]?.sessionPubkey);
           const peerConn = connections.get(presenceId);
+          // Find own display name: match sessionPubkey from the peer list
+          const selfPubkey = peerConn?.sessionPubkey ?? peerConn?.memberPubkey;
+          const selfPeer = peers.find(p => p.pubkey === selfPubkey);
           sendToPeer(presenceId, {
             type: "mesh_info_result",
             mesh: conn.meshId,
@@ -1670,7 +1673,7 @@ function handleConnection(ws: WebSocket): void {
             streams: streams.map(s => s.name),
             tables: tables.map((t: any) => t.name),
             collections: [],
-            yourName: peerConn?.groups?.[0]?.name ?? "unknown",
+            yourName: selfPeer?.displayName ?? "unknown",
             yourGroups: peerConn?.groups ?? [],
           });
           log.info("ws mesh_info", { presence_id: presenceId });
