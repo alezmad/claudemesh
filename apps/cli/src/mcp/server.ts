@@ -859,6 +859,27 @@ Your message mode is "${messageMode}".
     });
   }
 
+  // Welcome notification: give Claude immediate context on connect.
+  // Triggers Claude to call mesh_info/list_peers without user input.
+  setTimeout(async () => {
+    const client = allClients()[0];
+    if (!client || client.status !== "open") return;
+    try {
+      const peers = await client.listPeers();
+      const peerNames = peers
+        .filter(p => p.displayName !== myName)
+        .map(p => p.displayName)
+        .join(", ") || "none";
+      await server.notification({
+        method: "notifications/claude/channel",
+        params: {
+          content: `[system] Connected as ${myName} to mesh ${client.meshSlug}. ${peers.length} peer(s) online: ${peerNames}. Call mesh_info for full details or set_summary to announce yourself.`,
+          meta: { kind: "welcome", mesh_slug: client.meshSlug },
+        },
+      });
+    } catch { /* best effort */ }
+  }, 3_000); // 3s delay: let WS connect + hello_ack complete first
+
   // Event loop keepalive: Node.js stdout to a pipe is buffered. Without
   // periodic event loop activity, stdout.write() from WS callbacks may not
   // flush until the next I/O event. This 1s interval keeps the event loop
