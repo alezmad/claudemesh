@@ -31,6 +31,7 @@ export interface JoinedMesh {
 export interface Config {
   version: 1;
   meshes: JoinedMesh[];
+  displayName?: string; // per-session override, written by `claudemesh launch --name`
 }
 
 const CONFIG_DIR = env.CLAUDEMESH_CONFIG_DIR ?? join(homedir(), ".claudemesh");
@@ -46,7 +47,7 @@ export function loadConfig(): Config {
     if (!parsed || !Array.isArray(parsed.meshes)) {
       return { version: 1, meshes: [] };
     }
-    return { version: 1, meshes: parsed.meshes };
+    return { version: 1, meshes: parsed.meshes, displayName: parsed.displayName };
   } catch (e) {
     throw new Error(
       `Failed to load ${CONFIG_PATH}: ${e instanceof Error ? e.message : String(e)}`,

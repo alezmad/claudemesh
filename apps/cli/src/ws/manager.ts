@@ -11,12 +11,13 @@ import type { Config, JoinedMesh } from "../state/config";
 import { env } from "../env";
 
 const clients = new Map<string, BrokerClient>();
+let configDisplayName: string | undefined;
 
 /** Ensure a BrokerClient exists + is connecting/open for this mesh. */
 export async function ensureClient(mesh: JoinedMesh): Promise<BrokerClient> {
   const existing = clients.get(mesh.meshId);
   if (existing) return existing;
-  const client = new BrokerClient(mesh, { debug: env.CLAUDEMESH_DEBUG });
+  const client = new BrokerClient(mesh, { debug: env.CLAUDEMESH_DEBUG, displayName: configDisplayName });
   clients.set(mesh.meshId, client);
   try {
     await client.connect();
@@ -29,6 +30,7 @@ export async function ensureClient(mesh: JoinedMesh): Promise<BrokerClient> {
 
 /** Start clients for every joined mesh. Called once on MCP server start. */
 export async function startClients(config: Config): Promise<void> {
+  configDisplayName = config.displayName;
   await Promise.allSettled(config.meshes.map(ensureClient));
 }
 

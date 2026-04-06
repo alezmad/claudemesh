@@ -220,6 +220,7 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
   const sessionConfig: Config = {
     version: 1,
     meshes: [mesh],
+    displayName,
   };
   writeFileSync(
     join(tmpDir, "config.json"),

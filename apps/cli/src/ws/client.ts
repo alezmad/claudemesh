@@ -86,6 +86,7 @@ export class BrokerClient {
     private mesh: JoinedMesh,
     private opts: {
       onStatusChange?: (status: ConnStatus) => void;
+      displayName?: string;
       debug?: boolean;
     } = {},
   ) {}
@@ -132,7 +133,7 @@ export class BrokerClient {
               memberId: this.mesh.memberId,
               pubkey: this.mesh.pubkey,
               sessionPubkey: this.sessionPubkey,
-              displayName: process.env.CLAUDEMESH_DISPLAY_NAME || undefined,
+              displayName: process.env.CLAUDEMESH_DISPLAY_NAME || this.opts.displayName || undefined,
               sessionId: `${process.pid}-${Date.now()}`,
               pid: process.pid,
               cwd: process.cwd(),
