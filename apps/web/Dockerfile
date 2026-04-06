@@ -25,6 +25,9 @@ ENV NEXT_PUBLIC_URL=$NEXT_PUBLIC_URL
 ENV NEXT_PUBLIC_PRODUCT_NAME=$NEXT_PUBLIC_PRODUCT_NAME
 ENV NEXT_PUBLIC_DEFAULT_LOCALE=$NEXT_PUBLIC_DEFAULT_LOCALE
 
+# TURBOPACK=0 forces webpack for production build — Payload CMS's
+# richtext-lexical CSS imports fail under Turbopack.
+ENV TURBOPACK=0
 RUN npx turbo run build --filter=web...
 
 # Stage 2: runtime — standalone output only
