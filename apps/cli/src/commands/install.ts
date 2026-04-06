@@ -19,6 +19,7 @@
 
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -65,7 +66,44 @@ function readClaudeConfig(): Record<string, unknown> {
   }
 }
 
+/**
+ * Create a timestamped backup of ~/.claude.json before any write.
+ * Keeps the last 3 backups to avoid clutter.
+ */
+function backupClaudeConfig(): void {
+  if (!existsSync(CLAUDE_CONFIG)) return;
+  const backupDir = join(dirname(CLAUDE_CONFIG), ".claude", "backups");
+  mkdirSync(backupDir, { recursive: true });
+  const ts = Date.now();
+  const dest = join(backupDir, `.claude.json.pre-claudemesh.${ts}`);
+  copyFileSync(CLAUDE_CONFIG, dest);
+}
+
+/**
+ * Sanity-check: abort if we're about to lose MCP servers that existed
+ * on disk but are missing from the object we're about to write.
+ */
+function assertNoMcpLoss(next: Record<string, unknown>): void {
+  if (!existsSync(CLAUDE_CONFIG)) return;
+  const prev = readClaudeConfig();
+  const prevServers = Object.keys(
+    (prev.mcpServers as Record<string, unknown>) ?? {},
+  );
+  const nextServers = Object.keys(
+    (next.mcpServers as Record<string, unknown>) ?? {},
+  );
+  const lost = prevServers.filter((k) => !nextServers.includes(k));
+  if (lost.length > 0) {
+    throw new Error(
+      `Aborting write: would lose ${lost.length} existing MCP server(s): ${lost.join(", ")}. ` +
+        `This is a bug — please report it. A backup was saved in ~/.claude/backups/`,
+    );
+  }
+}
+
 function writeClaudeConfig(obj: Record<string, unknown>): void {
+  backupClaudeConfig();
+  assertNoMcpLoss(obj);
   mkdirSync(dirname(CLAUDE_CONFIG), { recursive: true });
   writeFileSync(
     CLAUDE_CONFIG,
