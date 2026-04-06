@@ -129,34 +129,57 @@ function formatPush(p: InboundPush, meshSlug: string): string {
 export async function startMcpServer(): Promise<void> {
   const config = loadConfig();
 
+  const myName = config.displayName ?? "unnamed";
+  const myGroups = (config.groups ?? []).map(g => `@${g.name}${g.role ? ':' + g.role : ''}`).join(', ') || "none";
+
   const server = new Server(
-    { name: "claudemesh", version: "0.1.4" },
+    { name: "claudemesh", version: "0.3.0" },
     {
       capabilities: {
         experimental: { "claude/channel": {} },
         tools: {},
       },
-      instructions: `You are connected to claudemesh — a peer mesh for Claude Code sessions on this machine and elsewhere.
+      instructions: `## Identity
+You are "${myName}" — a peer in the claudemesh network. Your groups: ${myGroups}. You are one of several Claude Code sessions connected to the same mesh. No orchestrator exists — peers are equals. Your identity comes from your name and group roles, not from a central authority.
 
-IMPORTANT: When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATELY. Do not wait until your current task is finished. Pause what you are doing, reply to the message using send_message, then resume your work. Treat incoming peer messages like a coworker tapping you on the shoulder — answer right away, even if you're in the middle of something.
+## Responding to messages
+When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATELY. Pause your current task, reply via send_message, then resume. Read from_name, mesh_slug, and priority from the channel attributes. Reply by setting \`to\` to the sender's from_name (display name). Stay in character per your system prompt. Do not ignore low-priority messages — acknowledge them briefly even if you defer action.
 
-Read the from_id, from_name, mesh_slug, and priority attributes to understand context. Reply by calling send_message with to set to the from_name (display name) of the sender. The \`to\` field can be a peer name, pubkey, @group, or * for broadcast.
+## Tools
+| Tool | Description |
+|------|-------------|
+| send_message(to, message, priority?) | Send to peer name, @group, or * broadcast. \`to\` accepts display name, pubkey hex, @groupname, or *. |
+| list_peers(mesh_slug?) | List connected peers with status, summary, groups, and roles. |
+| check_messages() | Drain buffered inbound messages (auto-pushed in most cases, use as fallback). |
+| set_summary(summary) | Set 1-2 sentence description of your current work, visible to all peers. |
+| set_status(status) | Override status: idle, working, or dnd. |
+| join_group(name, role?) | Join a @group with optional role (lead, member, observer, or any string). |
+| leave_group(name) | Leave a @group. |
+| set_state(key, value) | Write shared state; pushes change to all peers. |
+| get_state(key) | Read a shared state value. |
+| list_state() | List all state keys with values, authors, and timestamps. |
+| remember(content, tags?) | Store persistent knowledge with optional tags. |
+| recall(query) | Full-text search over mesh memory. |
+| forget(id) | Soft-delete a memory entry. |
 
-Available tools:
-- list_peers: see joined meshes + their connection status
-- send_message: send to a peer by display name, pubkey, @group, #channel, or * broadcast (priority: now/next/low)
-- check_messages: drain buffered inbound messages (usually auto-pushed)
-- set_summary: 1-2 sentence summary of what you're working on
-- set_status: manually override your status (idle/working/dnd)
-- join_group: join a @group with optional role
-- leave_group: leave a @group
+If multiple meshes are joined, prefix \`to\` with \`<mesh-slug>:\` to disambiguate (e.g. \`dev-team:Alice\`).
 
-Message priority:
-- "now": delivered immediately regardless of recipient status (use sparingly)
-- "next" (default): delivered when recipient is idle
-- "low": pull-only (check_messages)
+## Groups
+Groups are routing labels. Send to @groupname to multicast to all members. Roles are metadata that peers interpret: a "lead" gathers input before synthesizing a response, a "member" contributes when asked, an "observer" watches silently. Join and leave groups dynamically with join_group/leave_group. Check list_peers to see who belongs to which groups and their roles.
 
-If you have multiple joined meshes, prefix the \`to\` argument of send_message with \`<mesh-slug>:\` to disambiguate. Otherwise claudemesh picks the single joined mesh.`,
+## State
+Shared key-value store scoped to the mesh. Use get_state/set_state for live coordination facts (deploy frozen? current sprint? PR queue). set_state pushes the change to all connected peers. Read state before asking peers questions — the answer may already be there. State is operational, not archival.
+
+## Memory
+Persistent knowledge that survives across sessions. Use remember(content, tags?) to store lessons, decisions, and incidents. Use recall(query) to search before asking peers. New peers should recall at session start to load institutional knowledge.
+
+## Priority
+- "now": interrupt immediately, even if recipient is in DND (use for urgent: broken deploy, blocking issue)
+- "next" (default): deliver when recipient goes idle (normal coordination)
+- "low": pull-only via check_messages (FYI, non-blocking context)
+
+## Coordination
+Call list_peers at session start to understand who is online, their roles, and what they are working on. If you are a group lead, gather input from members before responding to external requests — do not answer alone. If you are a member, contribute to your lead when asked. Use @group messages for team-wide questions, direct messages for 1:1 coordination. Set a meaningful summary so peers know your current focus.`,
     },
   );
 
@@ -226,6 +249,24 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
         return text(sections.join("\n\n"));
       }
 
+      case "message_status": {
+        const { id } = (args ?? {}) as { id?: string };
+        if (!id) return text("message_status: `id` required", true);
+        const client = allClients()[0];
+        if (!client) return text("message_status: not connected", true);
+        const result = await client.messageStatus(id);
+        if (!result) return text(`Message ${id} not found or timed out.`);
+        const recipientLines = result.recipients.map(
+          (r: { name: string; pubkey: string; status: string }) =>
+            `  - ${r.name} (${r.pubkey.slice(0, 12)}…): ${r.status}`,
+        );
+        return text(
+          `Message ${id.slice(0, 12)}… → ${result.targetSpec}\n` +
+          `Delivered: ${result.delivered}${result.deliveredAt ? ` at ${result.deliveredAt}` : ""}\n` +
+          `Recipients:\n${recipientLines.join("\n")}`,
+        );
+      }
+
       case "check_messages": {
         const drained: string[] = [];
         for (const c of allClients()) {
@@ -267,6 +308,59 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
         if (!groupName) return text("leave_group: `name` required", true);
         for (const c of allClients()) await c.leaveGroup(groupName);
         return text(`Left @${groupName}`);
+      }
+
+      // --- State ---
+      case "set_state": {
+        const { key, value } = (args ?? {}) as { key?: string; value?: unknown };
+        if (!key) return text("set_state: `key` required", true);
+        for (const c of allClients()) await c.setState(key, value);
+        return text(`State set: ${key} = ${JSON.stringify(value)}`);
+      }
+      case "get_state": {
+        const { key } = (args ?? {}) as { key?: string };
+        if (!key) return text("get_state: `key` required", true);
+        const client = allClients()[0];
+        if (!client) return text("get_state: not connected", true);
+        const result = await client.getState(key);
+        if (!result) return text(`State "${key}" not found.`);
+        return text(`${key} = ${JSON.stringify(result.value)} (set by ${result.updatedBy} at ${result.updatedAt})`);
+      }
+      case "list_state": {
+        const client = allClients()[0];
+        if (!client) return text("list_state: not connected", true);
+        const entries = await client.listState();
+        if (entries.length === 0) return text("No shared state set.");
+        const lines = entries.map(e => `- **${e.key}** = ${JSON.stringify(e.value)} (by ${e.updatedBy})`);
+        return text(lines.join("\n"));
+      }
+
+      // --- Memory ---
+      case "remember": {
+        const { content, tags } = (args ?? {}) as { content?: string; tags?: string[] };
+        if (!content) return text("remember: `content` required", true);
+        const client = allClients()[0];
+        if (!client) return text("remember: not connected", true);
+        const id = await client.remember(content, tags);
+        return text(`Remembered${id ? ` (${id})` : ""}: "${content.slice(0, 80)}${content.length > 80 ? '...' : ''}"`);
+      }
+      case "recall": {
+        const { query } = (args ?? {}) as { query?: string };
+        if (!query) return text("recall: `query` required", true);
+        const client = allClients()[0];
+        if (!client) return text("recall: not connected", true);
+        const memories = await client.recall(query);
+        if (memories.length === 0) return text(`No memories found for "${query}".`);
+        const lines = memories.map(m => `- [${m.id.slice(0, 8)}] ${m.content} (by ${m.rememberedBy}, ${m.rememberedAt})`);
+        return text(`${memories.length} memor${memories.length === 1 ? 'y' : 'ies'}:\n${lines.join("\n")}`);
+      }
+      case "forget": {
+        const { id } = (args ?? {}) as { id?: string };
+        if (!id) return text("forget: `id` required", true);
+        const client = allClients()[0];
+        if (!client) return text("forget: not connected", true);
+        await client.forget(id);
+        return text(`Forgotten: ${id}`);
       }
 
       default:
@@ -311,6 +405,22 @@ If you have multiple joined meshes, prefix the \`to\` argument of send_message w
       } catch {
         /* channel push is best-effort; check_messages is the fallback */
       }
+    });
+
+    client.onStateChange(async (change) => {
+      try {
+        await server.notification({
+          method: "notifications/claude/channel",
+          params: {
+            content: `[state] ${change.key} = ${JSON.stringify(change.value)} (set by ${change.updatedBy})`,
+            meta: {
+              kind: "state_change",
+              key: change.key,
+              updated_by: change.updatedBy,
+            },
+          },
+        });
+      } catch { /* best effort */ }
     });
   }
 

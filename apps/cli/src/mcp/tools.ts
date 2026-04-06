@@ -45,6 +45,21 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "message_status",
+    description:
+      "Check the delivery status of a sent message. Shows whether each recipient received it.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "Message ID (returned by send_message)",
+        },
+      },
+      required: ["id"],
+    },
+  },
+  {
     name: "check_messages",
     description:
       "Pull any undelivered messages from the broker. Normally messages arrive via push; use this to drain the queue after being offline.",
@@ -103,6 +118,81 @@ export const TOOLS: Tool[] = [
         name: { type: "string", description: "Group name (without @)" },
       },
       required: ["name"],
+    },
+  },
+
+  // --- State tools ---
+  {
+    name: "set_state",
+    description:
+      "Set a shared state value visible to all peers in the mesh. Pushes a change notification.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string" },
+        value: { description: "Any JSON value" },
+      },
+      required: ["key", "value"],
+    },
+  },
+  {
+    name: "get_state",
+    description: "Read a shared state value.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        key: { type: "string" },
+      },
+      required: ["key"],
+    },
+  },
+  {
+    name: "list_state",
+    description: "List all shared state keys and values in the mesh.",
+    inputSchema: { type: "object", properties: {} },
+  },
+
+  // --- Memory tools ---
+  {
+    name: "remember",
+    description:
+      "Store persistent knowledge in the mesh's shared memory. Survives across sessions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        content: {
+          type: "string",
+          description: "The knowledge to remember",
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional categorization tags",
+        },
+      },
+      required: ["content"],
+    },
+  },
+  {
+    name: "recall",
+    description: "Search the mesh's shared memory by relevance.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search query" },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "forget",
+    description: "Remove a memory from the mesh's shared knowledge.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Memory ID to forget" },
+      },
+      required: ["id"],
     },
   },
 ];

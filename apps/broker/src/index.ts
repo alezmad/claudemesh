@@ -15,22 +15,31 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
+import { eq } from "drizzle-orm";
 import { env } from "./env";
+import { db } from "./db";
+import { messageQueue } from "@turbostarter/db/schema/mesh";
 import {
   connectPresence,
   disconnectPresence,
   drainForMember,
   findMemberByPubkey,
+  forgetMemory,
+  getState,
   handleHookSetStatus,
   heartbeat,
   joinGroup,
   joinMesh,
   leaveGroup,
   listPeersInMesh,
+  listState,
   queueMessage,
+  recallMemory,
   refreshQueueDepth,
   refreshStatusFromJsonl,
+  rememberMemory,
   setSummary,
+  setState,
   startSweepers,
   stopSweepers,
   writeStatus,
@@ -470,8 +479,6 @@ async function handleSend(
   }
 
   // Fan-out over connected peers in the same mesh — skip sender.
-  // Resolve @group routing: "@all" is alias for "*", "@<name>" matches
-  // peers whose in-memory groups array contains that group name.
   const isGroupTarget = msg.targetSpec.startsWith("@");
   const isBroadcast =
     msg.targetSpec === "*" ||
@@ -479,6 +486,19 @@ async function handleSend(
   const groupName = isGroupTarget && !isBroadcast
     ? msg.targetSpec.slice(1)
     : null;
+  const isMulticast = isBroadcast || !!groupName;
+
+  // Build the push envelope once (reused for all recipients).
+  const pushEnvelope: WSPushMessage = {
+    type: "push",
+    messageId,
+    meshId: conn.meshId,
+    senderPubkey: conn.sessionPubkey ?? conn.memberPubkey,
+    priority: msg.priority,
+    nonce: msg.nonce,
+    ciphertext: msg.ciphertext,
+    createdAt: new Date().toISOString(),
+  };
 
   for (const [pid, peer] of connections) {
     if (pid === senderPresenceId) continue;
@@ -495,7 +515,25 @@ async function handleSend(
           && peer.sessionPubkey !== msg.targetSpec)
         continue;
     }
-    void maybePushQueuedMessages(pid, conn.sessionPubkey ?? undefined);
+
+    if (isMulticast) {
+      // Multicast: push directly to each connected peer. The queue
+      // row has one delivered_at — can only be claimed once. Direct
+      // push ensures every connected peer receives the message.
+      sendToPeer(pid, pushEnvelope);
+      metrics.messagesRoutedTotal.inc({ priority: msg.priority });
+    } else {
+      // Direct: drain from queue (handles priority gating + offline).
+      void maybePushQueuedMessages(pid, conn.sessionPubkey ?? undefined);
+    }
+  }
+
+  // Mark multicast messages as delivered (they've been pushed directly).
+  if (isMulticast) {
+    await db
+      .update(messageQueue)
+      .set({ deliveredAt: new Date() })
+      .where(eq(messageQueue.id, messageId));
   }
 }
 
@@ -590,6 +628,216 @@ function handleConnection(ws: WebSocket): void {
           log.info("ws leave_group", {
             presence_id: presenceId,
             group: lg.name,
+          });
+          break;
+        }
+        case "set_state": {
+          const ss = msg as Extract<WSClientMessage, { type: "set_state" }>;
+          // Look up the display name for attribution.
+          const senderName =
+            [...connections.entries()].find(
+              ([pid]) => pid === presenceId,
+            )?.[1]?.memberPubkey;
+          const member = senderName
+            ? await findMemberByPubkey(conn.meshId, senderName)
+            : null;
+          const displayName = member?.displayName ?? "unknown";
+          const stateRow = await setState(
+            conn.meshId,
+            ss.key,
+            ss.value,
+            presenceId,
+            displayName,
+          );
+          // Push state_change to ALL other peers in the same mesh.
+          for (const [pid, peer] of connections) {
+            if (pid === presenceId) continue;
+            if (peer.meshId !== conn.meshId) continue;
+            sendToPeer(pid, {
+              type: "state_change",
+              key: stateRow.key,
+              value: stateRow.value,
+              updatedBy: stateRow.updatedBy,
+            });
+          }
+          // Send confirmation back to sender as state_result.
+          sendToPeer(presenceId, {
+            type: "state_result",
+            key: stateRow.key,
+            value: stateRow.value,
+            updatedBy: stateRow.updatedBy,
+            updatedAt: stateRow.updatedAt.toISOString(),
+          });
+          log.info("ws set_state", {
+            presence_id: presenceId,
+            key: ss.key,
+          });
+          break;
+        }
+        case "get_state": {
+          const gs = msg as Extract<WSClientMessage, { type: "get_state" }>;
+          const stateEntry = await getState(conn.meshId, gs.key);
+          if (stateEntry) {
+            sendToPeer(presenceId, {
+              type: "state_result",
+              key: stateEntry.key,
+              value: stateEntry.value,
+              updatedBy: stateEntry.updatedBy,
+              updatedAt: stateEntry.updatedAt.toISOString(),
+            });
+          } else {
+            sendToPeer(presenceId, {
+              type: "state_result",
+              key: gs.key,
+              value: null,
+              updatedBy: "",
+              updatedAt: "",
+            });
+          }
+          log.info("ws get_state", {
+            presence_id: presenceId,
+            key: gs.key,
+            found: !!stateEntry,
+          });
+          break;
+        }
+        case "list_state": {
+          const entries = await listState(conn.meshId);
+          sendToPeer(presenceId, {
+            type: "state_list",
+            entries: entries.map((e) => ({
+              key: e.key,
+              value: e.value,
+              updatedBy: e.updatedBy,
+              updatedAt: e.updatedAt.toISOString(),
+            })),
+          });
+          log.info("ws list_state", {
+            presence_id: presenceId,
+            count: entries.length,
+          });
+          break;
+        }
+        case "remember": {
+          const rm = msg as Extract<WSClientMessage, { type: "remember" }>;
+          const memberInfo = conn.memberPubkey
+            ? await findMemberByPubkey(conn.meshId, conn.memberPubkey)
+            : null;
+          const memoryId = await rememberMemory(
+            conn.meshId,
+            rm.content,
+            rm.tags ?? [],
+            memberInfo?.id,
+            memberInfo?.displayName,
+          );
+          sendToPeer(presenceId, {
+            type: "memory_stored",
+            id: memoryId,
+          });
+          log.info("ws remember", {
+            presence_id: presenceId,
+            memory_id: memoryId,
+          });
+          break;
+        }
+        case "recall": {
+          const rc = msg as Extract<WSClientMessage, { type: "recall" }>;
+          const memories = await recallMemory(conn.meshId, rc.query);
+          sendToPeer(presenceId, {
+            type: "memory_results",
+            memories: memories.map((m) => ({
+              id: m.id,
+              content: m.content,
+              tags: m.tags,
+              rememberedBy: m.rememberedBy,
+              rememberedAt: m.rememberedAt.toISOString(),
+            })),
+          });
+          log.info("ws recall", {
+            presence_id: presenceId,
+            query: rc.query.slice(0, 80),
+            results: memories.length,
+          });
+          break;
+        }
+        case "forget": {
+          const fg = msg as Extract<WSClientMessage, { type: "forget" }>;
+          await forgetMemory(conn.meshId, fg.memoryId);
+          sendToPeer(presenceId, {
+            type: "ack" as const,
+            id: fg.memoryId,
+            messageId: fg.memoryId,
+            queued: false,
+          });
+          log.info("ws forget", {
+            presence_id: presenceId,
+            memory_id: fg.memoryId,
+          });
+          break;
+        }
+        case "message_status": {
+          const ms = msg as Extract<WSClientMessage, { type: "message_status" }>;
+          // Look up the message in the queue.
+          const [mqRow] = await db
+            .select({
+              id: messageQueue.id,
+              targetSpec: messageQueue.targetSpec,
+              deliveredAt: messageQueue.deliveredAt,
+              meshId: messageQueue.meshId,
+            })
+            .from(messageQueue)
+            .where(eq(messageQueue.id, ms.messageId));
+          if (!mqRow || mqRow.meshId !== conn.meshId) {
+            sendError(conn.ws, "not_found", "message not found");
+            break;
+          }
+          // Build per-recipient status from connected peers.
+          const recipients: Array<{ name: string; pubkey: string; status: "delivered" | "held" | "disconnected" }> = [];
+          const isMulti = mqRow.targetSpec === "*" || mqRow.targetSpec.startsWith("@");
+          if (isMulti) {
+            const groupNameMs = mqRow.targetSpec.startsWith("@") && mqRow.targetSpec !== "@all"
+              ? mqRow.targetSpec.slice(1) : null;
+            // Check all known presences for this mesh.
+            const peers = await listPeersInMesh(conn.meshId);
+            for (const p of peers) {
+              if (groupNameMs && !p.groups.some((g: { name: string }) => g.name === groupNameMs)) continue;
+              recipients.push({
+                name: p.displayName,
+                pubkey: p.pubkey,
+                status: mqRow.deliveredAt ? "delivered" : "held",
+              });
+            }
+          } else {
+            // Direct message — find the target peer.
+            const peers = await listPeersInMesh(conn.meshId);
+            const target = peers.find((p) => p.pubkey === mqRow.targetSpec);
+            if (target) {
+              recipients.push({
+                name: target.displayName,
+                pubkey: target.pubkey,
+                status: mqRow.deliveredAt ? "delivered" : (target.status === "idle" ? "held" : "held"),
+              });
+            } else {
+              recipients.push({
+                name: "unknown",
+                pubkey: mqRow.targetSpec.slice(0, 16),
+                status: "disconnected",
+              });
+            }
+          }
+          const resp: WSServerMessage = {
+            type: "message_status_result",
+            messageId: ms.messageId,
+            targetSpec: mqRow.targetSpec,
+            delivered: !!mqRow.deliveredAt,
+            deliveredAt: mqRow.deliveredAt?.toISOString() ?? null,
+            recipients,
+          };
+          sendToPeer(presenceId, resp);
+          log.info("ws message_status", {
+            presence_id: presenceId,
+            message_id: ms.messageId,
+            delivered: !!mqRow.deliveredAt,
           });
           break;
         }

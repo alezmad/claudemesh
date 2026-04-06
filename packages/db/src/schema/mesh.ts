@@ -5,6 +5,7 @@ import {
   pgSchema,
   timestamp,
   text,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 import { generateId } from "@turbostarter/shared/utils";
@@ -251,6 +252,43 @@ export const pendingStatus = meshSchema.table("pending_status", {
   appliedAt: timestamp(),
 });
 
+/**
+ * Shared key-value state scoped to a mesh. Any peer can read/write.
+ * Changes push to all connected peers in real time.
+ */
+export const meshState = meshSchema.table(
+  "state",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    key: text().notNull(),
+    value: jsonb().notNull(),
+    updatedByPresence: text(),
+    updatedByName: text(),
+    updatedAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("state_mesh_key_idx").on(table.meshId, table.key)],
+);
+
+/**
+ * Persistent shared memory for a mesh. Full-text searchable via a
+ * tsvector generated column + GIN index added in raw SQL migration.
+ */
+export const meshMemory = meshSchema.table("memory", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  meshId: text()
+    .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .notNull(),
+  content: text().notNull(),
+  tags: text().array().default([]),
+  rememberedBy: text().references(() => meshMember.id),
+  rememberedByName: text(),
+  rememberedAt: timestamp().defaultNow().notNull(),
+  forgottenAt: timestamp(),
+});
+
 export const meshRelations = relations(mesh, ({ one, many }) => ({
   owner: one(user, {
     fields: [mesh.ownerUserId],
@@ -311,6 +349,24 @@ export const auditLogRelations = relations(auditLog, ({ one }) => ({
   }),
 }));
 
+export const meshStateRelations = relations(meshState, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [meshState.meshId],
+    references: [mesh.id],
+  }),
+}));
+
+export const meshMemoryRelations = relations(meshMemory, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [meshMemory.meshId],
+    references: [mesh.id],
+  }),
+  member: one(meshMember, {
+    fields: [meshMemory.rememberedBy],
+    references: [meshMember.id],
+  }),
+}));
+
 export const selectMeshSchema = createSelectSchema(mesh);
 export const insertMeshSchema = createInsertSchema(mesh);
 export const selectMemberSchema = createSelectSchema(meshMember);
@@ -340,3 +396,11 @@ export type SelectMessageQueue = typeof messageQueue.$inferSelect;
 export type InsertMessageQueue = typeof messageQueue.$inferInsert;
 export type SelectPendingStatus = typeof pendingStatus.$inferSelect;
 export type InsertPendingStatus = typeof pendingStatus.$inferInsert;
+export const selectMeshStateSchema = createSelectSchema(meshState);
+export const insertMeshStateSchema = createInsertSchema(meshState);
+export const selectMeshMemorySchema = createSelectSchema(meshMemory);
+export const insertMeshMemorySchema = createInsertSchema(meshMemory);
+export type SelectMeshState = typeof meshState.$inferSelect;
+export type InsertMeshState = typeof meshState.$inferInsert;
+export type SelectMeshMemory = typeof meshMemory.$inferSelect;
+export type InsertMeshMemory = typeof meshMemory.$inferInsert;

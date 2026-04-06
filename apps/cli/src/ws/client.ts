@@ -76,6 +76,11 @@ export class BrokerClient {
   private pushHandlers = new Set<PushHandler>();
   private pushBuffer: InboundPush[] = [];
   private listPeersResolvers: Array<(peers: PeerInfo[]) => void> = [];
+  private stateResolvers: Array<(result: { key: string; value: unknown; updatedBy: string; updatedAt: string } | null) => void> = [];
+  private stateListResolvers: Array<(entries: Array<{ key: string; value: unknown; updatedBy: string; updatedAt: string }>) => void> = [];
+  private memoryStoreResolvers: Array<(id: string | null) => void> = [];
+  private memoryRecallResolvers: Array<(memories: Array<{ id: string; content: string; tags: string[]; rememberedBy: string; rememberedAt: string }>) => void> = [];
+  private stateChangeHandlers = new Set<(change: { key: string; value: unknown; updatedBy: string }) => void>();
   private sessionPubkey: string | null = null;
   private sessionSecretKey: string | null = null;
   private closed = false;
@@ -325,6 +330,107 @@ export class BrokerClient {
     this.ws.send(JSON.stringify({ type: "leave_group", name }));
   }
 
+  // --- State ---
+
+  /** Set a shared state value visible to all peers in the mesh. */
+  async setState(key: string, value: unknown): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "set_state", key, value }));
+  }
+
+  /** Read a shared state value. */
+  async getState(key: string): Promise<{ key: string; value: unknown; updatedBy: string; updatedAt: string } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      this.stateResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "get_state", key }));
+      setTimeout(() => {
+        const idx = this.stateResolvers.indexOf(resolve);
+        if (idx !== -1) {
+          this.stateResolvers.splice(idx, 1);
+          resolve(null);
+        }
+      }, 5_000);
+    });
+  }
+
+  /** List all shared state keys and values. */
+  async listState(): Promise<Array<{ key: string; value: unknown; updatedBy: string; updatedAt: string }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.stateListResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "list_state" }));
+      setTimeout(() => {
+        const idx = this.stateListResolvers.indexOf(resolve);
+        if (idx !== -1) {
+          this.stateListResolvers.splice(idx, 1);
+          resolve([]);
+        }
+      }, 5_000);
+    });
+  }
+
+  // --- Memory ---
+
+  /** Store persistent knowledge in the mesh's shared memory. */
+  async remember(content: string, tags?: string[]): Promise<string | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      this.memoryStoreResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "remember", content, tags }));
+      setTimeout(() => {
+        const idx = this.memoryStoreResolvers.indexOf(resolve);
+        if (idx !== -1) {
+          this.memoryStoreResolvers.splice(idx, 1);
+          resolve(null);
+        }
+      }, 5_000);
+    });
+  }
+
+  /** Search the mesh's shared memory by relevance. */
+  async recall(query: string): Promise<Array<{ id: string; content: string; tags: string[]; rememberedBy: string; rememberedAt: string }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      this.memoryRecallResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "recall", query }));
+      setTimeout(() => {
+        const idx = this.memoryRecallResolvers.indexOf(resolve);
+        if (idx !== -1) {
+          this.memoryRecallResolvers.splice(idx, 1);
+          resolve([]);
+        }
+      }, 5_000);
+    });
+  }
+
+  /** Remove a memory from the mesh's shared knowledge. */
+  async forget(memoryId: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "forget", memoryId }));
+  }
+
+  /** Check delivery status of a sent message. */
+  private messageStatusResolvers: Array<(result: { messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null) => void> = [];
+
+  async messageStatus(messageId: string): Promise<{ messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      this.messageStatusResolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "message_status", messageId }));
+      setTimeout(() => {
+        const idx = this.messageStatusResolvers.indexOf(resolve);
+        if (idx !== -1) { this.messageStatusResolvers.splice(idx, 1); resolve(null); }
+      }, 5_000);
+    });
+  }
+
+  /** Subscribe to state change notifications. Returns an unsubscribe function. */
+  onStateChange(handler: (change: { key: string; value: unknown; updatedBy: string }) => void): () => void {
+    this.stateChangeHandlers.add(handler);
+    return () => this.stateChangeHandlers.delete(handler);
+  }
+
   close(): void {
     this.closed = true;
     if (this.helloTimer) clearTimeout(this.helloTimer);
@@ -426,6 +532,55 @@ export class BrokerClient {
           }
         }
       })();
+      return;
+    }
+    if (msg.type === "state_result") {
+      const resolver = this.stateResolvers.shift();
+      if (resolver) {
+        if (msg.key) {
+          resolver({
+            key: String(msg.key),
+            value: msg.value,
+            updatedBy: String(msg.updatedBy ?? ""),
+            updatedAt: String(msg.updatedAt ?? ""),
+          });
+        } else {
+          resolver(null);
+        }
+      }
+      return;
+    }
+    if (msg.type === "state_list") {
+      const entries = (msg.entries as Array<{ key: string; value: unknown; updatedBy: string; updatedAt: string }>) ?? [];
+      const resolver = this.stateListResolvers.shift();
+      if (resolver) resolver(entries);
+      return;
+    }
+    if (msg.type === "state_change") {
+      const change = {
+        key: String(msg.key ?? ""),
+        value: msg.value,
+        updatedBy: String(msg.updatedBy ?? ""),
+      };
+      for (const h of this.stateChangeHandlers) {
+        try { h(change); } catch { /* handler errors are not the transport's problem */ }
+      }
+      return;
+    }
+    if (msg.type === "memory_stored") {
+      const resolver = this.memoryStoreResolvers.shift();
+      if (resolver) resolver(msg.id ? String(msg.id) : null);
+      return;
+    }
+    if (msg.type === "memory_results") {
+      const memories = (msg.memories as Array<{ id: string; content: string; tags: string[]; rememberedBy: string; rememberedAt: string }>) ?? [];
+      const resolver = this.memoryRecallResolvers.shift();
+      if (resolver) resolver(memories);
+      return;
+    }
+    if (msg.type === "message_status_result") {
+      const resolver = this.messageStatusResolvers.shift();
+      if (resolver) resolver(msg as any);
       return;
     }
     if (msg.type === "error") {

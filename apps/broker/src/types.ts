@@ -118,6 +118,43 @@ export interface WSLeaveGroupMessage {
   name: string;
 }
 
+/** Client → broker: set a shared state key-value. */
+export interface WSSetStateMessage {
+  type: "set_state";
+  key: string;
+  value: unknown;
+}
+
+/** Client → broker: read a shared state key. */
+export interface WSGetStateMessage {
+  type: "get_state";
+  key: string;
+}
+
+/** Client → broker: list all shared state entries. */
+export interface WSListStateMessage {
+  type: "list_state";
+}
+
+/** Client → broker: store a memory. */
+export interface WSRememberMessage {
+  type: "remember";
+  content: string;
+  tags?: string[];
+}
+
+/** Client → broker: full-text search memories. */
+export interface WSRecallMessage {
+  type: "recall";
+  query: string;
+}
+
+/** Client → broker: soft-delete a memory. */
+export interface WSForgetMessage {
+  type: "forget";
+  memoryId: string;
+}
+
 /** Broker → client: acknowledgement for a send. */
 export interface WSAckMessage {
   type: "ack";
@@ -147,6 +184,72 @@ export interface WSPeersListMessage {
   }>;
 }
 
+/** Broker → client: a state key was changed by another peer. */
+export interface WSStateChangeMessage {
+  type: "state_change";
+  key: string;
+  value: unknown;
+  updatedBy: string;
+}
+
+/** Broker → client: response to get_state. */
+export interface WSStateResultMessage {
+  type: "state_result";
+  key: string;
+  value: unknown;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** Broker → client: response to list_state. */
+export interface WSStateListMessage {
+  type: "state_list";
+  entries: Array<{
+    key: string;
+    value: unknown;
+    updatedBy: string;
+    updatedAt: string;
+  }>;
+}
+
+/** Broker → client: acknowledgement for a remember. */
+export interface WSMemoryStoredMessage {
+  type: "memory_stored";
+  id: string;
+}
+
+/** Broker → client: response to recall. */
+export interface WSMemoryResultsMessage {
+  type: "memory_results";
+  memories: Array<{
+    id: string;
+    content: string;
+    tags: string[];
+    rememberedBy: string;
+    rememberedAt: string;
+  }>;
+}
+
+/** Client → broker: check delivery status of a message. */
+export interface WSMessageStatusMessage {
+  type: "message_status";
+  messageId: string;
+}
+
+/** Broker → client: delivery status with per-recipient detail. */
+export interface WSMessageStatusResultMessage {
+  type: "message_status_result";
+  messageId: string;
+  targetSpec: string;
+  delivered: boolean;
+  deliveredAt: string | null;
+  recipients: Array<{
+    name: string;
+    pubkey: string;
+    status: "delivered" | "held" | "disconnected";
+  }>;
+}
+
 /** Broker → client: structured error. */
 export interface WSErrorMessage {
   type: "error";
@@ -162,11 +265,24 @@ export type WSClientMessage =
   | WSListPeersMessage
   | WSSetSummaryMessage
   | WSJoinGroupMessage
-  | WSLeaveGroupMessage;
+  | WSLeaveGroupMessage
+  | WSSetStateMessage
+  | WSGetStateMessage
+  | WSListStateMessage
+  | WSRememberMessage
+  | WSRecallMessage
+  | WSForgetMessage
+  | WSMessageStatusMessage;
 
 export type WSServerMessage =
   | WSHelloAckMessage
   | WSPushMessage
   | WSAckMessage
   | WSPeersListMessage
+  | WSStateChangeMessage
+  | WSStateResultMessage
+  | WSStateListMessage
+  | WSMemoryStoredMessage
+  | WSMemoryResultsMessage
+  | WSMessageStatusResultMessage
   | WSErrorMessage;

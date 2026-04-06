@@ -33,6 +33,8 @@ import {
   invite as inviteTable,
   mesh,
   meshMember as memberTable,
+  meshMemory,
+  meshState,
   messageQueue,
   pendingStatus,
   presence,
@@ -487,6 +489,210 @@ export async function leaveGroup(
     .set({ groups })
     .where(eq(presence.id, presenceId));
   return groups;
+}
+
+// --- Shared state ---
+
+/**
+ * Upsert a key-value pair in the mesh's shared state.
+ * Returns the upserted row.
+ */
+export async function setState(
+  meshId: string,
+  key: string,
+  value: unknown,
+  presenceId?: string,
+  presenceName?: string,
+): Promise<{
+  key: string;
+  value: unknown;
+  updatedBy: string;
+  updatedAt: Date;
+}> {
+  const now = new Date();
+  const [row] = await db
+    .insert(meshState)
+    .values({
+      meshId,
+      key,
+      value,
+      updatedByPresence: presenceId ?? null,
+      updatedByName: presenceName ?? null,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [meshState.meshId, meshState.key],
+      set: {
+        value,
+        updatedByPresence: presenceId ?? null,
+        updatedByName: presenceName ?? null,
+        updatedAt: now,
+      },
+    })
+    .returning({
+      key: meshState.key,
+      value: meshState.value,
+      updatedByName: meshState.updatedByName,
+      updatedAt: meshState.updatedAt,
+    });
+  return {
+    key: row!.key,
+    value: row!.value,
+    updatedBy: row!.updatedByName ?? "unknown",
+    updatedAt: row!.updatedAt,
+  };
+}
+
+/**
+ * Read a single state key for a mesh. Returns null if not found.
+ */
+export async function getState(
+  meshId: string,
+  key: string,
+): Promise<{
+  key: string;
+  value: unknown;
+  updatedBy: string;
+  updatedAt: Date;
+} | null> {
+  const [row] = await db
+    .select({
+      key: meshState.key,
+      value: meshState.value,
+      updatedByName: meshState.updatedByName,
+      updatedAt: meshState.updatedAt,
+    })
+    .from(meshState)
+    .where(and(eq(meshState.meshId, meshId), eq(meshState.key, key)))
+    .limit(1);
+  if (!row) return null;
+  return {
+    key: row.key,
+    value: row.value,
+    updatedBy: row.updatedByName ?? "unknown",
+    updatedAt: row.updatedAt,
+  };
+}
+
+/**
+ * List all state entries for a mesh.
+ */
+export async function listState(
+  meshId: string,
+): Promise<
+  Array<{ key: string; value: unknown; updatedBy: string; updatedAt: Date }>
+> {
+  const rows = await db
+    .select({
+      key: meshState.key,
+      value: meshState.value,
+      updatedByName: meshState.updatedByName,
+      updatedAt: meshState.updatedAt,
+    })
+    .from(meshState)
+    .where(eq(meshState.meshId, meshId))
+    .orderBy(asc(meshState.key));
+  return rows.map((r) => ({
+    key: r.key,
+    value: r.value,
+    updatedBy: r.updatedByName ?? "unknown",
+    updatedAt: r.updatedAt,
+  }));
+}
+
+// --- Memory ---
+
+/**
+ * Store a new memory for a mesh. Returns the generated id.
+ */
+export async function rememberMemory(
+  meshId: string,
+  content: string,
+  tags: string[],
+  memberId?: string,
+  memberName?: string,
+): Promise<string> {
+  const [row] = await db
+    .insert(meshMemory)
+    .values({
+      meshId,
+      content,
+      tags,
+      rememberedBy: memberId ?? null,
+      rememberedByName: memberName ?? null,
+    })
+    .returning({ id: meshMemory.id });
+  if (!row) throw new Error("failed to insert memory");
+  return row.id;
+}
+
+/**
+ * Full-text search memories in a mesh. Uses the search_vector tsvector
+ * column with plainto_tsquery for ranked results.
+ */
+export async function recallMemory(
+  meshId: string,
+  query: string,
+): Promise<
+  Array<{
+    id: string;
+    content: string;
+    tags: string[];
+    rememberedBy: string;
+    rememberedAt: Date;
+  }>
+> {
+  const result = await db.execute<{
+    id: string;
+    content: string;
+    tags: string[];
+    remembered_by_name: string | null;
+    remembered_at: string | Date;
+  }>(sql`
+    SELECT id, content, tags, remembered_by_name, remembered_at
+    FROM mesh.memory
+    WHERE mesh_id = ${meshId}
+      AND forgotten_at IS NULL
+      AND search_vector @@ plainto_tsquery('english', ${query})
+    ORDER BY ts_rank(search_vector, plainto_tsquery('english', ${query})) DESC
+    LIMIT 20
+  `);
+  const rows = (result.rows ?? result) as Array<{
+    id: string;
+    content: string;
+    tags: string[];
+    remembered_by_name: string | null;
+    remembered_at: string | Date;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    content: r.content,
+    tags: r.tags ?? [],
+    rememberedBy: r.remembered_by_name ?? "unknown",
+    rememberedAt:
+      r.remembered_at instanceof Date
+        ? r.remembered_at
+        : new Date(r.remembered_at),
+  }));
+}
+
+/**
+ * Soft-delete a memory by setting forgotten_at.
+ */
+export async function forgetMemory(
+  meshId: string,
+  memoryId: string,
+): Promise<void> {
+  await db
+    .update(meshMemory)
+    .set({ forgottenAt: new Date() })
+    .where(
+      and(
+        eq(meshMemory.id, memoryId),
+        eq(meshMemory.meshId, meshId),
+        isNull(meshMemory.forgottenAt),
+      ),
+    );
 }
 
 // --- Message queueing + delivery ---
