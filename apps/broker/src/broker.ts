@@ -492,7 +492,7 @@ export async function drainForMember(
   memberPubkey: string,
   status: PeerStatus,
   sessionPubkey?: string,
-  excludeSenderMemberId?: string,
+  excludeSenderSessionPubkey?: string,
 ): Promise<
   Array<{
     id: string;
@@ -534,7 +534,7 @@ export async function drainForMember(
           AND delivered_at IS NULL
           AND priority::text IN (${priorityList})
           AND (target_spec = ${memberPubkey} OR target_spec = '*'${sessionPubkey ? sql` OR target_spec = ${sessionPubkey}` : sql``})
-          ${excludeSenderMemberId ? sql`AND sender_member_id != ${excludeSenderMemberId}` : sql``}
+          ${excludeSenderSessionPubkey ? sql`AND (sender_session_pubkey IS NULL OR sender_session_pubkey != ${excludeSenderSessionPubkey})` : sql``}
         ORDER BY created_at ASC, id ASC
         FOR UPDATE SKIP LOCKED
       )

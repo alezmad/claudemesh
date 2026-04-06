@@ -83,7 +83,7 @@ function sendToPeer(presenceId: string, msg: WSServerMessage): void {
 
 async function maybePushQueuedMessages(
   presenceId: string,
-  excludeSenderMemberId?: string,
+  excludeSenderSessionPubkey?: string,
 ): Promise<void> {
   const conn = connections.get(presenceId);
   if (!conn) return;
@@ -98,7 +98,7 @@ async function maybePushQueuedMessages(
     conn.memberPubkey,
     status,
     conn.sessionPubkey ?? undefined,
-    excludeSenderMemberId,
+    excludeSenderSessionPubkey,
   );
   for (const m of messages) {
     const push: WSPushMessage = {
@@ -470,7 +470,7 @@ async function handleSend(
         && peer.memberPubkey !== msg.targetSpec
         && peer.sessionPubkey !== msg.targetSpec)
       continue;
-    void maybePushQueuedMessages(pid, conn.memberId);
+    void maybePushQueuedMessages(pid, conn.sessionPubkey ?? undefined);
   }
 }
 
