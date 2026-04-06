@@ -26,6 +26,7 @@ interface LaunchArgs {
   groups: string | null; // comma-separated, e.g. "frontend:lead,reviewers:member"
   joinLink: string | null;
   meshSlug: string | null;
+  messageMode: "push" | "inbox" | "off" | null;
   quiet: boolean;
   skipPermConfirm: boolean;
   claudeArgs: string[];
@@ -38,6 +39,7 @@ function parseArgs(argv: string[]): LaunchArgs {
     groups: null,
     joinLink: null,
     meshSlug: null,
+    messageMode: null,
     quiet: false,
     skipPermConfirm: false,
     claudeArgs: [],
@@ -66,6 +68,10 @@ function parseArgs(argv: string[]): LaunchArgs {
       result.meshSlug = argv[++i]!;
     } else if (arg.startsWith("--mesh=")) {
       result.meshSlug = arg.slice("--mesh=".length);
+    } else if (arg === "--inbox") {
+      result.messageMode = "inbox";
+    } else if (arg === "--no-messages") {
+      result.messageMode = "off";
     } else if (arg === "--quiet") {
       result.quiet = true;
     } else if (arg === "-y" || arg === "--yes") {
@@ -171,7 +177,7 @@ async function confirmPermissions(): Promise<void> {
 
 // --- Banner ---
 
-function printBanner(name: string, meshSlug: string, role: string | null, groups: GroupEntry[]): void {
+function printBanner(name: string, meshSlug: string, role: string | null, groups: GroupEntry[], messageMode: "push" | "inbox" | "off"): void {
   const useColor =
     !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
   const dim = (s: string): string => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
@@ -183,9 +189,15 @@ function printBanner(name: string, meshSlug: string, role: string | null, groups
     : "";
 
   const rule = "─".repeat(60);
-  console.log(bold(`claudemesh launch`) + dim(` — as ${name}${roleSuffix} on ${meshSlug}${groupTags}`));
+  console.log(bold(`claudemesh launch`) + dim(` — as ${name}${roleSuffix} on ${meshSlug}${groupTags} [${messageMode}]`));
   console.log(rule);
-  console.log("Peer messages arrive as <channel> reminders in real-time.");
+  if (messageMode === "push") {
+    console.log("Peer messages arrive as <channel> reminders in real-time.");
+  } else if (messageMode === "inbox") {
+    console.log("Peer messages held in inbox. Use check_messages to read.");
+  } else {
+    console.log("Messages off. Use check_messages to poll manually.");
+  }
   console.log("Peers send text only — they cannot call tools or read files.");
   console.log(dim(`Config: ${getConfigPath()}`));
   console.log(rule);
@@ -263,6 +275,8 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
   let role: string | null = args.role;
   let parsedGroups: GroupEntry[] = args.groups ? parseGroupsString(args.groups) : [];
 
+  let messageMode: "push" | "inbox" | "off" = args.messageMode ?? "push";
+
   if (!args.quiet) {
     if (role === null) {
       const answer = await askLine("  Role (optional): ");
@@ -271,6 +285,18 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
     if (parsedGroups.length === 0 && args.groups === null) {
       const answer = await askLine("  Groups (comma-separated, optional): ");
       if (answer) parsedGroups = parseGroupsString(answer);
+    }
+    if (args.messageMode === null) {
+      console.log("\n  Message mode:");
+      console.log("    1) Push (real-time, peers can interrupt your work)");
+      console.log("    2) Inbox (held until you check, notification only)");
+      console.log("    3) Off (tools only, no messages)");
+      console.log("");
+      const answer = await askLine("  Choice [1]: ");
+      const choice = parseInt(answer || "1", 10);
+      if (choice === 2) messageMode = "inbox";
+      else if (choice === 3) messageMode = "off";
+      else messageMode = "push";
     }
     if (role || parsedGroups.length) console.log("");
   }
@@ -293,6 +319,7 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
     meshes: [mesh],
     displayName,
     ...(parsedGroups.length > 0 ? { groups: parsedGroups } : {}),
+    messageMode,
   };
   writeFileSync(
     join(tmpDir, "config.json"),
@@ -302,7 +329,7 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
 
   // 5. Banner + permission confirmation.
   if (!args.quiet) {
-    printBanner(displayName, mesh.slug, role, parsedGroups);
+    printBanner(displayName, mesh.slug, role, parsedGroups, messageMode);
     // Auto-permissions confirmation — needed for autonomous peer messaging.
     if (!args.skipPermConfirm) {
       await confirmPermissions();

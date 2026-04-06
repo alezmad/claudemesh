@@ -131,6 +131,7 @@ export async function startMcpServer(): Promise<void> {
 
   const myName = config.displayName ?? "unnamed";
   const myGroups = (config.groups ?? []).map(g => `@${g.name}${g.role ? ':' + g.role : ''}`).join(', ') || "none";
+  const messageMode = config.messageMode ?? "push";
 
   const server = new Server(
     { name: "claudemesh", version: "0.3.0" },
@@ -236,7 +237,13 @@ Create and claim work items. create_task to propose work, claim_task to take own
 - "low": pull-only via check_messages (FYI, non-blocking context)
 
 ## Coordination
-Call list_peers at session start to understand who is online, their roles, and what they are working on. If you are a group lead, gather input from members before responding to external requests — do not answer alone. If you are a member, contribute to your lead when asked. Use @group messages for team-wide questions, direct messages for 1:1 coordination. Set a meaningful summary so peers know your current focus.`,
+Call list_peers at session start to understand who is online, their roles, and what they are working on. If you are a group lead, gather input from members before responding to external requests — do not answer alone. If you are a member, contribute to your lead when asked. Use @group messages for team-wide questions, direct messages for 1:1 coordination. Set a meaningful summary so peers know your current focus.
+
+## Message Mode
+Your message mode is "${messageMode}".
+- push: messages arrive in real-time as channel notifications. Respond immediately.
+- inbox: messages are held. You'll see "[inbox] New message from X" notifications. Call check_messages to read them.
+- off: no message notifications. Use check_messages manually to poll.`,
     },
   );
 
@@ -716,11 +723,31 @@ Call list_peers at session start to understand who is online, their roles, and w
   // system reminder injected into Claude Code's context.
   for (const client of allClients()) {
     client.onPush(async (msg) => {
+      // In "off" mode, silently skip notification — messages are still
+      // buffered in pushBuffer and accessible via check_messages.
+      if (messageMode === "off") return;
+
       const fromPubkey = msg.senderPubkey || "";
       // Resolve sender's display name from the cached peer list.
       const fromName = fromPubkey
         ? await resolvePeerName(client, fromPubkey)
         : "unknown";
+
+      if (messageMode === "inbox") {
+        // Count-only notification, no content
+        try {
+          await server.notification({
+            method: "notifications/claude/channel",
+            params: {
+              content: `[inbox] New message from ${fromName}. Use check_messages to read.`,
+              meta: { kind: "inbox_notification", from_name: fromName },
+            },
+          });
+        } catch { /* best effort */ }
+        return;
+      }
+
+      // push mode — full content notification
       const content = msg.plaintext ?? decryptFailedWarning(fromPubkey);
       try {
         await server.notification({
