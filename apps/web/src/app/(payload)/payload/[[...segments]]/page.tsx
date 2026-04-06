@@ -4,6 +4,8 @@ import { RootPage, generatePageMetadata } from "@payloadcms/next/views";
 import { importMap } from "../importMap";
 import config from "@payload-config";
 
+export const dynamic = "force-dynamic";
+
 type Args = { params: Promise<{ segments: string[] }> };
 
 export const generateMetadata = ({ params }: Args) =>
