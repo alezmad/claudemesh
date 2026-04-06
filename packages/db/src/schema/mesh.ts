@@ -222,6 +222,7 @@ export const messageQueue = meshSchema.table("message_queue", {
   senderMemberId: text()
     .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),
+  senderSessionPubkey: text(),
   targetSpec: text().notNull(),
   priority: messagePriorityEnum().notNull().default("next"),
   nonce: text().notNull(),

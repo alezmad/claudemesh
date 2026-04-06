@@ -418,6 +418,7 @@ export async function setSummary(
 export interface QueueParams {
   meshId: string;
   senderMemberId: string;
+  senderSessionPubkey?: string;
   targetSpec: string;
   priority: Priority;
   nonce: string;
@@ -432,6 +433,7 @@ export async function queueMessage(params: QueueParams): Promise<string> {
     .values({
       meshId: params.meshId,
       senderMemberId: params.senderMemberId,
+      senderSessionPubkey: params.senderSessionPubkey ?? null,
       targetSpec: params.targetSpec,
       priority: params.priority,
       nonce: params.nonce,
@@ -520,7 +522,7 @@ export async function drainForMember(
       AND m.id = mq.sender_member_id
       RETURNING mq.id, mq.priority, mq.nonce, mq.ciphertext,
                mq.created_at, mq.sender_member_id,
-               m.peer_pubkey AS sender_pubkey
+               COALESCE(mq.sender_session_pubkey, m.peer_pubkey) AS sender_pubkey
     )
     SELECT * FROM claimed ORDER BY created_at ASC, id ASC
   `);

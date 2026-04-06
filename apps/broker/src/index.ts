@@ -438,6 +438,7 @@ async function handleSend(
   const messageId = await queueMessage({
     meshId: conn.meshId,
     senderMemberId: conn.memberId,
+    senderSessionPubkey: conn.sessionPubkey ?? undefined,
     targetSpec: msg.targetSpec,
     priority: msg.priority,
     nonce: msg.nonce,

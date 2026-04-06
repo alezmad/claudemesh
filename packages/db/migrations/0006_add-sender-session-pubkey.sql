@@ -1,0 +1,1 @@
+ALTER TABLE "mesh"."message_queue" ADD COLUMN "sender_session_pubkey" text;
