@@ -1337,7 +1337,7 @@ export async function drainForMember(
           AND delivered_at IS NULL
           AND priority::text IN (${priorityList})
           AND (target_spec = ${memberPubkey} OR target_spec = '*'${sessionPubkey ? sql` OR target_spec = ${sessionPubkey}` : sql``} OR target_spec IN (${groupTargetList}))
-          ${excludeSenderSessionPubkey ? sql`AND (sender_session_pubkey IS NULL OR sender_session_pubkey != ${excludeSenderSessionPubkey})` : sql``}
+          ${excludeSenderSessionPubkey ? sql`AND NOT (target_spec IN ('*') AND sender_session_pubkey = ${excludeSenderSessionPubkey})` : sql``}
         ORDER BY created_at ASC, id ASC
         FOR UPDATE SKIP LOCKED
       )
