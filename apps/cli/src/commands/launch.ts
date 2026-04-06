@@ -195,10 +195,20 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
   if (!args.quiet) printBanner(displayName, mesh.slug);
 
   // 6. Spawn claude with ephemeral config + dev channel + display name.
+  //    Strip any user-supplied --dangerously-load-development-channels
+  //    to avoid duplicates — we always inject our own.
+  const filtered: string[] = [];
+  for (let i = 0; i < args.claudeArgs.length; i++) {
+    if (args.claudeArgs[i] === "--dangerously-load-development-channels") {
+      i++; // skip the next arg (the channel value) too
+      continue;
+    }
+    filtered.push(args.claudeArgs[i]!);
+  }
   const claudeArgs = [
     "--dangerously-load-development-channels",
     "server:claudemesh",
-    ...args.claudeArgs,
+    ...filtered,
   ];
 
   const isWindows = process.platform === "win32";
