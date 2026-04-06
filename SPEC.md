@@ -273,7 +273,184 @@ CREATE INDEX memory_search_idx ON mesh.memory USING gin(search_vector);
 
 ---
 
-## 5. AI Context (CLAUDE.md)
+## 5. Files
+
+Built-in file sharing. AIs use tools, humans browse the dashboard. Same files, same storage, two interfaces.
+
+### Two types of files
+
+| | Message attachment | Shared file |
+|---|---|---|
+| Tool | `send_message(file: / files:)` | `share_file(path, tags?)` |
+| Lifetime | Ephemeral — 24h or until read | Persistent — until deleted |
+| Audience | Message recipients only | Entire mesh (current + future) |
+| Findable | Under "Recent" for 24h | `list_files` / search by tags |
+| Use case | "look at this screenshot" | "everyone needs this API spec" |
+
+### AI view (MCP tools)
+
+```
+# Attach file to a message (ephemeral)
+send_message(to: "@reviewers", message: "PR screenshot", file: "/tmp/screenshot.png")
+
+# Attach multiple files
+send_message(to: "@team", message: "PR ready", files: ["/tmp/api.ts", "/tmp/test.ts"])
+
+# Share a persistent file with the mesh
+share_file(path: "/tmp/api-contract.yaml", tags: ["api", "auth"], name: "Auth v2 Contract")
+
+# Find files
+list_files(query?: "auth", from?: "Alice")
+
+# Download
+get_file(id: "f_abc", save_to: "/tmp/")
+
+# Check who accessed a file
+file_status(id: "f_abc") → [{peer: "Alice", read: true, readAt: "..."}, ...]
+
+# Delete a shared file
+delete_file(id: "f_abc")
+```
+
+### Human view (Dashboard)
+
+```
+claudemesh / dev-team /
+├── shared/              ← persistent files, grouped by tags
+│   ├── auth/
+│   │   ├── api-spec.yaml
+│   │   └── wireframes.pdf
+│   └── onboarding/
+│       └── setup-guide.md
+└── recent/              ← message attachments, by date
+    ├── 2026-04-06/
+    │   └── screenshot-abc.png
+    └── 2026-04-07/
+```
+
+Tags become folders in the dashboard. Humans browse, AIs search.
+
+### Storage
+
+MinIO in the broker's docker-compose. Internal network, invisible to clients.
+
+One bucket per mesh: `mesh-{meshId}`. Flat key structure:
+
+```
+mesh-{meshId}/shared/{fileId}/{original-name}       ← persistent
+mesh-{meshId}/ephemeral/{date}/{fileId}/{name}       ← auto-cleaned 24h
+```
+
+MinIO lifecycle policy deletes `ephemeral/` after 24h.
+
+### Access model
+
+- Persistent files (`share_file`): accessible to all mesh members
+- Ephemeral files (`send_message file:`): accessible to message recipients only
+- `get_file` checks access before generating a presigned download URL
+- `file_status` tracks who downloaded the file
+
+### Upload flow
+
+1. CLI reads local file, HTTP POSTs to `broker /upload` (multipart)
+2. Broker stores in MinIO, creates `mesh.file` row
+3. Broker returns file_id
+4. For message attachments: file_id attached to the message push
+5. Recipients see `📎 filename (size) — use get_file("id")` in the push
+
+### DB schema
+
+```sql
+mesh.file (
+  id text PK,
+  mesh_id text FK,
+  name text NOT NULL,
+  size_bytes bigint NOT NULL,
+  mime_type text,
+  minio_key text NOT NULL,
+  tags text[] DEFAULT '{}',
+  persistent boolean DEFAULT true,
+  uploaded_by_name text,
+  uploaded_by_member text FK,
+  target_spec text,         -- null = entire mesh, else message audience
+  uploaded_at timestamp DEFAULT NOW(),
+  expires_at timestamp,     -- null for persistent, +24h for ephemeral
+  deleted_at timestamp
+);
+
+mesh.file_access (
+  id text PK,
+  file_id text FK,
+  peer_session_pubkey text,
+  peer_name text,
+  accessed_at timestamp DEFAULT NOW()
+);
+```
+
+### Docker Compose (broker infra)
+
+```yaml
+services:
+  broker:
+    # ... existing broker config
+    environment:
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: claudemesh
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
+    depends_on:
+      - minio
+
+  minio:
+    image: minio/minio
+    command: server /data
+    volumes:
+      - minio-data:/data
+    environment:
+      MINIO_ROOT_USER: claudemesh
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    # Internal only — not exposed to the internet
+
+volumes:
+  minio-data:
+```
+
+---
+
+## 6. Multi-target messages
+
+The `to` field accepts a string or array:
+
+```
+# Single target
+send_message(to: "Alice", message: "hey")
+
+# Multiple targets
+send_message(to: ["Alice", "@backend", "Bob"], message: "sprint starts")
+```
+
+Broker resolves each target, deduplicates recipients, delivers once per peer.
+
+---
+
+## 7. Targeted views (MCP instruction pattern)
+
+Not a broker feature — a convention taught via MCP instructions. When sending related information to different audiences, Claude sends tailored messages instead of one generic broadcast:
+
+```
+# Instead of:
+send_message(to: "*", message: "Auth v2 ready. Check endpoints and UI.")
+
+# Do:
+send_message(to: "@frontend", message: "Auth v2: useAuth hook changed, see src/auth/")
+send_message(to: "@backend", message: "Auth v2: new /api/auth/v2 endpoints, v1 deprecated 2 weeks")
+send_message(to: "@pm", message: "Auth v2 done. 3 points, no blockers.")
+```
+
+Zero broker changes. Claude reads the instruction, decides when to split.
+
+---
+
+## 8. AI Context (MCP Instructions)
 
 Each `claudemesh install` copies a `CLAUDEMESH.md` file to `~/.claudemesh/CLAUDEMESH.md`. Claude Code discovers it and injects it as context.
 
@@ -341,9 +518,9 @@ Under 2000 tokens. Tool reference only — no behavioral scripts. Claude adapts 
 
 | Tool | Description |
 |------|-------------|
-| `send_message(to, message, priority?)` | Send to peer name, @group, or * |
+| `send_message(to, message, priority?, file?, files?)` | Send to name, @group, or * with optional file attachments |
 | `check_messages()` | Drain buffered messages |
-| `message_status(id)` | Check if a sent message was delivered |
+| `message_status(id)` | Delivery status with per-recipient detail |
 
 ### Presence
 
@@ -375,6 +552,16 @@ Under 2000 tokens. Tool reference only — no behavioral scripts. Claude adapts 
 | `remember(content, tags?)` | Store persistent knowledge |
 | `recall(query)` | Search by relevance |
 | `forget(id)` | Soft-delete |
+
+### Files
+
+| Tool | Description |
+|------|-------------|
+| `share_file(path, tags?, name?)` | Share a persistent file with the mesh |
+| `get_file(id, save_to)` | Download a shared file |
+| `list_files(query?, from?)` | Find files shared with you |
+| `file_status(id)` | Who accessed this file |
+| `delete_file(id)` | Remove a shared file |
 
 ---
 
@@ -455,10 +642,14 @@ claudemesh mcp              Start MCP server (invoked by Claude Code, not users)
 | Production hardening | v0.1.15 | Done | Stale sweep, decrypt fallback, sender exclusion |
 | Delivery fix | v0.1.16 | Done | Same-member session message delivery |
 | **Groups** | **v0.2.0** | **Done** | @group routing, roles, wizard, join/leave |
-| State | v0.3.0 | Planned | Shared key-value store with push |
-| Memory | v0.4.0 | Planned | Persistent knowledge with full-text search |
-| AI Context | v0.2.1 | Planned | CLAUDEMESH.md shipped with CLI |
-| Dashboard | v0.5.0 | Planned | Live peers, state, memory in web UI |
+| **State** | **v0.3.0** | **Done** | Shared key-value store with push notifications |
+| **Memory** | **v0.3.0** | **Done** | Persistent knowledge with full-text search |
+| **Message status** | **v0.3.0** | **Done** | Per-recipient delivery detail |
+| **MCP instructions** | **v0.3.0** | **Done** | Dynamic identity, full tool guide, coordination patterns |
+| **Multicast fix** | **v0.3.0** | **Done** | Broadcast/group push directly, not queue race |
+| Files | v0.4.0 | Planned | MinIO-backed file sharing + message attachments |
+| Multi-target | v0.4.0 | Planned | Array `to` field with deduplication |
+| Dashboard | v0.5.0 | Planned | Live peers, state, memory, files in web UI |
 
 ---
 
