@@ -1,4 +1,5 @@
 import { buildConfig } from "payload";
+import { postgresAdapter } from "@payloadcms/db-postgres";
 import { sqliteAdapter } from "@payloadcms/db-sqlite";
 import { lexicalEditor } from "@payloadcms/richtext-lexical";
 import path from "path";
@@ -7,6 +8,9 @@ import sharp from "sharp";
 
 const filename = fileURLToPath(import.meta.url);
 const dirname = path.dirname(filename);
+
+// Use Postgres in production (DATABASE_URL), SQLite locally
+const usePostgres = !!process.env.DATABASE_URL;
 
 export default buildConfig({
   secret: process.env.PAYLOAD_SECRET || "claudemesh-dev-secret-change-in-production",
@@ -20,11 +24,16 @@ export default buildConfig({
 
   editor: lexicalEditor(),
 
-  db: sqliteAdapter({
-    client: {
-      url: process.env.PAYLOAD_DATABASE_URI || `file:${path.resolve(dirname, "payload.db")}`,
-    },
-  }),
+  db: usePostgres
+    ? postgresAdapter({
+        pool: { connectionString: process.env.DATABASE_URL! },
+        schemaName: "payload",
+      })
+    : sqliteAdapter({
+        client: {
+          url: process.env.PAYLOAD_DATABASE_URI || `file:${path.resolve(dirname, "payload.db")}`,
+        },
+      }),
 
   sharp,
 

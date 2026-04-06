@@ -20,6 +20,7 @@
     "@hookform/resolvers": "5.2.2",
     "@next/bundle-analyzer": "16.2.2",
     "@number-flow/react": "0.5.10",
+    "@payloadcms/db-postgres": "3.81.0",
     "@payloadcms/db-sqlite": "^3.81.0",
     "@payloadcms/next": "^3.81.0",
     "@payloadcms/richtext-lexical": "^3.81.0",
