@@ -1,27 +1,23 @@
-import { z } from "zod";
-
 /**
  * CLI environment config.
  *
  * Read once at startup. Overridable via env vars so users can point
  * at a self-hosted broker or a staging instance without rebuilding.
  */
-const envSchema = z.object({
-  CLAUDEMESH_BROKER_URL: z.string().default("wss://ic.claudemesh.com/ws"),
-  CLAUDEMESH_CONFIG_DIR: z.string().optional(),
-  CLAUDEMESH_DEBUG: z.coerce.boolean().default(false),
-});
 
-export type CliEnv = z.infer<typeof envSchema>;
+export interface CliEnv {
+  CLAUDEMESH_BROKER_URL: string;
+  CLAUDEMESH_CONFIG_DIR: string | undefined;
+  CLAUDEMESH_DEBUG: boolean;
+}
 
 export function loadEnv(): CliEnv {
-  const parsed = envSchema.safeParse(process.env);
-  if (!parsed.success) {
-    console.error("[claudemesh] invalid environment:");
-    console.error(z.treeifyError(parsed.error));
-    process.exit(1);
-  }
-  return parsed.data;
+  return {
+    CLAUDEMESH_BROKER_URL:
+      process.env.CLAUDEMESH_BROKER_URL ?? "wss://ic.claudemesh.com/ws",
+    CLAUDEMESH_CONFIG_DIR: process.env.CLAUDEMESH_CONFIG_DIR || undefined,
+    CLAUDEMESH_DEBUG: process.env.CLAUDEMESH_DEBUG === "1" || process.env.CLAUDEMESH_DEBUG === "true",
+  };
 }
 
 export const env = loadEnv();

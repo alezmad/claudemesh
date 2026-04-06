@@ -5,27 +5,39 @@
  * verification and one-time-use invite-token tracking land in Step 18.
  */
 
-import { z } from "zod";
 import { ensureSodium } from "../crypto/keypair";
 
-const invitePayloadSchema = z.object({
-  v: z.literal(1),
-  mesh_id: z.string().min(1),
-  mesh_slug: z.string().min(1),
-  broker_url: z.string().min(1),
-  expires_at: z.number().int().positive(),
-  mesh_root_key: z.string().min(1),
-  role: z.enum(["admin", "member"]),
-  owner_pubkey: z.string().regex(/^[0-9a-f]{64}$/i),
-  signature: z.string().regex(/^[0-9a-f]{128}$/i),
-});
-
-export type InvitePayload = z.infer<typeof invitePayloadSchema>;
+export interface InvitePayload {
+  v: 1;
+  mesh_id: string;
+  mesh_slug: string;
+  broker_url: string;
+  expires_at: number;
+  mesh_root_key: string;
+  role: "admin" | "member";
+  owner_pubkey: string;
+  signature: string;
+}
 
 export interface ParsedInvite {
   payload: InvitePayload;
   raw: string; // the original ic://join/... string
   token: string; // base64url(JSON) — DB lookup key (everything after ic://join/)
+}
+
+function validatePayload(obj: unknown): InvitePayload {
+  if (!obj || typeof obj !== "object") throw new Error("invite payload is not an object");
+  const o = obj as Record<string, unknown>;
+  if (o.v !== 1) throw new Error("invite payload: v must be 1");
+  if (typeof o.mesh_id !== "string" || !o.mesh_id) throw new Error("invite payload: mesh_id required");
+  if (typeof o.mesh_slug !== "string" || !o.mesh_slug) throw new Error("invite payload: mesh_slug required");
+  if (typeof o.broker_url !== "string" || !o.broker_url) throw new Error("invite payload: broker_url required");
+  if (typeof o.expires_at !== "number" || o.expires_at <= 0) throw new Error("invite payload: expires_at must be a positive number");
+  if (typeof o.mesh_root_key !== "string" || !o.mesh_root_key) throw new Error("invite payload: mesh_root_key required");
+  if (o.role !== "admin" && o.role !== "member") throw new Error("invite payload: role must be admin or member");
+  if (typeof o.owner_pubkey !== "string" || !/^[0-9a-f]{64}$/i.test(o.owner_pubkey)) throw new Error("invite payload: owner_pubkey must be 64 hex chars");
+  if (typeof o.signature !== "string" || !/^[0-9a-f]{128}$/i.test(o.signature)) throw new Error("invite payload: signature must be 128 hex chars");
+  return o as unknown as InvitePayload;
 }
 
 /** Canonical invite bytes — must match broker's canonicalInvite(). */
@@ -96,41 +108,34 @@ export async function parseInviteLink(link: string): Promise<ParsedInvite> {
     );
   }
 
-  const parsed = invitePayloadSchema.safeParse(obj);
-  if (!parsed.success) {
-    throw new Error(
-      `invite link shape invalid: ${parsed.error.issues.map((i) => i.path.join(".") + ": " + i.message).join("; ")}`,
-    );
-  }
+  const payload = validatePayload(obj);
 
   // Expiry check (unix seconds).
   const nowSeconds = Math.floor(Date.now() / 1000);
-  if (parsed.data.expires_at < nowSeconds) {
+  if (payload.expires_at < nowSeconds) {
     throw new Error(
-      `invite expired: expires_at=${parsed.data.expires_at}, now=${nowSeconds}`,
+      `invite expired: expires_at=${payload.expires_at}, now=${nowSeconds}`,
     );
   }
 
   // Verify the ed25519 signature against the embedded owner_pubkey.
-  // Client-side verification gives immediate feedback on tampered
-  // links; broker re-verifies authoritatively on /join.
   const s = await ensureSodium();
   const canonical = canonicalInvite({
-    v: parsed.data.v,
-    mesh_id: parsed.data.mesh_id,
-    mesh_slug: parsed.data.mesh_slug,
-    broker_url: parsed.data.broker_url,
-    expires_at: parsed.data.expires_at,
-    mesh_root_key: parsed.data.mesh_root_key,
-    role: parsed.data.role,
-    owner_pubkey: parsed.data.owner_pubkey,
+    v: payload.v,
+    mesh_id: payload.mesh_id,
+    mesh_slug: payload.mesh_slug,
+    broker_url: payload.broker_url,
+    expires_at: payload.expires_at,
+    mesh_root_key: payload.mesh_root_key,
+    role: payload.role,
+    owner_pubkey: payload.owner_pubkey,
   });
   const sigOk = (() => {
     try {
       return s.crypto_sign_verify_detached(
-        s.from_hex(parsed.data.signature),
+        s.from_hex(payload.signature),
         s.from_string(canonical),
-        s.from_hex(parsed.data.owner_pubkey),
+        s.from_hex(payload.owner_pubkey),
       );
     } catch {
       return false;
@@ -140,7 +145,7 @@ export async function parseInviteLink(link: string): Promise<ParsedInvite> {
     throw new Error("invite signature invalid (link tampered?)");
   }
 
-  return { payload: parsed.data, raw: link, token: encoded };
+  return { payload, raw: link, token: encoded };
 }
 
 /**
@@ -155,8 +160,6 @@ export function encodeInviteLink(payload: InvitePayload): string {
 
 /**
  * Sign and assemble an invite payload → ic://join/... link.
- * The canonical bytes (everything except signature) are signed with
- * the mesh owner's ed25519 secret key.
  */
 export async function buildSignedInvite(args: {
   v: 1;

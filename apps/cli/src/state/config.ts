@@ -15,38 +15,38 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import { z } from "zod";
 import { env } from "../env";
 
-const joinedMeshSchema = z.object({
-  meshId: z.string(),
-  memberId: z.string(),
-  slug: z.string(),
-  name: z.string(),
-  pubkey: z.string(), // ed25519 hex (32 bytes = 64 chars)
-  secretKey: z.string(), // ed25519 hex (64 bytes = 128 chars)
-  brokerUrl: z.string(),
-  joinedAt: z.string(),
-});
+export interface JoinedMesh {
+  meshId: string;
+  memberId: string;
+  slug: string;
+  name: string;
+  pubkey: string; // ed25519 hex (32 bytes = 64 chars)
+  secretKey: string; // ed25519 hex (64 bytes = 128 chars)
+  brokerUrl: string;
+  joinedAt: string;
+}
 
-const configSchema = z.object({
-  version: z.literal(1).default(1),
-  meshes: z.array(joinedMeshSchema).default([]),
-});
-
-export type JoinedMesh = z.infer<typeof joinedMeshSchema>;
-export type Config = z.infer<typeof configSchema>;
+export interface Config {
+  version: 1;
+  meshes: JoinedMesh[];
+}
 
 const CONFIG_DIR = env.CLAUDEMESH_CONFIG_DIR ?? join(homedir(), ".claudemesh");
 const CONFIG_PATH = join(CONFIG_DIR, "config.json");
 
 export function loadConfig(): Config {
   if (!existsSync(CONFIG_PATH)) {
-    return configSchema.parse({ version: 1, meshes: [] });
+    return { version: 1, meshes: [] };
   }
   try {
     const raw = readFileSync(CONFIG_PATH, "utf-8");
-    return configSchema.parse(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.meshes)) {
+      return { version: 1, meshes: [] };
+    }
+    return { version: 1, meshes: parsed.meshes };
   } catch (e) {
     throw new Error(
       `Failed to load ${CONFIG_PATH}: ${e instanceof Error ? e.message : String(e)}`,
