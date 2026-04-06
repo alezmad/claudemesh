@@ -1,14 +1,8 @@
-/* eslint-disable */
-// @ts-nocheck — Payload generates these types at build time
-import { RootPage, generatePageMetadata } from "@payloadcms/next/views";
-import { importMap } from "../importMap";
-import config from "@payload-config";
+import { redirect } from "next/navigation";
 
-type Args = { params: Promise<{ segments: string[] }> };
-
-export const generateMetadata = ({ params }: Args) =>
-  generatePageMetadata({ config, params });
-
-export default function Page({ params }: Args) {
-  return <RootPage config={config} params={params} importMap={importMap} />;
+// Payload admin panel disabled in production (standalone output
+// doesn't support Payload's server init). Content managed via
+// local dev server or API.
+export default function PayloadAdminRedirect() {
+  redirect("/");
 }

@@ -1,12 +1,9 @@
 import type { NextConfig } from "next";
 
-import env from "./env.config";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { withPayload } = require("@payloadcms/next/withPayload");
 
-// withPayload is disabled until Payload admin runs correctly in
-// Next.js standalone output. The wrapper injects a client-side
-// provider that crashes with React #130 on all routes when the
-// admin panel can't initialize. Blog + changelog use Payload's
-// local API (server-side getPayload()) which works without the wrapper.
+import env from "./env.config";
 
 const INTERNAL_PACKAGES = [
   "@turbostarter/analytics-web",
@@ -121,4 +118,4 @@ const withBundleAnalyzer = require("@next/bundle-analyzer")({
   enabled: env.ANALYZE,
 });
 
-export default withBundleAnalyzer(config);
+export default withPayload(withBundleAnalyzer(config));
