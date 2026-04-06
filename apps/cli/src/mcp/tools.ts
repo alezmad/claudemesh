@@ -555,4 +555,21 @@ export const TOOLS: Tool[] = [
       "Get a complete overview of the mesh: peers, groups, state, memory, files, tasks, streams, tables. Call on session start for full situational awareness.",
     inputSchema: { type: "object", properties: {} },
   },
+
+  // --- Diagnostics ---
+  {
+    name: "ping_mesh",
+    description:
+      "Send test messages through the full pipeline and measure round-trip timing per priority. Diagnoses push delivery issues.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        priorities: {
+          type: "array",
+          items: { type: "string", enum: ["now", "next", "low"] },
+          description: "Priorities to test (default: [\"now\", \"next\"])",
+        },
+      },
+    },
+  },
 ];

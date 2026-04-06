@@ -707,6 +707,58 @@ Your message mode is "${messageMode}".
         return text(lines.join("\n"));
       }
 
+      case "ping_mesh": {
+        const { priorities: pingPriorities } = (args ?? {}) as { priorities?: string[] };
+        const toTest = (pingPriorities ?? ["now", "next"]) as Priority[];
+        const client = allClients()[0];
+        if (!client) return text("ping_mesh: not connected", true);
+        const results: string[] = [];
+
+        for (const prio of toTest) {
+          const sendTime = Date.now();
+          const pingId = `ping-${sendTime}-${prio}`;
+          // Send to self (broadcast) — should bounce back through the broker
+          const sendResult = await client.send("*", `__ping__${pingId}`, prio);
+          const ackTime = Date.now();
+
+          if (!sendResult.ok) {
+            results.push(`[${prio}] SEND FAILED: ${sendResult.error}`);
+            continue;
+          }
+
+          // Wait up to 10s for the ping to arrive in pushBuffer
+          let received = false;
+          let receiveTime = 0;
+          for (let i = 0; i < 100; i++) {
+            await new Promise(r => setTimeout(r, 100));
+            const buffer = client.pushHistory;
+            const match = buffer.find(m =>
+              m.plaintext?.includes(pingId) || false
+            );
+            if (match) {
+              received = true;
+              receiveTime = Date.now();
+              break;
+            }
+          }
+
+          if (received) {
+            results.push(
+              `[${prio}] OK — send→ack: ${ackTime - sendTime}ms, send→receive: ${receiveTime - sendTime}ms`
+            );
+          } else {
+            // Check peer status
+            const peers = await client.listPeers();
+            const selfStatus = peers.find(p => p.displayName === myName)?.status ?? "unknown";
+            results.push(
+              `[${prio}] NOT RECEIVED in 10s (your status: ${selfStatus}${selfStatus === "working" ? " — broker holds next/low" : ""})`
+            );
+          }
+        }
+
+        return text(`Ping results:\n${results.join("\n")}`);
+      }
+
       default:
         return text(`Unknown tool: ${name}`, true);
     }
