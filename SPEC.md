@@ -563,9 +563,166 @@ Under 2000 tokens. Tool reference only — no behavioral scripts. Claude adapts 
 | `file_status(id)` | Who accessed this file |
 | `delete_file(id)` | Remove a shared file |
 
+### Vectors
+
+| Tool | Description |
+|------|-------------|
+| `vector_store(collection, text, metadata?)` | Store embedding in per-mesh Qdrant collection |
+| `vector_search(collection, query, limit?)` | Semantic search over stored embeddings |
+| `vector_delete(collection, id)` | Remove an embedding |
+| `list_collections()` | List vector collections in this mesh |
+
+### Graph
+
+| Tool | Description |
+|------|-------------|
+| `graph_query(cypher)` | Run a read query on the per-mesh Neo4j database |
+| `graph_execute(cypher)` | Run a write query (CREATE, MERGE, DELETE) |
+
+### Context
+
+| Tool | Description |
+|------|-------------|
+| `share_context(summary, files_read?, key_findings?, tags?)` | Share session understanding with the mesh |
+| `get_context(query)` | Find context from peers who explored an area |
+| `list_contexts()` | See what all peers currently know |
+
+### Tasks
+
+| Tool | Description |
+|------|-------------|
+| `create_task(title, assignee?, priority?, tags?)` | Create a work item |
+| `claim_task(id)` | Claim an unclaimed task |
+| `complete_task(id, result?)` | Mark task done with optional result |
+| `list_tasks(status?, assignee?)` | List tasks filtered by status/assignee |
+
+### Mesh Database
+
+| Tool | Description |
+|------|-------------|
+| `mesh_query(sql)` | Run a SELECT on the per-mesh PostgreSQL schema |
+| `mesh_execute(sql)` | Run DDL/DML (CREATE TABLE, INSERT, UPDATE) |
+| `mesh_schema()` | List tables and columns in the mesh database |
+
+### Streams
+
+| Tool | Description |
+|------|-------------|
+| `create_stream(name)` | Create a real-time data stream |
+| `publish(stream, data)` | Push data to a stream |
+| `subscribe(stream)` | Receive stream data as push notifications |
+| `list_streams()` | List active streams in this mesh |
+
 ---
 
-## 8. Encryption
+## 9. Shared Infrastructure
+
+The broker provisions infrastructure per mesh. Services run in docker-compose on the internal network. Peers interact through MCP tools — they never configure infrastructure directly.
+
+### Architecture
+
+```
+Broker (coordinator)
+├── PostgreSQL     ← state, memory, tasks, context, mesh databases
+├── MinIO          ← files
+├── Qdrant         ← vector embeddings
+└── Neo4j          ← entity graphs
+```
+
+All auto-provisioned. First `vector_store` call creates the Qdrant collection. First `mesh_execute(CREATE TABLE...)` creates the schema. First `share_file` creates the MinIO bucket. Zero setup.
+
+### Docker Compose additions
+
+```yaml
+services:
+  qdrant:
+    image: qdrant/qdrant
+    restart: always
+    volumes: [qdrant-data:/qdrant/storage]
+    expose: ["6333"]
+    networks: [claudemesh-internal]
+
+  neo4j:
+    image: neo4j:5
+    restart: always
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-changeme}
+    volumes: [neo4j-data:/data]
+    expose: ["7687"]
+    networks: [claudemesh-internal]
+```
+
+### Per-mesh isolation
+
+| Service | Isolation method |
+|---------|-----------------|
+| PostgreSQL | Schema per mesh: `mesh_{meshId}` |
+| MinIO | Bucket per mesh: `mesh-{meshId}` |
+| Qdrant | Collection per mesh: `mesh_{meshId}_{name}` |
+| Neo4j | Database per mesh: `mesh_{meshId}` |
+
+### DB schema additions
+
+```sql
+mesh.context (
+  id text PK,
+  mesh_id text FK,
+  presence_id text FK,
+  peer_name text,
+  summary text NOT NULL,
+  files_read text[] DEFAULT '{}',
+  key_findings text[] DEFAULT '{}',
+  tags text[] DEFAULT '{}',
+  updated_at timestamp DEFAULT NOW()
+);
+
+mesh.task (
+  id text PK,
+  mesh_id text FK,
+  title text NOT NULL,
+  assignee text,
+  claimed_by_name text,
+  claimed_by_presence text FK,
+  priority text DEFAULT 'normal',
+  status text DEFAULT 'open',
+  tags text[] DEFAULT '{}',
+  result text,
+  created_by_name text,
+  created_at timestamp DEFAULT NOW(),
+  claimed_at timestamp,
+  completed_at timestamp
+);
+
+mesh.stream (
+  id text PK,
+  mesh_id text FK,
+  name text NOT NULL,
+  created_by_name text,
+  created_at timestamp DEFAULT NOW(),
+  UNIQUE(mesh_id, name)
+);
+```
+
+---
+
+## 10. What peers share — the full picture
+
+| Layer | Service | What | Lifetime |
+|-------|---------|------|----------|
+| Messages | Broker WS | Text conversations | Ephemeral (queue until delivered) |
+| State | PostgreSQL | Live coordination facts | Mesh lifetime |
+| Memory | PostgreSQL + tsvector | Institutional knowledge | Permanent |
+| Context | PostgreSQL | Session understanding | Session lifetime |
+| Files | MinIO | Binary artifacts | Persistent or 24h ephemeral |
+| Tasks | PostgreSQL | Work items + ownership | Until completed/deleted |
+| Vectors | Qdrant | Semantic embeddings | Persistent |
+| Graph | Neo4j | Entity relationships | Persistent |
+| Databases | PostgreSQL schemas | Structured data | Persistent |
+| Streams | Broker pub/sub | Real-time data feeds | Session lifetime |
+
+---
+
+## 11. Encryption
 
 ### Direct messages
 
@@ -585,7 +742,7 @@ The session keypair generates once on first connect and survives reconnects. Mes
 
 ---
 
-## 9. Production hardening (implemented)
+## 12. Production hardening (implemented)
 
 | Feature | Description |
 |---------|-------------|
@@ -600,7 +757,7 @@ The session keypair generates once on first connect and survives reconnects. Mes
 
 ---
 
-## 10. CLI commands
+## 13. CLI commands
 
 ```
 claudemesh install          Register MCP server + hooks in Claude Code
@@ -629,7 +786,7 @@ claudemesh mcp              Start MCP server (invoked by Claude Code, not users)
 
 ---
 
-## 11. Implementation status
+## 14. Implementation status
 
 | Phase | Version | Status | What |
 |-------|---------|--------|------|
@@ -647,13 +804,20 @@ claudemesh mcp              Start MCP server (invoked by Claude Code, not users)
 | **Message status** | **v0.3.0** | **Done** | Per-recipient delivery detail |
 | **MCP instructions** | **v0.3.0** | **Done** | Dynamic identity, full tool guide, coordination patterns |
 | **Multicast fix** | **v0.3.0** | **Done** | Broadcast/group push directly, not queue race |
-| Files | v0.4.0 | Planned | MinIO-backed file sharing + message attachments |
-| Multi-target | v0.4.0 | Planned | Array `to` field with deduplication |
-| Dashboard | v0.5.0 | Planned | Live peers, state, memory, files in web UI |
+| **Files** | **v0.4.0** | **Done** | MinIO-backed file sharing + message attachments |
+| **Multi-target** | **v0.4.0** | **Done** | Array `to` field with deduplication |
+| **Targeted views** | **v0.4.0** | **Done** | MCP instruction pattern for per-audience messages |
+| Vectors | v0.5.0 | Planned | Qdrant per-mesh collections for semantic search |
+| Graph | v0.5.0 | Planned | Neo4j per-mesh databases for entity relationships |
+| Context sharing | v0.5.0 | Planned | Session understanding exchange between peers |
+| Tasks | v0.5.0 | Planned | First-class work items with claim/complete |
+| Mesh databases | v0.6.0 | Planned | Per-mesh PostgreSQL schemas for structured data |
+| Streams | v0.6.0 | Planned | Real-time pub/sub data channels |
+| Dashboard | v0.7.0 | Planned | Live peers, state, memory, files, graphs in web UI |
 
 ---
 
-## 12. Design principles
+## 15. Design principles
 
 1. **The broker is a dumb pipe.** It routes messages, stores state, holds memory. It does not interpret roles, enforce protocols, or run agents.
 
