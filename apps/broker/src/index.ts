@@ -977,19 +977,18 @@ function handleConnection(ws: WebSocket): void {
               break;
             }
           }
-          // E2E: for encrypted files, fetch the sealed key for this peer
+          // E2E: for encrypted files, fetch the sealed key for this peer.
+          // Owners are not blocked if their key is missing (edge case), but
+          // they still get it returned so the CLI can decrypt normally.
           let sealedKey: string | null = null;
           if (file.encrypted) {
             const peerPubkey = conn.sessionPubkey ?? conn.memberPubkey;
-            const isOwner = file.ownerPubkey && peerPubkey === file.ownerPubkey;
-            if (!isOwner) {
-              sealedKey = peerPubkey ? await getFileKey(gf.fileId, peerPubkey) : null;
-              if (!sealedKey) {
-                sendError(conn.ws, "forbidden", "no decryption key for this file");
-                break;
-              }
+            const isOwner = !!(file.ownerPubkey && peerPubkey === file.ownerPubkey);
+            sealedKey = peerPubkey ? await getFileKey(gf.fileId, peerPubkey) : null;
+            if (!sealedKey && !isOwner) {
+              sendError(conn.ws, "forbidden", "no decryption key for this file");
+              break;
             }
-            // Owner gets sealedKey = null (they already have Kf from upload)
           }
           // Generate presigned URL (60s expiry)
           const bucket = meshBucketName(conn.meshId);

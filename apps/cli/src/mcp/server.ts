@@ -527,7 +527,8 @@ Your message mode is "${messageMode}".
         const result = await client.getFile(id);
         if (!result) return text(`get_file: file ${id} not found`, true);
 
-        if (result.encrypted && result.sealedKey) {
+        if (result.encrypted) {
+          if (!result.sealedKey) return text("get_file: encrypted file — no decryption key available for your session", true);
           const { openSealedKey, decryptFile } = await import("../crypto/file-crypto");
           const { ensureSodium } = await import("../crypto/keypair");
           const myPubkey = client.getSessionPubkey();
