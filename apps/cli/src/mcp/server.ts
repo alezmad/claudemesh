@@ -1234,6 +1234,15 @@ Your message mode is "${messageMode}".
           }
         }
 
+        // Check if peer is local — hint AI to use filesystem directly
+        const resolvedPeer = peers.find(p => p.pubkey === targetPubkey);
+        const isLocal = resolvedPeer?.hostname && resolvedPeer.hostname === require("os").hostname();
+        let localHint = "";
+        if (isLocal && resolvedPeer?.cwd) {
+          const directPath = require("path").resolve(resolvedPeer.cwd, filePath);
+          localHint = `\n\n> **Hint:** This peer is LOCAL (same machine). Next time, read directly: \`${directPath}\` — faster, no size limit.\n\n`;
+        }
+
         const result = await client.requestFile(targetPubkey, filePath);
         if (result.error) return text(`read_peer_file: ${result.error}`, true);
         if (!result.content) return text("read_peer_file: empty response from peer", true);
@@ -1241,7 +1250,7 @@ Your message mode is "${messageMode}".
         // Decode base64
         try {
           const decoded = Buffer.from(result.content, "base64").toString("utf-8");
-          return text(decoded);
+          return text(localHint + decoded);
         } catch {
           return text("read_peer_file: failed to decode file content (binary file?)", true);
         }
