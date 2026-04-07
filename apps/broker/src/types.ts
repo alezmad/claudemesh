@@ -57,6 +57,12 @@ export interface WSHelloMessage {
   sessionId: string;
   pid: number;
   cwd: string;
+  /** Peer type: ai session, human user, or external connector. */
+  peerType?: "ai" | "human" | "connector";
+  /** Channel the peer connected from (e.g. "claude-code", "telegram", "slack", "web"). */
+  channel?: string;
+  /** AI model identifier (e.g. "opus-4", "sonnet-4"). */
+  model?: string;
   /** Initial groups to join on connect. */
   groups?: Array<{ name: string; role?: string }>;
   /** ms epoch; broker rejects if outside ±60s of its own clock. */
@@ -86,8 +92,13 @@ export interface WSPushMessage {
   nonce: string;
   ciphertext: string;
   createdAt: string;
-  /** Optional semantic tag — "reminder" when delivered by the scheduler. */
-  subtype?: "reminder";
+  /** Optional semantic tag — "reminder" when delivered by the scheduler,
+   *  "system" for broker-originated topology events (peer join/leave). */
+  subtype?: "reminder" | "system";
+  /** Machine-readable event name (e.g. "peer_joined", "peer_left"). */
+  event?: string;
+  /** Structured payload for the event. */
+  eventData?: Record<string, unknown>;
 }
 
 /** Client → broker: manual status override (dnd, forced idle). */
@@ -184,6 +195,10 @@ export interface WSPeersListMessage {
     groups: Array<{ name: string; role?: string }>;
     sessionId: string;
     connectedAt: string;
+    cwd?: string;
+    peerType?: "ai" | "human" | "connector";
+    channel?: string;
+    model?: string;
   }>;
   _reqId?: string;
 }
@@ -673,10 +688,14 @@ export interface WSScheduleMessage {
   type: "schedule";
   to: string;
   message: string;
-  /** Unix timestamp (ms) when to deliver. */
+  /** Unix timestamp (ms) when to deliver. Ignored for cron schedules. */
   deliverAt: number;
   /** Optional semantic tag — "reminder" surfaces differently to the receiver. */
   subtype?: "reminder";
+  /** Standard 5-field cron expression for recurring delivery (e.g. "0 */2 * * *"). */
+  cron?: string;
+  /** Whether this is a recurring schedule. Implied true when `cron` is set. */
+  recurring?: boolean;
   _reqId?: string;
 }
 

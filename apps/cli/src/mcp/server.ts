@@ -990,6 +990,39 @@ Your message mode is "${messageMode}".
     client.onPush(async (msg) => {
       if (messageMode === "off") return;
 
+      // System events (peer join/leave) — always push, regardless of mode.
+      if (msg.subtype === "system" && msg.event) {
+        const eventName = msg.event;
+        const data = msg.eventData ?? {};
+        let content: string;
+        if (eventName === "peer_joined") {
+          content = `[system] Peer "${data.name ?? "unknown"}" joined the mesh`;
+        } else if (eventName === "peer_left") {
+          content = `[system] Peer "${data.name ?? "unknown"}" left the mesh`;
+        } else {
+          content = `[system] ${eventName}: ${JSON.stringify(data)}`;
+        }
+        try {
+          await server.notification({
+            method: "notifications/claude/channel",
+            params: {
+              content,
+              meta: {
+                kind: "system",
+                event: eventName,
+                mesh_slug: client.meshSlug,
+                mesh_id: client.meshId,
+                ...(Object.keys(data).length > 0 ? { eventData: data } : {}),
+              },
+            },
+          });
+          process.stderr.write(`[claudemesh] system: ${content}\n`);
+        } catch (pushErr) {
+          process.stderr.write(`[claudemesh] system push FAILED: ${pushErr}\n`);
+        }
+        return;
+      }
+
       const fromPubkey = msg.senderPubkey || "";
       const fromName = fromPubkey
         ? await resolvePeerName(client, fromPubkey)

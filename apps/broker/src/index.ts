@@ -93,7 +93,11 @@ interface PeerConn {
   memberId: string;
   memberPubkey: string;
   sessionPubkey: string | null;
+  displayName: string;
   cwd: string;
+  peerType?: "ai" | "human" | "connector";
+  channel?: string;
+  model?: string;
   groups: Array<{ name: string; role?: string }>;
 }
 
@@ -625,17 +629,21 @@ async function handleHello(
     cwd: hello.cwd,
     groups: initialGroups,
   });
+  const effectiveDisplayName = hello.displayName || member.displayName;
   connections.set(presenceId, {
     ws,
     meshId: hello.meshId,
     memberId: member.id,
     memberPubkey: hello.pubkey,
     sessionPubkey: hello.sessionPubkey ?? null,
+    displayName: effectiveDisplayName,
     cwd: hello.cwd,
+    peerType: hello.peerType,
+    channel: hello.channel,
+    model: hello.model,
     groups: initialGroups,
   });
   incMeshCount(hello.meshId);
-  const effectiveDisplayName = hello.displayName || member.displayName;
   log.info("ws hello", {
     mesh_id: hello.meshId,
     member: effectiveDisplayName,
@@ -762,6 +770,32 @@ function handleConnection(ws: WebSocket): void {
         } catch {
           /* ws closed during hello */
         }
+        // Broadcast peer_joined to all other peers in the same mesh.
+        const joinedConn = connections.get(presenceId);
+        if (joinedConn) {
+          const joinMsg: WSPushMessage = {
+            type: "push",
+            subtype: "system",
+            event: "peer_joined",
+            eventData: {
+              name: result.memberDisplayName,
+              pubkey: joinedConn.sessionPubkey ?? joinedConn.memberPubkey,
+              groups: joinedConn.groups,
+            },
+            messageId: crypto.randomUUID(),
+            meshId: joinedConn.meshId,
+            senderPubkey: "system",
+            priority: "low",
+            nonce: "",
+            ciphertext: "",
+            createdAt: new Date().toISOString(),
+          };
+          for (const [pid, peer] of connections) {
+            if (pid === presenceId) continue;
+            if (peer.meshId !== joinedConn.meshId) continue;
+            sendToPeer(pid, joinMsg);
+          }
+        }
         return;
       }
       if (!presenceId) {
@@ -783,17 +817,32 @@ function handleConnection(ws: WebSocket): void {
           break;
         case "list_peers": {
           const peers = await listPeersInMesh(conn.meshId);
+          // Build a lookup from pubkey → in-memory PeerConn for metadata
+          const connByPubkey = new Map<string, PeerConn>();
+          for (const [, pc] of connections) {
+            if (pc.meshId === conn.meshId) {
+              connByPubkey.set(pc.memberPubkey, pc);
+              if (pc.sessionPubkey) connByPubkey.set(pc.sessionPubkey, pc);
+            }
+          }
           const resp: WSServerMessage = {
             type: "peers_list",
-            peers: peers.map((p) => ({
-              pubkey: p.pubkey,
-              displayName: p.displayName,
-              status: p.status as "idle" | "working" | "dnd",
-              summary: p.summary,
-              groups: p.groups,
-              sessionId: p.sessionId,
-              connectedAt: p.connectedAt.toISOString(),
-            })),
+            peers: peers.map((p) => {
+              const pc = connByPubkey.get(p.pubkey);
+              return {
+                pubkey: p.pubkey,
+                displayName: p.displayName,
+                status: p.status as "idle" | "working" | "dnd",
+                summary: p.summary,
+                groups: p.groups,
+                sessionId: p.sessionId,
+                connectedAt: p.connectedAt.toISOString(),
+                cwd: pc?.cwd ?? p.cwd,
+                ...(pc?.peerType ? { peerType: pc.peerType } : {}),
+                ...(pc?.channel ? { channel: pc.channel } : {}),
+                ...(pc?.model ? { model: pc.model } : {}),
+              };
+            }),
             ...(_reqId ? { _reqId } : {}),
           };
           conn.ws.send(JSON.stringify(resp));
@@ -1905,7 +1954,30 @@ function handleConnection(ws: WebSocket): void {
     if (presenceId) {
       const conn = connections.get(presenceId);
       connections.delete(presenceId);
-      if (conn) decMeshCount(conn.meshId);
+      if (conn) {
+        decMeshCount(conn.meshId);
+        // Broadcast peer_left to remaining peers in the same mesh.
+        const leaveMsg: WSPushMessage = {
+          type: "push",
+          subtype: "system",
+          event: "peer_left",
+          eventData: {
+            name: conn.displayName,
+            pubkey: conn.sessionPubkey ?? conn.memberPubkey,
+          },
+          messageId: crypto.randomUUID(),
+          meshId: conn.meshId,
+          senderPubkey: "system",
+          priority: "low",
+          nonce: "",
+          ciphertext: "",
+          createdAt: new Date().toISOString(),
+        };
+        for (const [pid, peer] of connections) {
+          if (peer.meshId !== conn.meshId) continue;
+          sendToPeer(pid, leaveMsg);
+        }
+      }
       await disconnectPresence(presenceId);
       // Clean up stream subscriptions for this peer
       for (const [key, subs] of streamSubscriptions) {

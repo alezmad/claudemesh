@@ -51,8 +51,13 @@ export interface InboundPush {
   /** Hint for UI: "direct" (crypto_box), "channel"/"broadcast"
    *  (plaintext for now). */
   kind: "direct" | "broadcast" | "channel" | "unknown";
-  /** Optional semantic tag — "reminder" when fired by the scheduler. */
-  subtype?: "reminder";
+  /** Optional semantic tag — "reminder" when fired by the scheduler,
+   *  "system" for broker-originated topology events. */
+  subtype?: "reminder" | "system";
+  /** Machine-readable event name (e.g. "peer_joined", "peer_left"). */
+  event?: string;
+  /** Structured payload for the event. */
+  eventData?: Record<string, unknown>;
 }
 
 type PushHandler = (msg: InboundPush) => void;
@@ -937,7 +942,9 @@ export class BrokerClient {
           receivedAt: new Date().toISOString(),
           plaintext,
           kind,
-          ...(msg.subtype ? { subtype: msg.subtype as "reminder" } : {}),
+          ...(msg.subtype ? { subtype: msg.subtype as "reminder" | "system" } : {}),
+          ...(msg.event ? { event: String(msg.event) } : {}),
+          ...(msg.eventData ? { eventData: msg.eventData as Record<string, unknown> } : {}),
         };
         this.pushBuffer.push(push);
         if (this.pushBuffer.length > 500) this.pushBuffer.shift();
