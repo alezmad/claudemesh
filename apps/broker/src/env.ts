@@ -23,7 +23,7 @@ const envSchema = z.object({
   MINIO_ENDPOINT: z.string().default("minio:9000"),
   MINIO_ACCESS_KEY: z.string().default("claudemesh"),
   MINIO_SECRET_KEY: z.string().default("changeme"),
-  MINIO_USE_SSL: z.coerce.boolean().default(false),
+  MINIO_USE_SSL: z.enum(["true", "false", ""]).transform(v => v === "true").default("false"),
   QDRANT_URL: z.string().default("http://qdrant:6333"),
   NEO4J_URL: z.string().default("bolt://neo4j:7687"),
   NEO4J_USER: z.string().default("neo4j"),
