@@ -248,6 +248,7 @@ const main = defineCommand({
         extra: { type: "positional", description: "Reminder ID for `cancel`", required: false },
         in: { type: "string", description: 'Deliver after duration: `"2h"`, `"30m"`, `"90s"`' },
         at: { type: "string", description: 'Deliver at time: `"15:00"` or ISO timestamp' },
+        cron: { type: "string", description: 'Recurring cron expression: `"0 */2 * * *"` (every 2h), `"30 9 * * 1-5"` (9:30 weekdays)' },
         to: { type: "string", description: "Recipient (default: self). Name, `@group`, `*`, or pubkey" },
         mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
         json: { type: "boolean", description: "Output as JSON", default: false },
