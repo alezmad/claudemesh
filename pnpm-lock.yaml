@@ -737,11 +737,11 @@ importers:
         specifier: ^0.15.1
         version: 0.15.1
       ws:
-        specifier: ^8.0.0
+        specifier: 8.20.0
         version: 8.20.0
     devDependencies:
       '@types/ws':
-        specifier: ^8.0.0
+        specifier: 8.5.13
         version: 8.5.13
       typescript:
         specifier: ^5.0.0
@@ -756,11 +756,11 @@ importers:
         specifier: ^0.15.1
         version: 0.15.1
       ws:
-        specifier: ^8.0.0
+        specifier: 8.20.0
         version: 8.20.0
     devDependencies:
       '@types/ws':
-        specifier: ^8.0.0
+        specifier: 8.5.13
         version: 8.5.13
       typescript:
         specifier: ^5.0.0
