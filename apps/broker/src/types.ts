@@ -692,7 +692,7 @@ export interface WSScheduleMessage {
   deliverAt: number;
   /** Optional semantic tag — "reminder" surfaces differently to the receiver. */
   subtype?: "reminder";
-  /** Standard 5-field cron expression for recurring delivery (e.g. "0 */2 * * *"). */
+  /** Standard 5-field cron expression for recurring delivery. */
   cron?: string;
   /** Whether this is a recurring schedule. Implied true when `cron` is set. */
   recurring?: boolean;
