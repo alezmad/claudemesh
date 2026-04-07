@@ -564,6 +564,53 @@ export const TOOLS: Tool[] = [
     },
   },
 
+  // --- Scheduled messages ---
+  {
+    name: "schedule_reminder",
+    description:
+      "Schedule a reminder message delivered back to yourself at a future time. The broker fires it as a push when the time arrives. Use to prompt yourself to check on something later.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "Reminder text" },
+        deliver_at: { type: "number", description: "Unix timestamp (ms) when to deliver" },
+        in_seconds: { type: "number", description: "Alternative to deliver_at: fire after N seconds" },
+      },
+      required: ["message"],
+    },
+  },
+  {
+    name: "send_later",
+    description:
+      "Send a message to a peer, @group, or broadcast (*) at a future time. The broker holds it and delivers when the time arrives.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient: display name, pubkey hex, @group, or *" },
+        message: { type: "string", description: "Message text" },
+        deliver_at: { type: "number", description: "Unix timestamp (ms) when to deliver" },
+        in_seconds: { type: "number", description: "Alternative to deliver_at: fire after N seconds" },
+      },
+      required: ["to", "message"],
+    },
+  },
+  {
+    name: "list_scheduled",
+    description: "List all your pending scheduled messages: id, recipient, preview, and delivery time.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "cancel_scheduled",
+    description: "Cancel a pending scheduled message before it fires.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Scheduled message ID" },
+      },
+      required: ["id"],
+    },
+  },
+
   // --- Mesh info ---
   {
     name: "mesh_info",

@@ -21,6 +21,13 @@ import { runLaunch } from "./commands/launch";
 import { runStatus } from "./commands/status";
 import { runDoctor } from "./commands/doctor";
 import { runWelcome } from "./commands/welcome";
+import { runPeers } from "./commands/peers";
+import { runSend } from "./commands/send";
+import { runInbox } from "./commands/inbox";
+import { runStateGet, runStateSet, runStateList } from "./commands/state";
+import { runRemember, runRecall } from "./commands/memory";
+import { runInfo } from "./commands/info";
+import { runRemind } from "./commands/remind";
 import { VERSION } from "./version";
 
 const launch = defineCommand({
@@ -145,6 +152,103 @@ const main = defineCommand({
       run() { runList(); },
     }),
     leave,
+    peers: defineCommand({
+      meta: { name: "peers", description: "List connected peers in the mesh" },
+      args: {
+        mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
+        json: { type: "boolean", description: "Output as JSON", default: false },
+      },
+      async run({ args }) { await runPeers(args); },
+    }),
+    send: defineCommand({
+      meta: { name: "send", description: "Send a message to a peer, group, or broadcast" },
+      args: {
+        to: { type: "positional", description: "Recipient: display name, @group, pubkey, or *", required: true },
+        message: { type: "positional", description: "Message text", required: true },
+        mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
+        priority: { type: "string", description: "now | next (default) | low" },
+      },
+      async run({ args }) { await runSend(args, args.to, args.message); },
+    }),
+    inbox: defineCommand({
+      meta: { name: "inbox", description: "Read pending peer messages" },
+      args: {
+        mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
+        json: { type: "boolean", description: "Output as JSON", default: false },
+        wait: { type: "string", description: "Seconds to wait for broker delivery (default: 1)" },
+      },
+      async run({ args }) {
+        await runInbox({ ...args, wait: args.wait ? parseInt(args.wait, 10) : undefined });
+      },
+    }),
+    state: defineCommand({
+      meta: { name: "state", description: "Read or write shared mesh state" },
+      args: {
+        action: { type: "positional", description: "get | set | list", required: true },
+        key: { type: "positional", description: "State key (required for get/set)" },
+        value: { type: "positional", description: "Value to set (required for set)" },
+        mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
+        json: { type: "boolean", description: "Output as JSON", default: false },
+      },
+      async run({ args }) {
+        if (args.action === "list") {
+          await runStateList(args);
+        } else if (args.action === "get") {
+          if (!args.key) { console.error("Usage: claudemesh state get <key>"); process.exit(1); }
+          await runStateGet(args, args.key);
+        } else if (args.action === "set") {
+          if (!args.key || !args.value) { console.error("Usage: claudemesh state set <key> <value>"); process.exit(1); }
+          await runStateSet(args, args.key, args.value);
+        } else {
+          console.error(`Unknown action "${args.action}". Use: get, set, list`);
+          process.exit(1);
+        }
+      },
+    }),
+    info: defineCommand({
+      meta: { name: "info", description: "Show mesh overview: slug, broker, peer count, state keys" },
+      args: {
+        mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
+        json: { type: "boolean", description: "Output as JSON", default: false },
+      },
+      async run({ args }) { await runInfo(args); },
+    }),
+    remember: defineCommand({
+      meta: { name: "remember", description: "Store a memory in the mesh (accessible to all peers)" },
+      args: {
+        content: { type: "positional", description: "Text to remember", required: true },
+        mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
+        tags: { type: "string", description: "Comma-separated tags (e.g. task,context)" },
+        json: { type: "boolean", description: "Output as JSON", default: false },
+      },
+      async run({ args }) { await runRemember(args, args.content); },
+    }),
+    recall: defineCommand({
+      meta: { name: "recall", description: "Search mesh memory by keyword or phrase" },
+      args: {
+        query: { type: "positional", description: "Search query", required: true },
+        mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
+        json: { type: "boolean", description: "Output as JSON", default: false },
+      },
+      async run({ args }) { await runRecall(args, args.query); },
+    }),
+    remind: defineCommand({
+      meta: { name: "remind", description: "Schedule a reminder or delayed message via the broker" },
+      args: {
+        message: { type: "positional", description: "Message text, or: list | cancel <id>", required: false },
+        extra: { type: "positional", description: "Additional positional args", required: false },
+        in: { type: "string", description: 'Deliver after duration: "2h", "30m", "90s"' },
+        at: { type: "string", description: 'Deliver at time: "15:00" or ISO timestamp' },
+        to: { type: "string", description: "Recipient (default: self). Name, @group, pubkey, or *" },
+        mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
+        json: { type: "boolean", description: "Output as JSON", default: false },
+      },
+      async run({ args, rawArgs }) {
+        // Collect positional args from rawArgs (before any flags)
+        const positionals = rawArgs.filter((a) => !a.startsWith("-"));
+        await runRemind(args, positionals);
+      },
+    }),
     status: defineCommand({
       meta: { name: "status", description: "Check broker reachability for each joined mesh" },
       async run() { await runStatus(); },

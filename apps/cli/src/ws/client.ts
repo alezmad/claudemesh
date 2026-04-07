@@ -399,6 +399,48 @@ export class BrokerClient {
     this.ws.send(JSON.stringify({ type: "forget", memoryId }));
   }
 
+  // --- Scheduled messages ---
+
+  /** Schedule a message for future delivery. Returns { scheduledId, deliverAt } or null on timeout. */
+  async scheduleMessage(
+    to: string,
+    message: string,
+    deliverAt: number,
+  ): Promise<{ scheduledId: string; deliverAt: number } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.scheduledAckResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.scheduledAckResolvers.delete(reqId)) resolve(null);
+      }, 8_000) });
+      this.ws!.send(JSON.stringify({ type: "schedule", to, message, deliverAt, _reqId: reqId }));
+    });
+  }
+
+  /** List all pending scheduled messages for this session. */
+  async listScheduled(): Promise<Array<{ id: string; to: string; message: string; deliverAt: number; createdAt: number }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.scheduledListResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.scheduledListResolvers.delete(reqId)) resolve([]);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "list_scheduled", _reqId: reqId }));
+    });
+  }
+
+  /** Cancel a scheduled message by id. Returns true if found and cancelled. */
+  async cancelScheduled(scheduledId: string): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return false;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.cancelScheduledResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.cancelScheduledResolvers.delete(reqId)) resolve(false);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "cancel_scheduled", scheduledId, _reqId: reqId }));
+    });
+  }
+
   /** Check delivery status of a sent message. */
   private messageStatusResolvers = new Map<string, { resolve: (result: { messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null) => void; timer: NodeJS.Timeout }>();
   private fileUrlResolvers = new Map<string, { resolve: (result: { url: string; name: string; encrypted?: boolean; sealedKey?: string } | null) => void; timer: NodeJS.Timeout }>();
@@ -417,6 +459,9 @@ export class BrokerClient {
   private streamCreatedResolvers = new Map<string, { resolve: (id: string | null) => void; timer: NodeJS.Timeout }>();
   private streamListResolvers = new Map<string, { resolve: (streams: Array<{ id: string; name: string; createdBy: string; subscriberCount: number }>) => void; timer: NodeJS.Timeout }>();
   private streamDataHandlers = new Set<(data: { stream: string; data: unknown; publishedBy: string }) => void>();
+  private scheduledAckResolvers = new Map<string, { resolve: (result: { scheduledId: string; deliverAt: number } | null) => void; timer: NodeJS.Timeout }>();
+  private scheduledListResolvers = new Map<string, { resolve: (messages: Array<{ id: string; to: string; message: string; deliverAt: number; createdAt: number }>) => void; timer: NodeJS.Timeout }>();
+  private cancelScheduledResolvers = new Map<string, { resolve: (ok: boolean) => void; timer: NodeJS.Timeout }>();
 
   async messageStatus(messageId: string): Promise<{ messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
@@ -1049,6 +1094,22 @@ export class BrokerClient {
       this.resolveFromMap(this.meshInfoResolvers, msgReqId, msg as Record<string, unknown>);
       return;
     }
+    if (msg.type === "scheduled_ack") {
+      this.resolveFromMap(this.scheduledAckResolvers, msgReqId, {
+        scheduledId: String(msg.scheduledId ?? ""),
+        deliverAt: Number(msg.deliverAt ?? 0),
+      });
+      return;
+    }
+    if (msg.type === "scheduled_list") {
+      const messages = (msg.messages as Array<{ id: string; to: string; message: string; deliverAt: number; createdAt: number }>) ?? [];
+      this.resolveFromMap(this.scheduledListResolvers, msgReqId, messages);
+      return;
+    }
+    if (msg.type === "cancel_scheduled_ack") {
+      this.resolveFromMap(this.cancelScheduledResolvers, msgReqId, Boolean(msg.ok));
+      return;
+    }
     if (msg.type === "error") {
       this.debug(`broker error: ${msg.code} ${msg.message}`);
       const id = msg.id ? String(msg.id) : null;
@@ -1084,6 +1145,9 @@ export class BrokerClient {
           [this.contextResultsResolvers, []],
           [this.contextListResolvers, []],
           [this.streamListResolvers, []],
+          [this.scheduledAckResolvers, null],
+          [this.scheduledListResolvers, []],
+          [this.cancelScheduledResolvers, false],
           [this.messageStatusResolvers, null],
           [this.grantFileAccessResolvers, false],
           [this.collectionListResolvers, []],

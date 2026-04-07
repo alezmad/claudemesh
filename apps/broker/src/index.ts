@@ -102,6 +102,19 @@ const connectionsPerMesh = new Map<string, number>();
 
 // Stream subscriptions: "meshId:streamName" → Set of presenceIds
 const streamSubscriptions = new Map<string, Set<string>>();
+
+// Scheduled messages: meshId → Map<scheduledId, entry>
+interface ScheduledEntry {
+  id: string;
+  meshId: string;
+  presenceId: string;
+  to: string;
+  message: string;
+  deliverAt: number;
+  createdAt: number;
+  timer: ReturnType<typeof setTimeout>;
+}
+const scheduledMessages = new Map<string, ScheduledEntry>(); // keyed by scheduledId
 const hookRateLimit = new TokenBucket(
   env.HOOK_RATE_LIMIT_PER_MIN,
   env.HOOK_RATE_LIMIT_PER_MIN,
@@ -1786,6 +1799,93 @@ function handleConnection(ws: WebSocket): void {
             ...(_reqId ? { _reqId } : {}),
           });
           log.info("ws mesh_info", { presence_id: presenceId });
+          break;
+        }
+
+        // --- Scheduled messages ---
+
+        case "schedule": {
+          const sm = msg as Extract<WSClientMessage, { type: "schedule" }>;
+          const scheduledId = crypto.randomUUID();
+          const now = Date.now();
+          const delay = Math.max(0, sm.deliverAt - now);
+
+          const deliver = (): void => {
+            scheduledMessages.delete(scheduledId);
+            // Deliver via the normal send path by constructing a WSSendMessage
+            // and routing it through handleSend so encryption + push logic applies.
+            const conn2 = connections.get(presenceId);
+            if (!conn2) return; // session gone — drop
+            const fakeMsg: Extract<WSClientMessage, { type: "send" }> = {
+              type: "send",
+              id: crypto.randomUUID(),
+              targetSpec: sm.to,
+              priority: "now",
+              nonce: "",
+              ciphertext: Buffer.from(sm.message, "utf-8").toString("base64"),
+            };
+            handleSend(conn2, presenceId, fakeMsg).catch((e) =>
+              log.warn("scheduled delivery error", { scheduled_id: scheduledId, error: String(e) }),
+            );
+            log.info("ws schedule deliver", { scheduled_id: scheduledId, to: sm.to });
+          };
+
+          const entry: ScheduledEntry = {
+            id: scheduledId,
+            meshId: conn.meshId,
+            presenceId,
+            to: sm.to,
+            message: sm.message,
+            deliverAt: sm.deliverAt,
+            createdAt: now,
+            timer: setTimeout(deliver, delay),
+          };
+          scheduledMessages.set(scheduledId, entry);
+
+          sendToPeer(presenceId, {
+            type: "scheduled_ack",
+            scheduledId,
+            deliverAt: sm.deliverAt,
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws schedule", {
+            presence_id: presenceId,
+            scheduled_id: scheduledId,
+            delay_ms: delay,
+            to: sm.to,
+          });
+          break;
+        }
+
+        case "list_scheduled": {
+          const mine = [...scheduledMessages.values()]
+            .filter((e) => e.meshId === conn.meshId && e.presenceId === presenceId)
+            .map((e) => ({ id: e.id, to: e.to, message: e.message, deliverAt: e.deliverAt, createdAt: e.createdAt }));
+          sendToPeer(presenceId, {
+            type: "scheduled_list",
+            messages: mine,
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws list_scheduled", { presence_id: presenceId, count: mine.length });
+          break;
+        }
+
+        case "cancel_scheduled": {
+          const cs = msg as Extract<WSClientMessage, { type: "cancel_scheduled" }>;
+          const entry = scheduledMessages.get(cs.scheduledId);
+          let ok = false;
+          if (entry && entry.meshId === conn.meshId && entry.presenceId === presenceId) {
+            clearTimeout(entry.timer);
+            scheduledMessages.delete(cs.scheduledId);
+            ok = true;
+          }
+          sendToPeer(presenceId, {
+            type: "cancel_scheduled_ack",
+            scheduledId: cs.scheduledId,
+            ok,
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws cancel_scheduled", { presence_id: presenceId, scheduled_id: cs.scheduledId, ok });
           break;
         }
       }

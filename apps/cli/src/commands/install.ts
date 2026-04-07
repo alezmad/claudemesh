@@ -213,6 +213,88 @@ function writeClaudeSettings(obj: Record<string, unknown>): void {
 }
 
 /**
+ * All claudemesh MCP tool names, prefixed for allowedTools.
+ * These let Claude Code use claudemesh tools without --dangerously-skip-permissions.
+ */
+const CLAUDEMESH_TOOLS = [
+  "mcp__claudemesh__send_message",
+  "mcp__claudemesh__list_peers",
+  "mcp__claudemesh__check_messages",
+  "mcp__claudemesh__set_summary",
+  "mcp__claudemesh__set_status",
+  "mcp__claudemesh__join_group",
+  "mcp__claudemesh__leave_group",
+  "mcp__claudemesh__get_state",
+  "mcp__claudemesh__set_state",
+  "mcp__claudemesh__list_state",
+  "mcp__claudemesh__remember",
+  "mcp__claudemesh__recall",
+  "mcp__claudemesh__forget",
+  "mcp__claudemesh__share_file",
+  "mcp__claudemesh__get_file",
+  "mcp__claudemesh__list_files",
+  "mcp__claudemesh__file_status",
+  "mcp__claudemesh__delete_file",
+  "mcp__claudemesh__vector_store",
+  "mcp__claudemesh__vector_search",
+  "mcp__claudemesh__vector_delete",
+  "mcp__claudemesh__list_collections",
+  "mcp__claudemesh__graph_query",
+  "mcp__claudemesh__graph_execute",
+  "mcp__claudemesh__mesh_info",
+  "mcp__claudemesh__ping_mesh",
+  "mcp__claudemesh__message_status",
+  "mcp__claudemesh__share_context",
+  "mcp__claudemesh__get_context",
+  "mcp__claudemesh__list_contexts",
+  "mcp__claudemesh__create_task",
+  "mcp__claudemesh__claim_task",
+  "mcp__claudemesh__complete_task",
+  "mcp__claudemesh__list_tasks",
+  "mcp__claudemesh__create_stream",
+  "mcp__claudemesh__publish",
+  "mcp__claudemesh__subscribe",
+  "mcp__claudemesh__list_streams",
+  "mcp__claudemesh__mesh_execute",
+  "mcp__claudemesh__mesh_query",
+  "mcp__claudemesh__mesh_schema",
+];
+
+/**
+ * Pre-approve all claudemesh MCP tools in allowedTools.
+ * Merges into any existing list — never overwrites other entries.
+ * Returns which tools were added vs already present.
+ */
+function installAllowedTools(): { added: string[]; unchanged: number } {
+  const settings = readClaudeSettings();
+  const existing = new Set<string>((settings.allowedTools as string[] | undefined) ?? []);
+  const toAdd = CLAUDEMESH_TOOLS.filter((t) => !existing.has(t));
+  if (toAdd.length > 0) {
+    settings.allowedTools = [...Array.from(existing), ...toAdd];
+    writeClaudeSettings(settings);
+  }
+  return { added: toAdd, unchanged: CLAUDEMESH_TOOLS.length - toAdd.length };
+}
+
+/**
+ * Remove claudemesh tools from allowedTools.
+ * Leaves all other entries intact. Returns count removed.
+ */
+function uninstallAllowedTools(): number {
+  if (!existsSync(CLAUDE_SETTINGS)) return 0;
+  const settings = readClaudeSettings();
+  const existing = (settings.allowedTools as string[] | undefined) ?? [];
+  const toolSet = new Set(CLAUDEMESH_TOOLS);
+  const kept = existing.filter((t) => !toolSet.has(t));
+  const removed = existing.length - kept.length;
+  if (removed > 0) {
+    settings.allowedTools = kept;
+    writeClaudeSettings(settings);
+  }
+  return removed;
+}
+
+/**
  * Add a Stop + UserPromptSubmit hook entry to ~/.claude/settings.json,
  * idempotent on the command string. Returns counts for reporting.
  */
@@ -321,6 +403,26 @@ export function runInstall(args: string[] = []): void {
     ),
   );
 
+  // allowedTools — pre-approve claudemesh MCP tools so peers don't need
+  // --dangerously-skip-permissions just to call mesh tools.
+  try {
+    const { added, unchanged } = installAllowedTools();
+    if (added.length > 0) {
+      console.log(
+        `✓ allowedTools: ${added.length} claudemesh tools pre-approved${unchanged > 0 ? `, ${unchanged} already present` : ""}`,
+      );
+      console.log(dim(`  This lets claudemesh tools run without --dangerously-skip-permissions.`));
+      console.log(dim(`  Your existing allowedTools entries were preserved.`));
+    } else {
+      console.log(`✓ allowedTools: all ${unchanged} claudemesh tools already pre-approved`);
+    }
+    console.log(dim(`  config:  ${CLAUDE_SETTINGS}`));
+  } catch (e) {
+    console.error(
+      `⚠  allowedTools update failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
   // Hooks — status accuracy (Stop/UserPromptSubmit → POST /hook/set-status).
   if (!skipHooks) {
     try {
@@ -373,6 +475,20 @@ export function runUninstall(): void {
     console.log(`✓ MCP server "${MCP_NAME}" removed`);
   } else {
     console.log(`· MCP server "${MCP_NAME}" not present`);
+  }
+
+  // allowedTools
+  try {
+    const removed = uninstallAllowedTools();
+    if (removed > 0) {
+      console.log(`✓ allowedTools: ${removed} claudemesh tools removed`);
+    } else {
+      console.log("· No claudemesh allowedTools to remove");
+    }
+  } catch (e) {
+    console.error(
+      `⚠  allowedTools removal failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
 
   // Hooks

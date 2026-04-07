@@ -664,6 +664,60 @@ export interface WSErrorMessage {
   _reqId?: string;
 }
 
+// --- Scheduled messages ---
+
+/** Client → broker: schedule a message for future delivery. */
+export interface WSScheduleMessage {
+  type: "schedule";
+  to: string;
+  message: string;
+  /** Unix timestamp (ms) when to deliver. */
+  deliverAt: number;
+  _reqId?: string;
+}
+
+/** Client → broker: list pending scheduled messages for this member. */
+export interface WSListScheduledMessage {
+  type: "list_scheduled";
+  _reqId?: string;
+}
+
+/** Client → broker: cancel a scheduled message by id. */
+export interface WSCancelScheduledMessage {
+  type: "cancel_scheduled";
+  scheduledId: string;
+  _reqId?: string;
+}
+
+/** Broker → client: acknowledgement for schedule, carries the assigned id. */
+export interface WSScheduledAckMessage {
+  type: "scheduled_ack";
+  scheduledId: string;
+  deliverAt: number;
+  _reqId?: string;
+}
+
+/** Broker → client: list of pending scheduled messages. */
+export interface WSScheduledListMessage {
+  type: "scheduled_list";
+  messages: Array<{
+    id: string;
+    to: string;
+    message: string;
+    deliverAt: number;
+    createdAt: number;
+  }>;
+  _reqId?: string;
+}
+
+/** Broker → client: cancel confirmation. */
+export interface WSCancelScheduledAckMessage {
+  type: "cancel_scheduled_ack";
+  scheduledId: string;
+  ok: boolean;
+  _reqId?: string;
+}
+
 export type WSClientMessage =
   | WSHelloMessage
   | WSSendMessage
@@ -705,7 +759,10 @@ export type WSClientMessage =
   | WSSubscribeMessage
   | WSUnsubscribeMessage
   | WSListStreamsMessage
-  | WSMeshInfoMessage;
+  | WSMeshInfoMessage
+  | WSScheduleMessage
+  | WSListScheduledMessage
+  | WSCancelScheduledMessage;
 
 export type WSServerMessage =
   | WSHelloAckMessage
@@ -738,4 +795,7 @@ export type WSServerMessage =
   | WSSubscribedMessage
   | WSStreamListMessage
   | WSMeshInfoResultMessage
+  | WSScheduledAckMessage
+  | WSScheduledListMessage
+  | WSCancelScheduledAckMessage
   | WSErrorMessage;

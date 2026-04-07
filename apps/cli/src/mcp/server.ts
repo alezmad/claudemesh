@@ -444,6 +444,68 @@ Your message mode is "${messageMode}".
         return text(`Forgotten: ${id}`);
       }
 
+      // --- Scheduled messages ---
+      case "schedule_reminder":
+      case "send_later": {
+        const sArgs = (args ?? {}) as {
+          message?: string;
+          to?: string;
+          deliver_at?: number;
+          in_seconds?: number;
+        };
+        if (!sArgs.message) return text(`${name}: \`message\` required`, true);
+        const to = name === "schedule_reminder" ? "self" : (sArgs.to ?? "");
+        if (name === "send_later" && !to) return text("send_later: `to` required", true);
+
+        let deliverAt: number;
+        if (sArgs.deliver_at) {
+          deliverAt = Number(sArgs.deliver_at);
+        } else if (sArgs.in_seconds) {
+          deliverAt = Date.now() + Number(sArgs.in_seconds) * 1_000;
+        } else {
+          return text(`${name}: provide \`deliver_at\` (ms timestamp) or \`in_seconds\``, true);
+        }
+
+        // For send_later, resolve display name → pubkey if needed
+        let targetSpec = to;
+        if (name === "send_later" && !to.startsWith("@") && to !== "*" && !/^[0-9a-f]{64}$/i.test(to) && to !== "self") {
+          const peers = await client.listPeers();
+          const match = peers.find((p) => p.displayName.toLowerCase() === to.toLowerCase());
+          if (!match) {
+            const names = peers.map((p) => p.displayName).join(", ");
+            return text(`send_later: peer "${to}" not found. Online: ${names || "(none)"}`, true);
+          }
+          targetSpec = match.pubkey;
+        }
+        if (name === "schedule_reminder") {
+          // Self-reminder: use own session pubkey
+          targetSpec = client.getSessionPubkey() ?? "*";
+        }
+
+        const result = await client.scheduleMessage(targetSpec, sArgs.message, deliverAt);
+        if (!result) return text(`${name}: broker did not acknowledge — check connection`, true);
+        const when = new Date(result.deliverAt).toISOString();
+        return text(
+          name === "schedule_reminder"
+            ? `Reminder scheduled (${result.scheduledId.slice(0, 8)}): "${sArgs.message.slice(0, 60)}" at ${when}`
+            : `Message to "${to}" scheduled (${result.scheduledId.slice(0, 8)}) for ${when}`,
+        );
+      }
+      case "list_scheduled": {
+        const scheduled = await client.listScheduled();
+        if (scheduled.length === 0) return text("No pending scheduled messages.");
+        const lines = scheduled.map((m) =>
+          `- [${m.id.slice(0, 8)}] → ${m.to === client.getSessionPubkey() ? "self (reminder)" : m.to} at ${new Date(m.deliverAt).toISOString()}: "${m.message.slice(0, 60)}${m.message.length > 60 ? "…" : ""}"`,
+        );
+        return text(`${scheduled.length} scheduled:\n${lines.join("\n")}`);
+      }
+      case "cancel_scheduled": {
+        const { id: schedId } = (args ?? {}) as { id?: string };
+        if (!schedId) return text("cancel_scheduled: `id` required", true);
+        const ok = await client.cancelScheduled(schedId);
+        return text(ok ? `Cancelled: ${schedId}` : `Not found or already fired: ${schedId}`, !ok);
+      }
+
       // --- Files ---
       case "share_file": {
         const { path: filePath, name: fileName, tags, to: fileTo } = (args ?? {}) as { path?: string; name?: string; tags?: string[]; to?: string };

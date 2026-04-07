@@ -98,12 +98,12 @@ async function confirmPermissions(): Promise<void> {
 
   console.log(yellow(bold("  Autonomous mode")));
   console.log("");
-  console.log("  Claude will send and receive peer messages without asking");
-  console.log("  you first. Peers exchange text only — no file access,");
-  console.log("  no tool calls, no code execution.");
+  console.log("  Claude will run with --dangerously-skip-permissions, bypassing");
+  console.log("  ALL permission prompts — not just claudemesh tools.");
+  console.log("  Peers exchange text only — no file access, no tool calls.");
   console.log("");
-  console.log(dim("  Same as: claude --dangerously-skip-permissions"));
-  console.log(dim("  Skip this prompt: claudemesh launch -y"));
+  console.log(dim("  Without -y: only claudemesh tools are pre-approved (via allowedTools)."));
+  console.log(dim("  Use -y for autonomous agents. Omit it for shared/multi-person meshes."));
   console.log("");
 
   const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -313,10 +313,14 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     }
     filtered.push(args.claudeArgs[i]!);
   }
+  // --dangerously-skip-permissions is only added when the user explicitly
+  // passes -y / --yes. Without it, claudemesh tools still work because
+  // `claudemesh install` pre-approves them via allowedTools in settings.json.
+  // This keeps permissions tight for multi-person meshes.
   const claudeArgs = [
     "--dangerously-load-development-channels",
     "server:claudemesh",
-    "--dangerously-skip-permissions",
+    ...(args.skipPermConfirm ? ["--dangerously-skip-permissions"] : []),
     ...(args.systemPrompt ? ["--system-prompt", args.systemPrompt] : []),
     ...filtered,
   ];
