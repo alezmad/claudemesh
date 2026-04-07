@@ -917,6 +917,47 @@ export interface WSErrorMessage {
   _reqId?: string;
 }
 
+// --- Audit log messages ---
+
+/** Client → broker: query paginated audit entries for a mesh. */
+export interface WSAuditQueryMessage {
+  type: "audit_query";
+  limit?: number;
+  offset?: number;
+  eventType?: string;
+  _reqId?: string;
+}
+
+/** Client → broker: verify the hash chain for the mesh audit log. */
+export interface WSAuditVerifyMessage {
+  type: "audit_verify";
+  _reqId?: string;
+}
+
+/** Broker → client: paginated audit log entries. */
+export interface WSAuditResultMessage {
+  type: "audit_result";
+  entries: Array<{
+    id: number;
+    eventType: string;
+    actor: string;
+    payload: Record<string, unknown>;
+    hash: string;
+    createdAt: string;
+  }>;
+  total: number;
+  _reqId?: string;
+}
+
+/** Broker → client: result of hash chain verification. */
+export interface WSAuditVerifyResultMessage {
+  type: "audit_verify_result";
+  valid: boolean;
+  entries: number;
+  brokenAt?: number;
+  _reqId?: string;
+}
+
 // --- Simulation clock messages ---
 
 /** Client → broker: set the simulation clock speed. */
@@ -1088,7 +1129,9 @@ export type WSClientMessage =
   | WSPeerFileRequestMessage
   | WSPeerFileResponseMessage
   | WSPeerDirRequestMessage
-  | WSPeerDirResponseMessage;
+  | WSPeerDirResponseMessage
+  | WSAuditQueryMessage
+  | WSAuditVerifyMessage;
 
 // --- Skill messages ---
 
@@ -1206,4 +1249,6 @@ export type WSServerMessage =
   | WSPeerFileResponseForwardMessage
   | WSPeerDirRequestForwardMessage
   | WSPeerDirResponseForwardMessage
+  | WSAuditResultMessage
+  | WSAuditVerifyResultMessage
   | WSErrorMessage;

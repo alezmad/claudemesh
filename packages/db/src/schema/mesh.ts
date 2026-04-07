@@ -166,19 +166,28 @@ export const invite = meshSchema.table("invite", {
 });
 
 /**
- * Metadata-only audit log. NEVER stores message content — every
+ * Signed, hash-chained audit log. NEVER stores message content — every
  * payload between peers is E2E encrypted client-side (libsodium), so
  * the broker/DB only ever see ciphertext + routing events.
+ *
+ * Each entry includes a SHA-256 hash of the previous entry's hash,
+ * forming a tamper-evident chain per mesh. If any row is modified,
+ * all subsequent hashes break — detectable via verifyChain().
+ *
+ * This table is append-only: no UPDATE or DELETE operations.
  */
 export const auditLog = meshSchema.table("audit_log", {
-  id: text().primaryKey().notNull().$defaultFn(generateId),
+  /** Serial-like integer PK for ordering. */
+  id: integer().primaryKey().generatedAlwaysAsIdentity(),
   meshId: text()
     .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),
   eventType: text().notNull(),
-  actorPeerId: text(),
-  targetPeerId: text(),
-  metadata: jsonb().notNull().default({}),
+  actorMemberId: text(),
+  actorDisplayName: text(),
+  payload: jsonb().notNull().default({}),
+  prevHash: text().notNull(),
+  hash: text().notNull(),
   createdAt: timestamp().defaultNow().notNull(),
 });
 
@@ -428,10 +437,72 @@ export const meshStream = meshSchema.table(
 );
 
 /**
+ * Reusable skills (instructions/capabilities) shared across a mesh.
+ * Peers publish skills so other peers can discover and load them.
+ * Skills are scoped to a mesh and unique by (meshId, name).
+ */
+export const meshSkill = meshSchema.table(
+  "skill",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    name: text().notNull(),
+    description: text().notNull(),
+    instructions: text().notNull(),
+    tags: text().array().default([]),
+    authorMemberId: text().references(() => meshMember.id),
+    authorName: text(),
+    createdAt: timestamp().defaultNow().notNull(),
+    updatedAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("skill_mesh_name_idx").on(table.meshId, table.name)],
+);
+
+/**
  * Persistent scheduled messages. Survives broker restarts — on boot the
  * broker loads all non-cancelled, non-expired rows and re-arms timers.
  * Supports both one-shot (deliverAt) and recurring (cron expression).
  */
+/**
+ * Inbound webhooks: external services POST to a broker endpoint and the
+ * payload is pushed to all connected mesh peers as a "webhook" push.
+ */
+export const meshWebhook = meshSchema.table(
+  "webhook",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    name: text().notNull(),
+    secret: text().notNull(),
+    active: boolean().notNull().default(true),
+    createdBy: text()
+      .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    createdAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("webhook_mesh_name_idx").on(table.meshId, table.name)],
+);
+
+export const meshWebhookRelations = relations(meshWebhook, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [meshWebhook.meshId],
+    references: [mesh.id],
+  }),
+  creator: one(meshMember, {
+    fields: [meshWebhook.createdBy],
+    references: [meshMember.id],
+  }),
+}));
+
+export const selectMeshWebhookSchema = createSelectSchema(meshWebhook);
+export const insertMeshWebhookSchema = createInsertSchema(meshWebhook);
+export type SelectMeshWebhook = typeof meshWebhook.$inferSelect;
+export type InsertMeshWebhook = typeof meshWebhook.$inferInsert;
+
 export const scheduledMessage = meshSchema.table("scheduled_message", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   meshId: text()
@@ -659,3 +730,19 @@ export const selectMeshStreamSchema = createSelectSchema(meshStream);
 export const insertMeshStreamSchema = createInsertSchema(meshStream);
 export type SelectMeshStream = typeof meshStream.$inferSelect;
 export type InsertMeshStream = typeof meshStream.$inferInsert;
+
+export const meshSkillRelations = relations(meshSkill, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [meshSkill.meshId],
+    references: [mesh.id],
+  }),
+  author: one(meshMember, {
+    fields: [meshSkill.authorMemberId],
+    references: [meshMember.id],
+  }),
+}));
+
+export const selectMeshSkillSchema = createSelectSchema(meshSkill);
+export const insertMeshSkillSchema = createInsertSchema(meshSkill);
+export type SelectMeshSkill = typeof meshSkill.$inferSelect;
+export type InsertMeshSkill = typeof meshSkill.$inferInsert;
