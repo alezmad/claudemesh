@@ -12,6 +12,7 @@ export interface RemindFlags {
   mesh?: string;
   in?: string;       // e.g. "2h", "30m", "90s"
   at?: string;       // ISO or HH:MM
+  cron?: string;     // 5-field cron expression for recurring
   to?: string;       // default: self
   json?: boolean;
 }
@@ -88,19 +89,21 @@ export async function runRemind(
     return;
   }
 
-  // claudemesh remind <message> --in <duration> | --at <time>
+  // claudemesh remind <message> --in <duration> | --at <time> | --cron <expr>
   const message = action ?? positional.join(" ");
   if (!message) {
     console.error("Usage: claudemesh remind <message> --in <duration>");
     console.error("       claudemesh remind <message> --at <time>");
+    console.error('       claudemesh remind <message> --cron "0 */2 * * *"');
     console.error("       claudemesh remind list");
     console.error("       claudemesh remind cancel <id>");
     process.exit(1);
   }
 
-  const deliverAt = parseDeliverAt(flags);
-  if (deliverAt === null) {
-    console.error('Specify when: --in <duration> (e.g. "2h", "30m") or --at <time> (e.g. "15:00")');
+  const isCron = !!flags.cron;
+  const deliverAt = isCron ? 0 : parseDeliverAt(flags);
+  if (!isCron && deliverAt === null) {
+    console.error('Specify when: --in <duration> (e.g. "2h", "30m"), --at <time> (e.g. "15:00"), or --cron <expression>');
     process.exit(1);
   }
 
@@ -123,12 +126,17 @@ export async function runRemind(
       targetSpec = client.getSessionPubkey() ?? "*";
     }
 
-    const result = await client.scheduleMessage(targetSpec, message, deliverAt);
+    const result = await client.scheduleMessage(targetSpec, message, deliverAt ?? 0, false, flags.cron);
     if (!result) { console.error("✗ Broker did not acknowledge — check connection"); process.exit(1); }
 
     if (flags.json) { console.log(JSON.stringify(result)); return; }
-    const when = new Date(result.deliverAt).toLocaleString();
     const toLabel = !flags.to || flags.to === "self" ? "yourself" : flags.to;
-    console.log(`✓ Reminder set (${result.scheduledId.slice(0, 8)}): "${message}" → ${toLabel} at ${when}`);
+    if (isCron) {
+      const nextFire = new Date(result.deliverAt).toLocaleString();
+      console.log(`✓ Recurring reminder set (${result.scheduledId.slice(0, 8)}): "${message}" → ${toLabel} — cron: ${flags.cron}, next fire: ${nextFire}`);
+    } else {
+      const when = new Date(result.deliverAt).toLocaleString();
+      console.log(`✓ Reminder set (${result.scheduledId.slice(0, 8)}): "${message}" → ${toLabel} at ${when}`);
+    }
   });
 }

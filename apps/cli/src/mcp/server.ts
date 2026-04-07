@@ -463,16 +463,22 @@ Your message mode is "${messageMode}".
           to?: string;
           deliver_at?: number;
           in_seconds?: number;
+          cron?: string;
         };
         if (!sArgs.message) return text("schedule_reminder: `message` required", true);
 
+        const isCron = !!sArgs.cron;
+
         let deliverAt: number;
-        if (sArgs.deliver_at) {
+        if (isCron) {
+          // For cron, deliverAt is ignored by the broker — set to 0
+          deliverAt = 0;
+        } else if (sArgs.deliver_at) {
           deliverAt = Number(sArgs.deliver_at);
         } else if (sArgs.in_seconds) {
           deliverAt = Date.now() + Number(sArgs.in_seconds) * 1_000;
         } else {
-          return text("schedule_reminder: provide `deliver_at` (ms timestamp) or `in_seconds`", true);
+          return text("schedule_reminder: provide `deliver_at` (ms timestamp), `in_seconds`, or `cron` expression", true);
         }
 
         const isSelf = !sArgs.to;
@@ -496,8 +502,18 @@ Your message mode is "${messageMode}".
           }
         }
 
-        const result = await client.scheduleMessage(targetSpec, sArgs.message, deliverAt, true);
+        const result = await client.scheduleMessage(targetSpec, sArgs.message, deliverAt, true, sArgs.cron);
         if (!result) return text("schedule_reminder: broker did not acknowledge — check connection", true);
+
+        if (isCron) {
+          const nextFire = new Date(result.deliverAt).toISOString();
+          return text(
+            isSelf
+              ? `Recurring self-reminder scheduled (${result.scheduledId.slice(0, 8)}): "${sArgs.message.slice(0, 60)}" — cron: ${sArgs.cron}, next fire: ${nextFire}`
+              : `Recurring reminder to "${sArgs.to}" scheduled (${result.scheduledId.slice(0, 8)}) — cron: ${sArgs.cron}, next fire: ${nextFire}`,
+          );
+        }
+
         const when = new Date(result.deliverAt).toISOString();
         return text(
           isSelf

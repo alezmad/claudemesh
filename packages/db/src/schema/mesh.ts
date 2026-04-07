@@ -427,6 +427,50 @@ export const meshStream = meshSchema.table(
   (table) => [uniqueIndex("stream_mesh_name_idx").on(table.meshId, table.name)],
 );
 
+/**
+ * Persistent scheduled messages. Survives broker restarts — on boot the
+ * broker loads all non-cancelled, non-expired rows and re-arms timers.
+ * Supports both one-shot (deliverAt) and recurring (cron expression).
+ */
+export const scheduledMessage = meshSchema.table("scheduled_message", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  meshId: text()
+    .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .notNull(),
+  /** Nullable — the presence that created it may be gone after a restart. */
+  presenceId: text(),
+  memberId: text()
+    .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .notNull(),
+  to: text().notNull(),
+  message: text().notNull(),
+  /** Unix timestamp (ms) for one-shot delivery. Null for cron-only entries. */
+  deliverAt: timestamp(),
+  /** 5-field cron expression for recurring delivery. Null for one-shot. */
+  cron: text(),
+  subtype: text(),
+  firedCount: integer().notNull().default(0),
+  cancelled: boolean().notNull().default(false),
+  firedAt: timestamp(),
+  createdAt: timestamp().defaultNow().notNull(),
+});
+
+export const scheduledMessageRelations = relations(scheduledMessage, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [scheduledMessage.meshId],
+    references: [mesh.id],
+  }),
+  member: one(meshMember, {
+    fields: [scheduledMessage.memberId],
+    references: [meshMember.id],
+  }),
+}));
+
+export const selectScheduledMessageSchema = createSelectSchema(scheduledMessage);
+export const insertScheduledMessageSchema = createInsertSchema(scheduledMessage);
+export type SelectScheduledMessage = typeof scheduledMessage.$inferSelect;
+export type InsertScheduledMessage = typeof scheduledMessage.$inferInsert;
+
 export const meshRelations = relations(mesh, ({ one, many }) => ({
   owner: one(user, {
     fields: [mesh.ownerUserId],

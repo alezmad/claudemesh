@@ -415,13 +415,14 @@ export class BrokerClient {
 
   // --- Scheduled messages ---
 
-  /** Schedule a message for future delivery. Returns { scheduledId, deliverAt } or null on timeout. */
+  /** Schedule a message for future delivery. Returns { scheduledId, deliverAt, cron? } or null on timeout. */
   async scheduleMessage(
     to: string,
     message: string,
     deliverAt: number,
     isReminder = false,
-  ): Promise<{ scheduledId: string; deliverAt: number } | null> {
+    cron?: string,
+  ): Promise<{ scheduledId: string; deliverAt: number; cron?: string } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
     return new Promise((resolve) => {
       const reqId = this.makeReqId();
@@ -434,6 +435,7 @@ export class BrokerClient {
         message,
         deliverAt,
         ...(isReminder ? { subtype: "reminder" } : {}),
+        ...(cron ? { cron, recurring: true } : {}),
         _reqId: reqId,
       }));
     });
@@ -1123,6 +1125,7 @@ export class BrokerClient {
       this.resolveFromMap(this.scheduledAckResolvers, msgReqId, {
         scheduledId: String(msg.scheduledId ?? ""),
         deliverAt: Number(msg.deliverAt ?? 0),
+        ...(msg.cron ? { cron: String(msg.cron) } : {}),
       });
       return;
     }

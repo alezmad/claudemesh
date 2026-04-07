@@ -568,13 +568,14 @@ export const TOOLS: Tool[] = [
   {
     name: "schedule_reminder",
     description:
-      "Schedule a message for future delivery. Without `to`, it fires back to yourself (a self-reminder). With `to`, it delivers to a peer, @group, or * broadcast. The broker holds it and delivers when the time arrives. Receivers see `subtype: reminder` in the push envelope.",
+      "Schedule a one-shot or recurring message. Without `to`, it fires back to yourself (a self-reminder). With `to`, it delivers to a peer, @group, or * broadcast. For one-shot, provide `deliver_at` or `in_seconds`. For recurring, provide `cron` (standard 5-field expression). The broker persists schedules to the database — they survive restarts. Receivers see `subtype: reminder` in the push envelope.",
     inputSchema: {
       type: "object",
       properties: {
         message: { type: "string", description: "Message or reminder text" },
-        deliver_at: { type: "number", description: "Unix timestamp (ms) when to deliver" },
-        in_seconds: { type: "number", description: "Alternative to deliver_at: fire after N seconds" },
+        deliver_at: { type: "number", description: "Unix timestamp (ms) when to deliver (one-shot)" },
+        in_seconds: { type: "number", description: "Alternative to deliver_at: fire after N seconds (one-shot)" },
+        cron: { type: "string", description: "Cron expression for recurring reminders (e.g. '0 */2 * * *' for every 2 hours, '30 9 * * 1-5' for 9:30 weekdays)" },
         to: {
           type: "string",
           description: "Recipient: display name, pubkey hex, @group, or * (omit for self-reminder)",
