@@ -27,29 +27,52 @@ Usage:
   claudemesh <command> [args]
 
 Commands:
-  install         Register MCP + Stop/UserPromptSubmit status hooks
-                  (add --no-hooks for bare MCP registration)
-  uninstall       Remove MCP server + hooks
-  launch [opts]   Launch Claude Code with real-time push messages
-                  --name <name>   Display name for this session
-                  --mesh <slug>   Select mesh (picker if >1, omitted)
-                  --join <url>    Join a mesh before launching
-                  --quiet         Skip the info banner
-                  -- <args>       Pass remaining args to claude
-  join <url>      Join a mesh via https://claudemesh.com/join/... URL
-  list            Show all joined meshes
-  leave <slug>    Leave a joined mesh
-  status          Health report: broker reachability per joined mesh
-  doctor          Diagnostic checks (install, config, keypairs, PATH)
-  seed-test-mesh  Dev-only: inject a mesh into config (skips invite flow)
-  mcp             Start MCP server (stdio) — invoked by Claude Code
+  install         Register MCP server + status hooks with Claude Code
+                  --no-hooks      Register MCP only, skip hooks
+  uninstall       Remove MCP server and hooks
+  launch [opts]   Launch Claude Code connected to a mesh
+  join <url>      Join a mesh via invite URL
+  list            Show joined meshes and identities
+  leave <slug>    Leave a mesh
+  status          Check broker reachability for each joined mesh
+  doctor          Diagnose install, config, keypairs, and PATH
+  mcp             Start MCP server (stdio — Claude Code only)
   --help, -h      Show this help
-  --version, -v   Show the CLI version
+  --version, -v   Show version
+
+launch options:
+  --name <name>             Display name for this session
+  --role <role>             Role tag (dev, lead, analyst — free-form)
+  --groups <spec>           Groups to join: "g1:role,g2" (colon = role)
+  --mesh <slug>             Select mesh by slug (interactive if omitted)
+  --join <url>              Join a mesh before launching
+  --message-mode <mode>     push (default) | inbox | off
+                              push   — peer messages arrive in real time
+                              inbox  — held until you call check_messages
+                              off    — no messages; use tools only
+  --system-prompt <text>    Set Claude's system prompt for this session
+  -y, --yes                 Skip permission confirmation
+  --quiet                   Skip banner and all interactive prompts
+  -- <args>                 Pass remaining args directly to claude
+
+  Full non-interactive launch:
+    claudemesh launch \\
+      --name Worker --mesh myteam --role analyst \\
+      --groups "myteam/docs:member" \\
+      --message-mode push \\
+      --system-prompt "You are a documentation analyst..." \\
+      -y --quiet
+
+  Groups support hierarchy (slash-separated):
+    --groups "eng/frontend:lead,eng/reviewers"
+    @eng delivers to members of @eng, @eng/frontend, @eng/reviewers, etc.
 
 Environment:
-  CLAUDEMESH_BROKER_URL    Override broker URL (default: wss://ic.claudemesh.com/ws)
-  CLAUDEMESH_CONFIG_DIR    Override config directory (default: ~/.claudemesh/)
-  CLAUDEMESH_DEBUG=1       Verbose logging
+  CLAUDEMESH_BROKER_URL     Override broker URL (default: wss://ic.claudemesh.com/ws)
+  CLAUDEMESH_CONFIG_DIR     Override config directory (default: ~/.claudemesh/)
+  CLAUDEMESH_DISPLAY_NAME   Override display name (set automatically by launch)
+  CLAUDEMESH_ROLE           Override role tag (set automatically by launch)
+  CLAUDEMESH_DEBUG=1        Verbose logging
 `;
 
 const cmd = process.argv[2];
