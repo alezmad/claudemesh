@@ -445,16 +445,20 @@ function handleUploadPost(
           : undefined,
       );
 
-      // Insert DB row
+      // Insert DB row — normalise tags to a real JS Array (Drizzle PgArray
+      // mapper calls .map() on the value; non-Array iterables break it).
+      // Skip uploadedByMember FK — memberId from the client header is the
+      // mesh slug, not a mesh.member primary key.
       const dbFileId = await uploadFile({
         meshId,
         name: fileName,
         sizeBytes: body.length,
         mimeType: (req.headers["content-type"] as string) || undefined,
         minioKey,
-        tags,
+        tags: Array.isArray(tags) ? tags : [],
         persistent,
-        uploadedByMember: memberId,
+        uploadedByName: memberId || undefined,
+        uploadedByMember: undefined,
         targetSpec: targetSpec || undefined,
       });
 
