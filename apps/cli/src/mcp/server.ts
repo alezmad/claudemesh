@@ -327,9 +327,15 @@ Your message mode is "${messageMode}".
       case "message_status": {
         const { id } = (args ?? {}) as { id?: string };
         if (!id) return text("message_status: `id` required", true);
-        const client = allClients()[0];
-        if (!client) return text("message_status: not connected", true);
-        const result = await client.messageStatus(id);
+        const clients = allClients();
+        if (!clients.length) return text("message_status: not connected", true);
+        // Try each connected mesh client — we don't know which mesh the
+        // messageId belongs to, so query all and return the first hit.
+        let result = null;
+        for (const c of clients) {
+          result = await c.messageStatus(id);
+          if (result) break;
+        }
         if (!result) return text(`Message ${id} not found or timed out.`);
         const recipientLines = result.recipients.map(
           (r: { name: string; pubkey: string; status: string }) =>

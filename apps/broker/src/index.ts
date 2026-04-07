@@ -844,14 +844,8 @@ function handleConnection(ws: WebSocket): void {
               updatedBy: stateRow.updatedBy,
             });
           }
-          // Send confirmation back to sender as state_result.
-          sendToPeer(presenceId, {
-            type: "state_result",
-            key: stateRow.key,
-            value: stateRow.value,
-            updatedBy: stateRow.updatedBy,
-            updatedAt: stateRow.updatedAt.toISOString(),
-          });
+          // Fire-and-forget: no state_result sent back to sender.
+          // The client (server.ts) returns success immediately without waiting.
           log.info("ws set_state", {
             presence_id: presenceId,
             key: ss.key,
@@ -1171,6 +1165,7 @@ function handleConnection(ws: WebSocket): void {
             sc.filesRead,
             sc.keyFindings,
             sc.tags,
+            conn.memberId,
           );
           sendToPeer(presenceId, {
             type: "context_shared",
@@ -1381,6 +1376,7 @@ function handleConnection(ws: WebSocket): void {
           if (!streamSubscriptions.has(key))
             streamSubscriptions.set(key, new Set());
           streamSubscriptions.get(key)!.add(presenceId);
+          sendToPeer(presenceId, { type: "subscribed", stream: sub.stream });
           log.info("ws subscribe", {
             presence_id: presenceId,
             stream: sub.stream,
@@ -1453,40 +1449,42 @@ function handleConnection(ws: WebSocket): void {
         case "vector_store": {
           const vs = msg as Extract<WSClientMessage, { type: "vector_store" }>;
           const collName = meshCollectionName(conn.meshId, vs.collection);
-          await ensureCollection(collName);
-          const { generateId } = await import("@turbostarter/shared/utils");
-          const pointId = generateId();
-          // Store text + metadata as payload. Use a zero vector as placeholder
-          // — real embeddings should be computed client-side and sent directly
-          // to Qdrant in a future version.
-          const zeroVector = new Array(1536).fill(0) as number[];
-          await qdrant.upsert(collName, {
-            wait: true,
-            points: [
-              {
-                id: pointId,
-                vector: zeroVector,
-                payload: {
-                  text: vs.text,
-                  mesh_id: conn.meshId,
-                  stored_by: conn.memberPubkey,
-                  stored_at: new Date().toISOString(),
-                  ...(vs.metadata ?? {}),
+          try {
+            await ensureCollection(collName);
+            const { generateId } = await import("@turbostarter/shared/utils");
+            const pointId = generateId();
+            // Store text + metadata as payload. Use a zero vector as placeholder
+            // — real embeddings should be computed client-side and sent directly
+            // to Qdrant in a future version.
+            const zeroVector = new Array(1536).fill(0) as number[];
+            await qdrant.upsert(collName, {
+              wait: true,
+              points: [
+                {
+                  id: pointId,
+                  vector: zeroVector,
+                  payload: {
+                    text: vs.text,
+                    mesh_id: conn.meshId,
+                    stored_by: conn.memberPubkey,
+                    stored_at: new Date().toISOString(),
+                    ...(vs.metadata ?? {}),
+                  },
                 },
-              },
-            ],
-          });
-          sendToPeer(presenceId, {
-            type: "ack" as const,
-            id: pointId,
-            messageId: pointId,
-            queued: false,
-          });
-          log.info("ws vector_store", {
-            presence_id: presenceId,
-            collection: vs.collection,
-            point_id: pointId,
-          });
+              ],
+            });
+            sendToPeer(presenceId, {
+              type: "vector_stored",
+              id: pointId,
+            });
+            log.info("ws vector_store", {
+              presence_id: presenceId,
+              collection: vs.collection,
+              point_id: pointId,
+            });
+          } catch (e) {
+            sendError(conn.ws, "vector_error", e instanceof Error ? e.message : String(e));
+          }
           break;
         }
         case "vector_search": {
@@ -1730,7 +1728,6 @@ function handleConnection(ws: WebSocket): void {
           ]);
           const allGroups = new Set<string>();
           for (const p of peers) for (const g of p.groups) allGroups.add(`@${g.name}`);
-          const myPresence = peers.find(p => p.sessionId === [...connections.entries()].find(([pid]) => pid === presenceId)?.[1]?.sessionPubkey);
           const peerConn = connections.get(presenceId);
           // Find own display name: match sessionPubkey from the peer list
           const selfPubkey = peerConn?.sessionPubkey ?? peerConn?.memberPubkey;

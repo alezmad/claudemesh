@@ -684,13 +684,13 @@ export class BrokerClient {
   /** Claim an unclaimed task. */
   async claimTask(id: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "claim_task", id }));
+    this.ws.send(JSON.stringify({ type: "claim_task", taskId: id }));
   }
 
   /** Mark a task done with optional result. */
   async completeTask(id: string, result?: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "complete_task", id, result }));
+    this.ws.send(JSON.stringify({ type: "complete_task", taskId: id, result }));
   }
 
   /** List tasks filtered by status/assignee. */
@@ -917,6 +917,11 @@ export class BrokerClient {
       return;
     }
     if (msg.type === "state_result") {
+      // DEPENDENCY: The broker must NOT send state_result for set_state
+      // operations (only for get_state). If the broker sends state_result for
+      // both, it would be consumed here by the next pending get_state resolver,
+      // returning the wrong value (cross-contamination). The broker's set_state
+      // handler was fixed to omit state_result; only get_state sends it.
       const resolver = this.stateResolvers.shift();
       if (resolver) {
         if (msg.key) {
@@ -1016,7 +1021,8 @@ export class BrokerClient {
       return;
     }
     if (msg.type === "graph_result") {
-      const rows = (msg.rows as Array<Record<string, unknown>>) ?? [];
+      // Broker sends { type: "graph_result", records: [...] }
+      const rows = (msg.records as Array<Record<string, unknown>>) ?? [];
       const resolver = this.graphResultResolvers.shift();
       if (resolver) resolver(rows);
       return;
@@ -1095,6 +1101,7 @@ export class BrokerClient {
     if (msg.type === "error") {
       this.debug(`broker error: ${msg.code} ${msg.message}`);
       const id = msg.id ? String(msg.id) : null;
+      let handledByPendingSend = false;
       if (id) {
         const pending = this.pendingSends.get(id);
         if (pending) {
@@ -1103,6 +1110,43 @@ export class BrokerClient {
             error: `${msg.code}: ${msg.message}`,
           });
           this.pendingSends.delete(id);
+          handledByPendingSend = true;
+        }
+      }
+      if (!handledByPendingSend) {
+        // Best-effort: unblock the first waiting resolver so callers don't
+        // hang for 5s. We don't know which tool triggered the error, so we
+        // pop the first non-empty resolver queue in priority order.
+        if (this.stateResolvers.length > 0) {
+          this.stateResolvers.shift()!(null);
+        } else if (this.stateListResolvers.length > 0) {
+          this.stateListResolvers.shift()!([]);
+        } else if (this.memoryStoreResolvers.length > 0) {
+          this.memoryStoreResolvers.shift()!(null);
+        } else if (this.memoryRecallResolvers.length > 0) {
+          this.memoryRecallResolvers.shift()!([]);
+        } else if (this.fileUrlResolvers.length > 0) {
+          this.fileUrlResolvers.shift()!(null);
+        } else if (this.fileListResolvers.length > 0) {
+          this.fileListResolvers.shift()!([]);
+        } else if (this.fileStatusResolvers.length > 0) {
+          this.fileStatusResolvers.shift()!([]);
+        } else if (this.graphResultResolvers.length > 0) {
+          this.graphResultResolvers.shift()!([]);
+        } else if (this.vectorStoredResolvers.length > 0) {
+          this.vectorStoredResolvers.shift()!(null);
+        } else if (this.vectorResultsResolvers.length > 0) {
+          this.vectorResultsResolvers.shift()!([]);
+        } else if (this.taskListResolvers.length > 0) {
+          this.taskListResolvers.shift()!([]);
+        } else if (this.meshQueryResolvers.length > 0) {
+          this.meshQueryResolvers.shift()!(null);
+        } else if (this.contextResultsResolvers.length > 0) {
+          this.contextResultsResolvers.shift()!([]);
+        } else if (this.contextListResolvers.length > 0) {
+          this.contextListResolvers.shift()!([]);
+        } else if (this.streamListResolvers.length > 0) {
+          this.streamListResolvers.shift()!([]);
         }
       }
     }
