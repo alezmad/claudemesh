@@ -86,6 +86,8 @@ export interface WSPushMessage {
   nonce: string;
   ciphertext: string;
   createdAt: string;
+  /** Optional semantic tag — "reminder" when delivered by the scheduler. */
+  subtype?: "reminder";
 }
 
 /** Client → broker: manual status override (dnd, forced idle). */
@@ -673,6 +675,8 @@ export interface WSScheduleMessage {
   message: string;
   /** Unix timestamp (ms) when to deliver. */
   deliverAt: number;
+  /** Optional semantic tag — "reminder" surfaces differently to the receiver. */
+  subtype?: "reminder";
   _reqId?: string;
 }
 

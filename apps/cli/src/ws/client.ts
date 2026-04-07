@@ -51,6 +51,8 @@ export interface InboundPush {
   /** Hint for UI: "direct" (crypto_box), "channel"/"broadcast"
    *  (plaintext for now). */
   kind: "direct" | "broadcast" | "channel" | "unknown";
+  /** Optional semantic tag — "reminder" when fired by the scheduler. */
+  subtype?: "reminder";
 }
 
 type PushHandler = (msg: InboundPush) => void;
@@ -406,6 +408,7 @@ export class BrokerClient {
     to: string,
     message: string,
     deliverAt: number,
+    isReminder = false,
   ): Promise<{ scheduledId: string; deliverAt: number } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
     return new Promise((resolve) => {
@@ -413,7 +416,14 @@ export class BrokerClient {
       this.scheduledAckResolvers.set(reqId, { resolve, timer: setTimeout(() => {
         if (this.scheduledAckResolvers.delete(reqId)) resolve(null);
       }, 8_000) });
-      this.ws!.send(JSON.stringify({ type: "schedule", to, message, deliverAt, _reqId: reqId }));
+      this.ws!.send(JSON.stringify({
+        type: "schedule",
+        to,
+        message,
+        deliverAt,
+        ...(isReminder ? { subtype: "reminder" } : {}),
+        _reqId: reqId,
+      }));
     });
   }
 
@@ -927,6 +937,7 @@ export class BrokerClient {
           receivedAt: new Date().toISOString(),
           plaintext,
           kind,
+          ...(msg.subtype ? { subtype: msg.subtype as "reminder" } : {}),
         };
         this.pushBuffer.push(push);
         if (this.pushBuffer.length > 500) this.pushBuffer.shift();

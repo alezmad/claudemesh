@@ -123,7 +123,8 @@ function decryptFailedWarning(senderPubkey: string): string {
 
 function formatPush(p: InboundPush, meshSlug: string): string {
   const body = p.plaintext ?? decryptFailedWarning(p.senderPubkey);
-  return `[${meshSlug}] from ${p.senderPubkey.slice(0, 12)}… (${p.priority}, ${p.createdAt}):\n${body}`;
+  const tag = p.subtype === "reminder" ? " [REMINDER]" : "";
+  return `[${meshSlug}]${tag} from ${p.senderPubkey.slice(0, 12)}… (${p.priority}, ${p.createdAt}):\n${body}`;
 }
 
 export async function startMcpServer(): Promise<void> {
@@ -146,6 +147,8 @@ You are "${myName}"${myRole ? ` (${myRole})` : ""} — a peer in the claudemesh 
 
 ## Responding to messages
 When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATELY. Pause your current task, reply via send_message, then resume. Read from_name, mesh_slug, and priority from the channel attributes. Reply by setting \`to\` to the sender's from_name (display name). Stay in character per your system prompt. Do not ignore low-priority messages — acknowledge them briefly even if you defer action.
+
+If the channel meta contains \`subtype: reminder\`, this is a scheduled reminder you set for yourself — act on it immediately (no reply needed).
 
 ## Tools
 | Tool | Description |
@@ -188,6 +191,9 @@ When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATEL
 | claim_task(id) | Claim an unclaimed task. |
 | complete_task(id, result?) | Mark task done with optional result. |
 | list_tasks(status?, assignee?) | List tasks filtered by status/assignee. |
+| schedule_reminder(message, in_seconds?, deliver_at?, to?) | Schedule a reminder to yourself (no \`to\`) or a delayed message to a peer/group. Delivered as a push with \`subtype: reminder\` in the channel meta. |
+| list_scheduled() | List pending scheduled reminders and messages. |
+| cancel_scheduled(id) | Cancel a pending scheduled item. |
 
 If multiple meshes are joined, prefix \`to\` with \`<mesh-slug>:\` to disambiguate (e.g. \`dev-team:Alice\`).
 
@@ -445,17 +451,14 @@ Your message mode is "${messageMode}".
       }
 
       // --- Scheduled messages ---
-      case "schedule_reminder":
-      case "send_later": {
+      case "schedule_reminder": {
         const sArgs = (args ?? {}) as {
           message?: string;
           to?: string;
           deliver_at?: number;
           in_seconds?: number;
         };
-        if (!sArgs.message) return text(`${name}: \`message\` required`, true);
-        const to = name === "schedule_reminder" ? "self" : (sArgs.to ?? "");
-        if (name === "send_later" && !to) return text("send_later: `to` required", true);
+        if (!sArgs.message) return text("schedule_reminder: `message` required", true);
 
         let deliverAt: number;
         if (sArgs.deliver_at) {
@@ -463,32 +466,37 @@ Your message mode is "${messageMode}".
         } else if (sArgs.in_seconds) {
           deliverAt = Date.now() + Number(sArgs.in_seconds) * 1_000;
         } else {
-          return text(`${name}: provide \`deliver_at\` (ms timestamp) or \`in_seconds\``, true);
+          return text("schedule_reminder: provide `deliver_at` (ms timestamp) or `in_seconds`", true);
         }
 
-        // For send_later, resolve display name → pubkey if needed
-        let targetSpec = to;
-        if (name === "send_later" && !to.startsWith("@") && to !== "*" && !/^[0-9a-f]{64}$/i.test(to) && to !== "self") {
-          const peers = await client.listPeers();
-          const match = peers.find((p) => p.displayName.toLowerCase() === to.toLowerCase());
-          if (!match) {
-            const names = peers.map((p) => p.displayName).join(", ");
-            return text(`send_later: peer "${to}" not found. Online: ${names || "(none)"}`, true);
-          }
-          targetSpec = match.pubkey;
-        }
-        if (name === "schedule_reminder") {
-          // Self-reminder: use own session pubkey
+        const isSelf = !sArgs.to;
+        let targetSpec: string;
+        if (isSelf) {
+          // Self-reminder: target own session pubkey
           targetSpec = client.getSessionPubkey() ?? "*";
+        } else {
+          const to = sArgs.to!;
+          // Resolve display name → pubkey if not a raw spec
+          if (!to.startsWith("@") && to !== "*" && !/^[0-9a-f]{64}$/i.test(to)) {
+            const peers = await client.listPeers();
+            const match = peers.find((p) => p.displayName.toLowerCase() === to.toLowerCase());
+            if (!match) {
+              const names = peers.map((p) => p.displayName).join(", ");
+              return text(`schedule_reminder: peer "${to}" not found. Online: ${names || "(none)"}`, true);
+            }
+            targetSpec = match.pubkey;
+          } else {
+            targetSpec = to;
+          }
         }
 
-        const result = await client.scheduleMessage(targetSpec, sArgs.message, deliverAt);
-        if (!result) return text(`${name}: broker did not acknowledge — check connection`, true);
+        const result = await client.scheduleMessage(targetSpec, sArgs.message, deliverAt, true);
+        if (!result) return text("schedule_reminder: broker did not acknowledge — check connection", true);
         const when = new Date(result.deliverAt).toISOString();
         return text(
-          name === "schedule_reminder"
-            ? `Reminder scheduled (${result.scheduledId.slice(0, 8)}): "${sArgs.message.slice(0, 60)}" at ${when}`
-            : `Message to "${to}" scheduled (${result.scheduledId.slice(0, 8)}) for ${when}`,
+          isSelf
+            ? `Self-reminder scheduled (${result.scheduledId.slice(0, 8)}): "${sArgs.message.slice(0, 60)}" at ${when}`
+            : `Reminder to "${sArgs.to}" scheduled (${result.scheduledId.slice(0, 8)}) for ${when}`,
         );
       }
       case "list_scheduled": {
@@ -1016,6 +1024,7 @@ Your message mode is "${messageMode}".
               sent_at: msg.createdAt,
               delivered_at: msg.receivedAt,
               kind: msg.kind,
+              ...(msg.subtype ? { subtype: msg.subtype } : {}),
             },
           },
         });

@@ -103,7 +103,7 @@ const connectionsPerMesh = new Map<string, number>();
 // Stream subscriptions: "meshId:streamName" → Set of presenceIds
 const streamSubscriptions = new Map<string, Set<string>>();
 
-// Scheduled messages: meshId → Map<scheduledId, entry>
+/// Scheduled messages: meshId → Map<scheduledId, entry>
 interface ScheduledEntry {
   id: string;
   meshId: string;
@@ -112,6 +112,7 @@ interface ScheduledEntry {
   message: string;
   deliverAt: number;
   createdAt: number;
+  subtype?: "reminder";
   timer: ReturnType<typeof setTimeout>;
 }
 const scheduledMessages = new Map<string, ScheduledEntry>(); // keyed by scheduledId
@@ -652,6 +653,7 @@ async function handleHello(
 async function handleSend(
   conn: PeerConn,
   msg: Extract<WSClientMessage, { type: "send" }>,
+  subtype?: "reminder",
 ): Promise<void> {
   const messageId = await queueMessage({
     meshId: conn.meshId,
@@ -696,6 +698,7 @@ async function handleSend(
     nonce: msg.nonce,
     ciphertext: msg.ciphertext,
     createdAt: new Date().toISOString(),
+    ...(subtype ? { subtype } : {}),
   };
 
   for (const [pid, peer] of connections) {
@@ -1824,7 +1827,7 @@ function handleConnection(ws: WebSocket): void {
               nonce: "",
               ciphertext: Buffer.from(sm.message, "utf-8").toString("base64"),
             };
-            handleSend(conn2, presenceId, fakeMsg).catch((e) =>
+            handleSend(conn2, fakeMsg, sm.subtype).catch((e) =>
               log.warn("scheduled delivery error", { scheduled_id: scheduledId, error: String(e) }),
             );
             log.info("ws schedule deliver", { scheduled_id: scheduledId, to: sm.to });
@@ -1838,6 +1841,7 @@ function handleConnection(ws: WebSocket): void {
             message: sm.message,
             deliverAt: sm.deliverAt,
             createdAt: now,
+            ...(sm.subtype ? { subtype: sm.subtype } : {}),
             timer: setTimeout(deliver, delay),
           };
           scheduledMessages.set(scheduledId, entry);

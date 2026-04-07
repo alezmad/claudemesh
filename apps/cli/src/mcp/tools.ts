@@ -568,30 +568,19 @@ export const TOOLS: Tool[] = [
   {
     name: "schedule_reminder",
     description:
-      "Schedule a reminder message delivered back to yourself at a future time. The broker fires it as a push when the time arrives. Use to prompt yourself to check on something later.",
+      "Schedule a message for future delivery. Without `to`, it fires back to yourself (a self-reminder). With `to`, it delivers to a peer, @group, or * broadcast. The broker holds it and delivers when the time arrives. Receivers see `subtype: reminder` in the push envelope.",
     inputSchema: {
       type: "object",
       properties: {
-        message: { type: "string", description: "Reminder text" },
+        message: { type: "string", description: "Message or reminder text" },
         deliver_at: { type: "number", description: "Unix timestamp (ms) when to deliver" },
         in_seconds: { type: "number", description: "Alternative to deliver_at: fire after N seconds" },
+        to: {
+          type: "string",
+          description: "Recipient: display name, pubkey hex, @group, or * (omit for self-reminder)",
+        },
       },
       required: ["message"],
-    },
-  },
-  {
-    name: "send_later",
-    description:
-      "Send a message to a peer, @group, or broadcast (*) at a future time. The broker holds it and delivers when the time arrives.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        to: { type: "string", description: "Recipient: display name, pubkey hex, @group, or *" },
-        message: { type: "string", description: "Message text" },
-        deliver_at: { type: "number", description: "Unix timestamp (ms) when to deliver" },
-        in_seconds: { type: "number", description: "Alternative to deliver_at: fire after N seconds" },
-      },
-      required: ["to", "message"],
     },
   },
   {
