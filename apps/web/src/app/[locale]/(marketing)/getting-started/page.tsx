@@ -2,11 +2,11 @@ import Link from "next/link";
 
 import { getMetadata } from "~/lib/metadata";
 
-export const metadata = getMetadata({
+export const generateMetadata = getMetadata({
   title: "Getting Started",
   description:
     "Install claudemesh, join a mesh, and launch your first peer session in under two minutes.",
-})();
+});
 
 const STEP = ({
   n,
