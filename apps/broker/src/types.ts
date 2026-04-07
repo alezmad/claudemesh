@@ -404,12 +404,22 @@ export interface WSDeleteFileMessage {
   fileId: string;
 }
 
+/** Client → broker: grant a peer access to an encrypted file. */
+export interface WSGrantFileAccessMessage {
+  type: "grant_file_access";
+  fileId: string;
+  peerPubkey: string;
+  sealedKey: string;
+}
+
 /** Broker → client: presigned URL for downloading a file. */
 export interface WSFileUrlMessage {
   type: "file_url";
   fileId: string;
   url: string;
   name: string;
+  encrypted?: boolean;
+  sealedKey?: string;
 }
 
 /** Broker → client: list of files in the mesh. */
@@ -423,7 +433,15 @@ export interface WSFileListMessage {
     uploadedBy: string;
     uploadedAt: string;
     persistent: boolean;
+    encrypted: boolean;
   }>;
+}
+
+/** Broker → client: acknowledgement for grant_file_access. */
+export interface WSGrantFileAccessOkMessage {
+  type: "grant_file_access_ok";
+  fileId: string;
+  peerPubkey: string;
 }
 
 /** Broker → client: access log for a file. */
@@ -627,6 +645,7 @@ export type WSClientMessage =
   | WSListFilesMessage
   | WSFileStatusMessage
   | WSDeleteFileMessage
+  | WSGrantFileAccessMessage
   | WSShareContextMessage
   | WSGetContextMessage
   | WSListContextsMessage
@@ -664,6 +683,7 @@ export type WSServerMessage =
   | WSFileUrlMessage
   | WSFileListMessage
   | WSFileStatusResultMessage
+  | WSGrantFileAccessOkMessage
   | WSContextSharedMessage
   | WSContextResultsMessage
   | WSContextListMessage

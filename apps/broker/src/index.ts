@@ -31,10 +31,13 @@ import {
   forgetMemory,
   getContext,
   getFile,
+  getFileKey,
   getFileStatus,
   getState,
+  grantFileKey,
   handleHookSetStatus,
   heartbeat,
+  insertFileKeys,
   joinGroup,
   joinMesh,
   leaveGroup,
@@ -378,6 +381,9 @@ function handleUploadPost(
   const tagsRaw = req.headers["x-tags"] as string | undefined;
   const persistentRaw = req.headers["x-persistent"] as string | undefined;
   const targetSpec = req.headers["x-target-spec"] as string | undefined;
+  const encryptedRaw = req.headers["x-encrypted"] as string | undefined;
+  const ownerPubkey = req.headers["x-owner-pubkey"] as string | undefined;
+  const fileKeysRaw = req.headers["x-file-keys"] as string | undefined;
 
   if (!meshId || !memberId || !fileName) {
     writeJson(res, 400, {
@@ -449,6 +455,14 @@ function handleUploadPost(
       // mapper calls .map() on the value; non-Array iterables break it).
       // Skip uploadedByMember FK — memberId from the client header is the
       // mesh slug, not a mesh.member primary key.
+      const encrypted = encryptedRaw === "true";
+      let fileKeys: Array<{ peerPubkey: string; sealedKey: string }> = [];
+      if (encrypted && fileKeysRaw) {
+        try {
+          fileKeys = JSON.parse(fileKeysRaw);
+        } catch { /* ignore */ }
+      }
+
       const dbFileId = await uploadFile({
         meshId,
         name: fileName,
@@ -460,7 +474,20 @@ function handleUploadPost(
         uploadedByName: memberId || undefined,
         uploadedByMember: undefined,
         targetSpec: targetSpec || undefined,
+        encrypted: encrypted || false,
+        ownerPubkey: ownerPubkey || undefined,
       });
+
+      if (encrypted && fileKeys.length > 0) {
+        await insertFileKeys(
+          dbFileId,
+          fileKeys.map((k) => ({
+            peerPubkey: k.peerPubkey,
+            sealedKey: k.sealedKey,
+            grantedByPubkey: ownerPubkey,
+          })),
+        );
+      }
 
       writeJson(res, 200, { ok: true, fileId: dbFileId });
       log.info("upload", {
@@ -950,6 +977,20 @@ function handleConnection(ws: WebSocket): void {
               break;
             }
           }
+          // E2E: for encrypted files, fetch the sealed key for this peer
+          let sealedKey: string | null = null;
+          if (file.encrypted) {
+            const peerPubkey = conn.sessionPubkey ?? conn.memberPubkey;
+            const isOwner = file.ownerPubkey && peerPubkey === file.ownerPubkey;
+            if (!isOwner) {
+              sealedKey = peerPubkey ? await getFileKey(gf.fileId, peerPubkey) : null;
+              if (!sealedKey) {
+                sendError(conn.ws, "forbidden", "no decryption key for this file");
+                break;
+              }
+            }
+            // Owner gets sealedKey = null (they already have Kf from upload)
+          }
           // Generate presigned URL (60s expiry)
           const bucket = meshBucketName(conn.meshId);
           const presignedUrl = await minioClient.presignedGetObject(
@@ -971,6 +1012,8 @@ function handleConnection(ws: WebSocket): void {
             fileId: gf.fileId,
             url: presignedUrl,
             name: file.name,
+            encrypted: file.encrypted,
+            sealedKey: sealedKey ?? undefined,
           });
           log.info("ws get_file", {
             presence_id: presenceId,
@@ -991,6 +1034,7 @@ function handleConnection(ws: WebSocket): void {
               uploadedBy: f.uploadedBy,
               uploadedAt: f.uploadedAt.toISOString(),
               persistent: f.persistent,
+              encrypted: f.encrypted,
             })),
           });
           log.info("ws list_files", {
@@ -1015,6 +1059,23 @@ function handleConnection(ws: WebSocket): void {
             presence_id: presenceId,
             file_id: fs.fileId,
           });
+          break;
+        }
+        case "grant_file_access": {
+          const gfa = msg as { type: "grant_file_access"; fileId: string; peerPubkey: string; sealedKey: string };
+          const file = await getFile(conn.meshId, gfa.fileId);
+          if (!file) {
+            sendError(conn.ws, "not_found", "file not found");
+            break;
+          }
+          const requestorPubkey = conn.sessionPubkey ?? conn.memberPubkey;
+          if (file.ownerPubkey && file.ownerPubkey !== requestorPubkey) {
+            sendError(conn.ws, "forbidden", "only the file owner can grant access");
+            break;
+          }
+          await grantFileKey(gfa.fileId, gfa.peerPubkey, gfa.sealedKey, requestorPubkey ?? undefined);
+          sendToPeer(presenceId, { type: "grant_file_access_ok", fileId: gfa.fileId, peerPubkey: gfa.peerPubkey });
+          log.info("ws grant_file_access", { presence_id: presenceId, file_id: gfa.fileId, peer: gfa.peerPubkey });
           break;
         }
         case "delete_file": {
