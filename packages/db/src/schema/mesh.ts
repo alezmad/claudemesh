@@ -731,6 +731,53 @@ export const insertMeshStreamSchema = createInsertSchema(meshStream);
 export type SelectMeshStream = typeof meshStream.$inferSelect;
 export type InsertMeshStream = typeof meshStream.$inferInsert;
 
+/**
+ * Persisted peer session state. Survives disconnects — when a peer
+ * reconnects (same meshId + memberId), the broker restores groups,
+ * profile, visibility, summary, and cumulative stats automatically.
+ * Keyed by (meshId, memberId) — one row per member per mesh.
+ */
+export const peerState = meshSchema.table(
+  "peer_state",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    memberId: text()
+      .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    groups: jsonb().$type<Array<{ name: string; role?: string }>>().default([]),
+    profile: jsonb().$type<{ avatar?: string; title?: string; bio?: string; capabilities?: string[] }>().default({}),
+    visible: boolean().notNull().default(true),
+    lastSummary: text(),
+    lastDisplayName: text(),
+    cumulativeStats: jsonb().$type<{ messagesIn: number; messagesOut: number; toolCalls: number; errors: number }>().default({ messagesIn: 0, messagesOut: 0, toolCalls: 0, errors: 0 }),
+    lastSeenAt: timestamp(),
+    createdAt: timestamp().defaultNow().notNull(),
+    updatedAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("peer_state_mesh_member_idx").on(table.meshId, table.memberId),
+  ],
+);
+
+export const peerStateRelations = relations(peerState, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [peerState.meshId],
+    references: [mesh.id],
+  }),
+  member: one(meshMember, {
+    fields: [peerState.memberId],
+    references: [meshMember.id],
+  }),
+}));
+
+export const selectPeerStateSchema = createSelectSchema(peerState);
+export const insertPeerStateSchema = createInsertSchema(peerState);
+export type SelectPeerState = typeof peerState.$inferSelect;
+export type InsertPeerState = typeof peerState.$inferInsert;
+
 export const meshSkillRelations = relations(meshSkill, ({ one }) => ({
   mesh: one(mesh, {
     fields: [meshSkill.meshId],

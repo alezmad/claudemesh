@@ -233,6 +233,22 @@ export class BrokerClient {
           this.reconnectAttempt = 0;
           this.flushOutbound();
           this.startStatsReporting();
+          // Restore cumulative stats from a previous session if available.
+          if (msg.restored) {
+            const groups = msg.restoredGroups
+              ? (msg.restoredGroups as Array<{ name: string; role?: string }>).map((g) => g.role ? `@${g.name}:${g.role}` : `@${g.name}`).join(", ")
+              : "none";
+            process.stderr.write(
+              `[claudemesh] session restored — last seen ${msg.lastSeenAt ?? "unknown"}, groups: ${groups}\n`,
+            );
+            if (msg.restoredStats) {
+              const rs = msg.restoredStats as { messagesIn: number; messagesOut: number; toolCalls: number; errors: number };
+              this._statsCounters.messagesIn = rs.messagesIn ?? 0;
+              this._statsCounters.messagesOut = rs.messagesOut ?? 0;
+              this._statsCounters.toolCalls = rs.toolCalls ?? 0;
+              this._statsCounters.errors = rs.errors ?? 0;
+            }
+          }
           resolve();
           return;
         }

@@ -24,6 +24,22 @@ import type {
 } from "./types";
 import type { BrokerClient, InboundPush } from "../ws/client";
 
+/** Compute a human-readable relative time string from an ISO timestamp. */
+function relativeTime(isoStr: string): string {
+  const then = new Date(isoStr).getTime();
+  if (isNaN(then)) return "unknown";
+  const diffMs = Date.now() - then;
+  if (diffMs < 0) return "just now";
+  const seconds = Math.floor(diffMs / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days} day${days !== 1 ? "s" : ""} ago`;
+}
+
 function text(msg: string, isError = false) {
   return {
     content: [{ type: "text" as const, text: msg }],
@@ -1352,6 +1368,14 @@ Your message mode is "${messageMode}".
           content = `[heartbeat] tick ${tick} | sim time: ${simTime} | speed: x${speed}`;
         } else if (eventName === "peer_joined") {
           content = `[system] Peer "${data.name ?? "unknown"}" joined the mesh`;
+        } else if (eventName === "peer_returned") {
+          const peerName = String(data.name ?? "unknown");
+          const lastSeenAt = data.lastSeenAt ? relativeTime(String(data.lastSeenAt)) : "unknown";
+          const groups = Array.isArray(data.groups)
+            ? (data.groups as Array<{ name: string; role?: string }>).map((g) => g.role ? `@${g.name}:${g.role}` : `@${g.name}`).join(", ")
+            : "";
+          const summary = data.summary ? ` Summary: "${data.summary}"` : "";
+          content = `[system] Welcome back, "${peerName}"! Last seen ${lastSeenAt}.${groups ? ` Restored: ${groups}` : ""}${summary}`;
         } else if (eventName === "peer_left") {
           content = `[system] Peer "${data.name ?? "unknown"}" left the mesh`;
         } else if (eventName === "mcp_registered") {

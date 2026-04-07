@@ -214,6 +214,16 @@ export interface WSHelloAckMessage {
   type: "hello_ack";
   presenceId: string;
   memberDisplayName: string;
+  /** True when the broker restored persisted state from a previous session. */
+  restored?: boolean;
+  /** Last summary set before disconnect (only when restored). */
+  lastSummary?: string;
+  /** ISO timestamp of last disconnect (only when restored). */
+  lastSeenAt?: string;
+  /** Restored groups from previous session (only when restored and hello had no groups). */
+  restoredGroups?: Array<{ name: string; role?: string }>;
+  /** Restored cumulative stats (only when restored). */
+  restoredStats?: { messagesIn: number; messagesOut: number; toolCalls: number; errors: number };
 }
 
 /** Broker → client: list of connected peers in the same mesh. */
