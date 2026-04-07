@@ -40,8 +40,15 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
         : "";
       const statusIcon = p.status === "working" ? yellow("●") : green("●");
       const name = bold(p.displayName);
+      const meta: string[] = [];
+      if (p.peerType) meta.push(p.peerType);
+      if (p.channel) meta.push(p.channel);
+      if (p.model) meta.push(p.model);
+      const metaStr = meta.length ? dim(` (${meta.join(", ")})`) : "";
+      const cwdStr = p.cwd ? dim(`  cwd: ${p.cwd}`) : "";
       const summary = p.summary ? dim(`  ${p.summary}`) : "";
-      console.log(`  ${statusIcon} ${name}${groups}${summary}`);
+      console.log(`  ${statusIcon} ${name}${groups}${metaStr}${summary}`);
+      if (cwdStr) console.log(`    ${cwdStr}`);
     }
     console.log("");
   });

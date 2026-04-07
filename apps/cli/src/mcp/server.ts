@@ -322,7 +322,13 @@ Your message mode is "${messageMode}".
             const peerLines = peers.map((p) => {
               const summary = p.summary ? ` — "${p.summary}"` : "";
               const groupsStr = p.groups?.length ? ` [${p.groups.map(g => `@${g.name}${g.role ? ':' + g.role : ''}`).join(', ')}]` : "";
-              return `- **${p.displayName}** [${p.status}]${groupsStr} (${p.pubkey.slice(0, 12)}…)${summary}`;
+              const meta: string[] = [];
+              if (p.peerType) meta.push(`type:${p.peerType}`);
+              if (p.channel) meta.push(`channel:${p.channel}`);
+              if (p.model) meta.push(`model:${p.model}`);
+              const metaStr = meta.length ? ` {${meta.join(", ")}}` : "";
+              const cwdStr = p.cwd ? ` cwd:${p.cwd}` : "";
+              return `- **${p.displayName}** [${p.status}]${groupsStr}${metaStr} (${p.pubkey.slice(0, 12)}…)${cwdStr}${summary}`;
             });
             sections.push(`${header}\n${peerLines.join("\n")}`);
           }

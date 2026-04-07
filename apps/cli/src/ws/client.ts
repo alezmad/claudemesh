@@ -34,6 +34,10 @@ export interface PeerInfo {
   groups: Array<{ name: string; role?: string }>;
   sessionId: string;
   connectedAt: string;
+  cwd?: string;
+  peerType?: "ai" | "human" | "connector";
+  channel?: string;
+  model?: string;
 }
 
 export interface InboundPush {
@@ -162,6 +166,9 @@ export class BrokerClient {
               sessionId: `${process.pid}-${Date.now()}`,
               pid: process.pid,
               cwd: process.cwd(),
+              peerType: "ai" as const,
+              channel: "claude-code",
+              model: process.env.CLAUDE_MODEL || undefined,
               timestamp,
               signature,
             }),

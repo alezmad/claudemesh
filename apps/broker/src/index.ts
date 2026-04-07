@@ -15,10 +15,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { env } from "./env";
 import { db } from "./db";
-import { messageQueue } from "@turbostarter/db/schema/mesh";
+import { messageQueue, scheduledMessage as scheduledMessageTable } from "@turbostarter/db/schema/mesh";
 import {
   claimTask,
   completeTask,
@@ -112,14 +112,142 @@ interface ScheduledEntry {
   id: string;
   meshId: string;
   presenceId: string;
+  memberId: string;
   to: string;
   message: string;
   deliverAt: number;
   createdAt: number;
   subtype?: "reminder";
+  cron?: string;
+  recurring?: boolean;
+  firedCount: number;
   timer: ReturnType<typeof setTimeout>;
 }
 const scheduledMessages = new Map<string, ScheduledEntry>(); // keyed by scheduledId
+
+// ---------------------------------------------------------------------------
+// Minimal 5-field cron parser (minute hour dom month dow)
+// Supports: numbers, *, */N, N-M, comma-separated lists
+// ---------------------------------------------------------------------------
+
+function parseCronField(field: string, min: number, max: number): number[] {
+  const results = new Set<number>();
+  for (const part of field.split(",")) {
+    const stepMatch = part.match(/^(\S+)\/(\d+)$/);
+    let range: string;
+    let step: number;
+    if (stepMatch) {
+      range = stepMatch[1]!;
+      step = parseInt(stepMatch[2]!, 10);
+    } else {
+      range = part;
+      step = 1;
+    }
+
+    let start: number;
+    let end: number;
+    if (range === "*") {
+      start = min;
+      end = max;
+    } else if (range.includes("-")) {
+      const [a, b] = range.split("-");
+      start = parseInt(a!, 10);
+      end = parseInt(b!, 10);
+    } else {
+      start = parseInt(range, 10);
+      end = start;
+    }
+    for (let i = start; i <= end; i += step) {
+      if (i >= min && i <= max) results.add(i);
+    }
+  }
+  return [...results].sort((a, b) => a - b);
+}
+
+/**
+ * Given a 5-field cron expression and a reference Date, return the next
+ * fire time as a Date. Scans minute-by-minute from `after` up to 366 days
+ * ahead. Returns null if no match found (invalid expression).
+ */
+function cronNextFireTime(cronExpr: string, after: Date = new Date()): Date | null {
+  const fields = cronExpr.trim().split(/\s+/);
+  if (fields.length !== 5) return null;
+
+  const minutes = parseCronField(fields[0]!, 0, 59);
+  const hours = parseCronField(fields[1]!, 0, 23);
+  const doms = parseCronField(fields[2]!, 1, 31);
+  const months = parseCronField(fields[3]!, 1, 12);
+  const dows = parseCronField(fields[4]!, 0, 6); // 0 = Sunday
+
+  if (!minutes.length || !hours.length || !doms.length || !months.length || !dows.length) {
+    return null;
+  }
+
+  // Start from the next minute after `after`
+  const candidate = new Date(after);
+  candidate.setSeconds(0, 0);
+  candidate.setMinutes(candidate.getMinutes() + 1);
+
+  const limit = after.getTime() + 366 * 24 * 60 * 60 * 1000;
+  while (candidate.getTime() < limit) {
+    if (
+      months.includes(candidate.getMonth() + 1) &&
+      doms.includes(candidate.getDate()) &&
+      dows.includes(candidate.getDay()) &&
+      hours.includes(candidate.getHours()) &&
+      minutes.includes(candidate.getMinutes())
+    ) {
+      return candidate;
+    }
+    candidate.setMinutes(candidate.getMinutes() + 1);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Persist scheduled entry to DB
+// ---------------------------------------------------------------------------
+
+async function persistScheduledEntry(entry: ScheduledEntry): Promise<void> {
+  await db.insert(scheduledMessageTable).values({
+    id: entry.id,
+    meshId: entry.meshId,
+    presenceId: entry.presenceId,
+    memberId: entry.memberId,
+    to: entry.to,
+    message: entry.message,
+    deliverAt: entry.deliverAt ? new Date(entry.deliverAt) : null,
+    cron: entry.cron ?? null,
+    subtype: entry.subtype ?? null,
+    firedCount: entry.firedCount,
+    cancelled: false,
+  });
+}
+
+async function markScheduledFired(id: string): Promise<void> {
+  await db
+    .update(scheduledMessageTable)
+    .set({ firedAt: new Date(), firedCount: sql`${scheduledMessageTable.firedCount} + 1` })
+    .where(eq(scheduledMessageTable.id, id));
+}
+
+async function markScheduledCancelled(id: string): Promise<void> {
+  await db
+    .update(scheduledMessageTable)
+    .set({ cancelled: true })
+    .where(eq(scheduledMessageTable.id, id));
+}
+
+async function updateScheduledNextFire(id: string, nextDeliverAt: Date, firedCount: number): Promise<void> {
+  await db
+    .update(scheduledMessageTable)
+    .set({
+      deliverAt: nextDeliverAt,
+      firedCount,
+      firedAt: new Date(),
+    })
+    .where(eq(scheduledMessageTable.id, id));
+}
 const hookRateLimit = new TokenBucket(
   env.HOOK_RATE_LIMIT_PER_MIN,
   env.HOOK_RATE_LIMIT_PER_MIN,

@@ -717,6 +717,8 @@ export interface WSScheduledAckMessage {
   type: "scheduled_ack";
   scheduledId: string;
   deliverAt: number;
+  /** Present for cron schedules — echoes the expression. */
+  cron?: string;
   _reqId?: string;
 }
 
@@ -729,6 +731,10 @@ export interface WSScheduledListMessage {
     message: string;
     deliverAt: number;
     createdAt: number;
+    /** Present for cron/recurring entries. */
+    cron?: string;
+    /** Number of times the cron entry has fired so far. */
+    firedCount?: number;
   }>;
   _reqId?: string;
 }

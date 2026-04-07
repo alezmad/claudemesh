@@ -396,6 +396,7 @@ export async function listPeersInMesh(
     summary: string | null;
     groups: Array<{ name: string; role?: string }>;
     sessionId: string;
+    cwd: string;
     connectedAt: Date;
   }>
 > {
@@ -409,6 +410,7 @@ export async function listPeersInMesh(
       summary: presence.summary,
       groups: presence.groups,
       sessionId: presence.sessionId,
+      cwd: presence.cwd,
       connectedAt: presence.connectedAt,
     })
     .from(presence)
@@ -428,6 +430,7 @@ export async function listPeersInMesh(
     summary: r.summary,
     groups: (r.groups ?? []) as Array<{ name: string; role?: string }>,
     sessionId: r.sessionId,
+    cwd: r.cwd,
     connectedAt: r.connectedAt,
   }));
 }
