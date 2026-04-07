@@ -161,6 +161,7 @@ export interface WSAckMessage {
   id: string; // echoes client-side correlation id
   messageId: string;
   queued: boolean;
+  _reqId?: string;
 }
 
 /** Broker → client: hello handshake acknowledgement. */
@@ -182,6 +183,7 @@ export interface WSPeersListMessage {
     sessionId: string;
     connectedAt: string;
   }>;
+  _reqId?: string;
 }
 
 /** Broker → client: a state key was changed by another peer. */
@@ -199,6 +201,7 @@ export interface WSStateResultMessage {
   value: unknown;
   updatedAt: string;
   updatedBy: string;
+  _reqId?: string;
 }
 
 /** Broker → client: response to list_state. */
@@ -210,12 +213,14 @@ export interface WSStateListMessage {
     updatedBy: string;
     updatedAt: string;
   }>;
+  _reqId?: string;
 }
 
 /** Broker → client: acknowledgement for a remember. */
 export interface WSMemoryStoredMessage {
   type: "memory_stored";
   id: string;
+  _reqId?: string;
 }
 
 /** Broker → client: response to recall. */
@@ -228,6 +233,7 @@ export interface WSMemoryResultsMessage {
     rememberedBy: string;
     rememberedAt: string;
   }>;
+  _reqId?: string;
 }
 
 // --- Vector storage messages ---
@@ -299,6 +305,7 @@ export interface WSMeshSchemaMessage {
 export interface WSVectorStoredMessage {
   type: "vector_stored";
   id: string;
+  _reqId?: string;
 }
 
 /** Broker → client: vector search results. */
@@ -310,18 +317,21 @@ export interface WSVectorResultsMessage {
     score: number;
     metadata?: Record<string, unknown>;
   }>;
+  _reqId?: string;
 }
 
 /** Broker → client: list of vector collections. */
 export interface WSCollectionListMessage {
   type: "collection_list";
   collections: string[];
+  _reqId?: string;
 }
 
 /** Broker → client: graph query results. */
 export interface WSGraphResultMessage {
   type: "graph_result";
   records: Array<Record<string, unknown>>;
+  _reqId?: string;
 }
 
 /** Broker → client: mesh SQL query results. */
@@ -330,6 +340,7 @@ export interface WSMeshQueryResultMessage {
   columns: string[];
   rows: Array<Record<string, unknown>>;
   rowCount: number;
+  _reqId?: string;
 }
 
 /** Broker → client: mesh schema introspection results. */
@@ -339,6 +350,7 @@ export interface WSMeshSchemaResultMessage {
     name: string;
     columns: Array<{ name: string; type: string; nullable: boolean }>;
   }>;
+  _reqId?: string;
 }
 
 /** Client → broker: get full mesh overview. */
@@ -361,6 +373,7 @@ export interface WSMeshInfoResultMessage {
   collections: string[];
   yourName: string;
   yourGroups: Array<{ name: string; role?: string }>;
+  _reqId?: string;
 }
 
 /** Client → broker: check delivery status of a message. */
@@ -381,6 +394,7 @@ export interface WSMessageStatusResultMessage {
     pubkey: string;
     status: "delivered" | "held" | "disconnected";
   }>;
+  _reqId?: string;
 }
 
 // --- File sharing messages ---
@@ -426,6 +440,7 @@ export interface WSFileUrlMessage {
   name: string;
   encrypted?: boolean;
   sealedKey?: string;
+  _reqId?: string;
 }
 
 /** Broker → client: list of files in the mesh. */
@@ -441,6 +456,7 @@ export interface WSFileListMessage {
     persistent: boolean;
     encrypted: boolean;
   }>;
+  _reqId?: string;
 }
 
 /** Broker → client: acknowledgement for grant_file_access. */
@@ -448,6 +464,7 @@ export interface WSGrantFileAccessOkMessage {
   type: "grant_file_access_ok";
   fileId: string;
   peerPubkey: string;
+  _reqId?: string;
 }
 
 /** Broker → client: access log for a file. */
@@ -458,6 +475,7 @@ export interface WSFileStatusResultMessage {
     peerName: string;
     accessedAt: string;
   }>;
+  _reqId?: string;
 }
 
 // --- Context sharing messages ---
@@ -499,6 +517,7 @@ export interface WSContextResultsMessage {
     tags: string[];
     updatedAt: string;
   }>;
+  _reqId?: string;
 }
 
 /** Broker → client: response to list_contexts. */
@@ -510,6 +529,7 @@ export interface WSContextListMessage {
     tags: string[];
     updatedAt: string;
   }>;
+  _reqId?: string;
 }
 
 // --- Task messages ---
@@ -547,6 +567,7 @@ export interface WSListTasksMessage {
 export interface WSTaskCreatedMessage {
   type: "task_created";
   id: string;
+  _reqId?: string;
 }
 
 /** Broker → client: response to list_tasks, claim_task, complete_task. */
@@ -563,6 +584,7 @@ export interface WSTaskListMessage {
     tags: string[];
     createdAt: string;
   }>;
+  _reqId?: string;
 }
 
 // --- Stream messages ---
@@ -602,6 +624,7 @@ export interface WSStreamCreatedMessage {
   type: "stream_created";
   id: string;
   name: string;
+  _reqId?: string;
 }
 
 /** Broker → client: real-time data pushed from a stream. */
@@ -616,6 +639,7 @@ export interface WSStreamDataMessage {
 export interface WSSubscribedMessage {
   type: "subscribed";
   stream: string;
+  _reqId?: string;
 }
 
 /** Broker → client: response to list_streams. */
@@ -628,6 +652,7 @@ export interface WSStreamListMessage {
     createdAt: string;
     subscriberCount: number;
   }>;
+  _reqId?: string;
 }
 
 /** Broker → client: structured error. */
@@ -636,6 +661,7 @@ export interface WSErrorMessage {
   code: string;
   message: string;
   id?: string;
+  _reqId?: string;
 }
 
 export type WSClientMessage =
