@@ -29,6 +29,7 @@ import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { loadConfig } from "../state/config";
 
 const MCP_NAME = "claudemesh";
 const CLAUDE_CONFIG = join(homedir(), ".claude.json");
@@ -451,12 +452,35 @@ export function runInstall(args: string[] = []): void {
     console.log(dim("· Hooks skipped (--no-hooks)"));
   }
 
+  // Check if user has any meshes joined — nudge them if not.
+  let hasMeshes = false;
+  try {
+    const meshConfig = loadConfig();
+    hasMeshes = meshConfig.meshes.length > 0;
+  } catch {
+    // Config missing or corrupt — treat as no meshes.
+  }
+
   console.log("");
   console.log(yellow(bold("⚠  RESTART CLAUDE CODE")) + yellow(" for MCP tools to appear."));
-  console.log("");
-  console.log(
-    `Next: ${bold("claudemesh join https://claudemesh.com/join/<token>")}`,
-  );
+
+  if (!hasMeshes) {
+    console.log("");
+    console.log(yellow("No meshes joined.") + " To connect with peers:");
+    console.log(
+      `  ${bold("claudemesh join <invite-url>")}` +
+        dim("   — join an existing mesh"),
+    );
+    console.log(
+      `  ${dim("Create one at")} ${bold("https://claudemesh.com/dashboard")}`,
+    );
+  } else {
+    console.log("");
+    console.log(
+      `Next: ${bold("claudemesh join https://claudemesh.com/join/<token>")}`,
+    );
+  }
+
   console.log("");
   console.log(
     yellow("⚠  For real-time push messages from peers, launch with:"),
