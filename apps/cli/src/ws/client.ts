@@ -1766,6 +1766,8 @@ export class BrokerClient {
           [this.skillListResolvers, []],
           [this.peerFileResponseResolvers, { error: "broker error" }],
           [this.peerDirResponseResolvers, { error: "broker error" }],
+          [this.webhookAckResolvers, null],
+          [this.webhookListResolvers, []],
         ];
         for (const [map, defaultVal] of allMaps) {
           const first = (map as Map<string, any>).entries().next().value as [string, { resolve: (v: unknown) => void; timer: NodeJS.Timeout }] | undefined;
