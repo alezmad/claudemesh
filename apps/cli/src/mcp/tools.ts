@@ -856,4 +856,37 @@ export const TOOLS: Tool[] = [
       required: ["peer"],
     },
   },
+
+  // --- Webhooks ---
+  {
+    name: "create_webhook",
+    description:
+      "Create an inbound webhook. Returns a URL that external services (GitHub, CI/CD, monitoring) can POST to — the payload becomes a mesh message to all peers.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "Webhook name (e.g. 'github-ci', 'datadog-alerts')",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "list_webhooks",
+    description: "List active webhooks for this mesh.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "delete_webhook",
+    description: "Deactivate a webhook.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Webhook name to deactivate" },
+      },
+      required: ["name"],
+    },
+  },
 ];

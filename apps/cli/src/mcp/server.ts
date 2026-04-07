@@ -196,6 +196,8 @@ If the channel meta contains \`subtype: reminder\`, this is a scheduled reminder
 | schedule_reminder(message, in_seconds?, deliver_at?, to?) | Schedule a reminder to yourself (no \`to\`) or a delayed message to a peer/group. Delivered as a push with \`subtype: reminder\` in the channel meta. |
 | list_scheduled() | List pending scheduled reminders and messages. |
 | cancel_scheduled(id) | Cancel a pending scheduled item. |
+| read_peer_file(peer, path) | Read a file from another peer's project (max 1MB). |
+| list_peer_files(peer, path?, pattern?) | List files in a peer's shared directory. |
 | mesh_mcp_register(server_name, description, tools) | Register an MCP server with the mesh. Other peers can call its tools. |
 | mesh_mcp_list() | List MCP servers available in the mesh with their tools. |
 | mesh_tool_call(server_name, tool_name, args?) | Call a tool on a mesh-registered MCP server (30s timeout). |
@@ -1194,6 +1196,109 @@ Your message mode is "${messageMode}".
 
         if (!ok) return text("grant_file_access: broker did not confirm", true);
         return text(`Access granted: ${targetPeer.displayName} can now download file ${fileId}`);
+      }
+
+      // --- Peer file sharing ---
+      case "read_peer_file": {
+        const { peer: peerName, path: filePath } = (args ?? {}) as { peer?: string; path?: string };
+        if (!peerName || !filePath) return text("read_peer_file: `peer` and `path` required", true);
+        const client = allClients()[0];
+        if (!client) return text("read_peer_file: not connected", true);
+
+        // Resolve peer name to pubkey
+        const peers = await client.listPeers();
+        const nameLower = peerName.toLowerCase();
+        let targetPubkey: string | null = null;
+        // Direct pubkey?
+        if (/^[0-9a-f]{64}$/.test(peerName)) {
+          targetPubkey = peerName;
+        } else {
+          const match = peers.find(p => p.displayName.toLowerCase() === nameLower);
+          if (!match) {
+            const partials = peers.filter(p => p.displayName.toLowerCase().includes(nameLower));
+            if (partials.length === 1) {
+              targetPubkey = partials[0]!.pubkey;
+            } else {
+              const names = peers.map(p => p.displayName).join(", ");
+              return text(`read_peer_file: peer "${peerName}" not found. Online: ${names || "(none)"}`, true);
+            }
+          } else {
+            targetPubkey = match.pubkey;
+          }
+        }
+
+        const result = await client.requestFile(targetPubkey, filePath);
+        if (result.error) return text(`read_peer_file: ${result.error}`, true);
+        if (!result.content) return text("read_peer_file: empty response from peer", true);
+
+        // Decode base64
+        try {
+          const decoded = Buffer.from(result.content, "base64").toString("utf-8");
+          return text(decoded);
+        } catch {
+          return text("read_peer_file: failed to decode file content (binary file?)", true);
+        }
+      }
+
+      case "list_peer_files": {
+        const { peer: peerName, path: dirPath, pattern } = (args ?? {}) as { peer?: string; path?: string; pattern?: string };
+        if (!peerName) return text("list_peer_files: `peer` required", true);
+        const client = allClients()[0];
+        if (!client) return text("list_peer_files: not connected", true);
+
+        // Resolve peer name to pubkey
+        const peers = await client.listPeers();
+        const nameLower = peerName.toLowerCase();
+        let targetPubkey: string | null = null;
+        if (/^[0-9a-f]{64}$/.test(peerName)) {
+          targetPubkey = peerName;
+        } else {
+          const match = peers.find(p => p.displayName.toLowerCase() === nameLower);
+          if (!match) {
+            const partials = peers.filter(p => p.displayName.toLowerCase().includes(nameLower));
+            if (partials.length === 1) {
+              targetPubkey = partials[0]!.pubkey;
+            } else {
+              const names = peers.map(p => p.displayName).join(", ");
+              return text(`list_peer_files: peer "${peerName}" not found. Online: ${names || "(none)"}`, true);
+            }
+          } else {
+            targetPubkey = match.pubkey;
+          }
+        }
+
+        const result = await client.requestDir(targetPubkey, dirPath ?? ".", pattern);
+        if (result.error) return text(`list_peer_files: ${result.error}`, true);
+        if (!result.entries || result.entries.length === 0) return text("No files found.");
+
+        return text(result.entries.join("\n"));
+      }
+
+      // --- Webhooks ---
+      case "create_webhook": {
+        const { name: whName } = (args ?? {}) as { name?: string };
+        if (!whName) return text("create_webhook: `name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("create_webhook: not connected", true);
+        const wh = await client.createWebhook(whName);
+        if (!wh) return text("create_webhook: broker did not acknowledge — check connection", true);
+        return text(`Webhook **${wh.name}** created.\n\nURL: ${wh.url}\nSecret: ${wh.secret}\n\nExternal services can POST JSON to this URL. The payload will be pushed to all connected mesh peers.`);
+      }
+      case "list_webhooks": {
+        const client = allClients()[0];
+        if (!client) return text("list_webhooks: not connected", true);
+        const webhooks = await client.listWebhooks();
+        if (webhooks.length === 0) return text("No active webhooks.");
+        const lines = webhooks.map(w => `- **${w.name}** — ${w.url} (created ${w.createdAt})`);
+        return text(`${webhooks.length} webhook(s):\n${lines.join("\n")}`);
+      }
+      case "delete_webhook": {
+        const { name: delName } = (args ?? {}) as { name?: string };
+        if (!delName) return text("delete_webhook: `name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("delete_webhook: not connected", true);
+        const ok = await client.deleteWebhook(delName);
+        return text(ok ? `Webhook "${delName}" deactivated.` : `Failed to deactivate webhook "${delName}".`, !ok);
       }
 
       default:
