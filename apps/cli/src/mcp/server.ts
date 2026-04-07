@@ -1354,6 +1354,11 @@ Your message mode is "${messageMode}".
           content = `[system] Peer "${data.name ?? "unknown"}" joined the mesh`;
         } else if (eventName === "peer_left") {
           content = `[system] Peer "${data.name ?? "unknown"}" left the mesh`;
+        } else if (eventName === "mcp_registered") {
+          const tools = Array.isArray(data.tools) ? (data.tools as string[]).join(", ") : "";
+          content = `[system] New MCP server available: "${data.serverName}" (hosted by ${data.hostedBy}). Tools: ${tools}. Use mesh_tool_call to invoke.`;
+        } else if (eventName === "mcp_unregistered") {
+          content = `[system] MCP server "${data.serverName}" removed (was hosted by ${data.hostedBy})`;
         } else {
           content = `[system] ${eventName}: ${JSON.stringify(data)}`;
         }

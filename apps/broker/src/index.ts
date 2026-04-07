@@ -2487,6 +2487,25 @@ function handleConnection(ws: WebSocket): void {
             toolCount: mr.tools.length,
             ...(_reqId ? { _reqId } : {}),
           });
+          // Broadcast to all peers: new MCP server available
+          const mcpJoinMsg: WSServerMessage = {
+            type: "push",
+            subtype: "system",
+            event: "mcp_registered",
+            eventData: { serverName: mr.serverName, description: mr.description, tools: mr.tools.map(t => t.name), hostedBy: conn.displayName },
+            messageId: crypto.randomUUID(),
+            meshId: conn.meshId,
+            senderPubkey: "system",
+            priority: "low",
+            nonce: "",
+            ciphertext: "",
+            createdAt: new Date().toISOString(),
+          };
+          for (const [pid, peer] of connections) {
+            if (pid === presenceId) continue;
+            if (peer.meshId !== conn.meshId) continue;
+            sendToPeer(pid, mcpJoinMsg);
+          }
           log.info("ws mcp_register", {
             presence_id: presenceId,
             server: mr.serverName,
@@ -2500,6 +2519,25 @@ function handleConnection(ws: WebSocket): void {
           const entry = mcpRegistry.get(unregKey);
           if (entry && entry.presenceId === presenceId) {
             mcpRegistry.delete(unregKey);
+            // Broadcast: MCP server removed
+            const mcpLeaveMsg: WSServerMessage = {
+              type: "push",
+              subtype: "system",
+              event: "mcp_unregistered",
+              eventData: { serverName: mu.serverName, hostedBy: conn.displayName },
+              messageId: crypto.randomUUID(),
+              meshId: conn.meshId,
+              senderPubkey: "system",
+              priority: "low",
+              nonce: "",
+              ciphertext: "",
+              createdAt: new Date().toISOString(),
+            };
+            for (const [pid, peer] of connections) {
+              if (pid === presenceId) continue;
+              if (peer.meshId !== conn.meshId) continue;
+              sendToPeer(pid, mcpLeaveMsg);
+            }
           }
           log.info("ws mcp_unregister", {
             presence_id: presenceId,
