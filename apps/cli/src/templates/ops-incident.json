@@ -1,0 +1,17 @@
+{
+  "name": "ops-incident",
+  "description": "Incident response team with oncall, comms, and engineering groups",
+  "groups": [
+    { "name": "oncall", "roles": ["primary", "secondary"] },
+    { "name": "comms", "roles": ["lead", "scribe"] },
+    { "name": "engineering", "roles": ["lead", "responder"] }
+  ],
+  "stateKeys": {
+    "incident-status": "investigating",
+    "severity": "unknown",
+    "commander": "",
+    "timeline": "[]"
+  },
+  "suggestedRoles": ["commander", "primary-oncall", "scribe", "responder"],
+  "systemPromptHint": "INCIDENT MODE. Priority: now for all messages. Update incident-status state. Commander coordinates. Scribe maintains timeline. Engineering fixes."
+}

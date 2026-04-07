@@ -28,6 +28,7 @@ import { runStateGet, runStateSet, runStateList } from "./commands/state";
 import { runRemember, runRecall } from "./commands/memory";
 import { runInfo } from "./commands/info";
 import { runRemind } from "./commands/remind";
+import { runCreate } from "./commands/create";
 import { VERSION } from "./version";
 
 const launch = defineCommand({
@@ -141,6 +142,14 @@ const main = defineCommand({
   },
   subCommands: {
     launch,
+    create: defineCommand({
+      meta: { name: "create", description: "Create a new mesh from a template" },
+      args: {
+        template: { type: "string", description: "Template name (dev-team, research, ops-incident, simulation, personal)" },
+        "list-templates": { type: "boolean", description: "List available templates", default: false },
+      },
+      run({ args }) { runCreate(args); },
+    }),
     install,
     uninstall: defineCommand({
       meta: { name: "uninstall", description: "Remove MCP server and hooks" },

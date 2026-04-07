@@ -1,0 +1,17 @@
+{
+  "name": "dev-team",
+  "description": "Software development team with frontend, backend, and devops groups",
+  "groups": [
+    { "name": "frontend", "roles": ["lead", "member"] },
+    { "name": "backend", "roles": ["lead", "member"] },
+    { "name": "devops", "roles": ["lead", "member"] },
+    { "name": "qa", "roles": ["lead", "member"] }
+  ],
+  "stateKeys": {
+    "sprint": "current",
+    "deploy-frozen": "false",
+    "pr-queue": "[]"
+  },
+  "suggestedRoles": ["lead", "member", "reviewer"],
+  "systemPromptHint": "You are part of a dev team. Coordinate with @frontend, @backend, @devops groups. Check state keys for sprint status and deploy freezes before making changes."
+}

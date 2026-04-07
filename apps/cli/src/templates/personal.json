@@ -1,0 +1,11 @@
+{
+  "name": "personal",
+  "description": "Private mesh for a single user — all sessions auto-join",
+  "groups": [],
+  "stateKeys": {
+    "focus": "",
+    "todos": "[]"
+  },
+  "suggestedRoles": [],
+  "systemPromptHint": "Personal workspace. All your Claude Code sessions share this mesh. Use state keys to track focus and todos across sessions."
+}
