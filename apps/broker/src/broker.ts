@@ -34,6 +34,7 @@ import {
   mesh,
   meshFile,
   meshFileAccess,
+  meshFileKey,
   meshContext,
   meshMember as memberTable,
   meshMemory,
@@ -717,6 +718,8 @@ export async function uploadFile(args: {
   uploadedByMember?: string;
   targetSpec?: string;
   expiresAt?: Date;
+  encrypted?: boolean;
+  ownerPubkey?: string;
 }): Promise<string> {
   const [row] = await db
     .insert(meshFile)
@@ -732,6 +735,8 @@ export async function uploadFile(args: {
       uploadedByMember: args.uploadedByMember ?? null,
       targetSpec: args.targetSpec ?? null,
       expiresAt: args.expiresAt ?? null,
+      encrypted: args.encrypted ?? false,
+      ownerPubkey: args.ownerPubkey ?? null,
     })
     .returning({ id: meshFile.id });
   if (!row) throw new Error("failed to insert file row");
@@ -755,6 +760,8 @@ export async function getFile(
   uploadedByName: string | null;
   targetSpec: string | null;
   uploadedAt: Date;
+  encrypted: boolean;
+  ownerPubkey: string | null;
 } | null> {
   const [row] = await db
     .select({
@@ -768,6 +775,8 @@ export async function getFile(
       uploadedByName: meshFile.uploadedByName,
       targetSpec: meshFile.targetSpec,
       uploadedAt: meshFile.uploadedAt,
+      encrypted: meshFile.encrypted,
+      ownerPubkey: meshFile.ownerPubkey,
     })
     .from(meshFile)
     .where(
@@ -782,6 +791,8 @@ export async function getFile(
   return {
     ...row,
     tags: (row.tags ?? []) as string[],
+    encrypted: row.encrypted,
+    ownerPubkey: row.ownerPubkey,
   };
 }
 
@@ -801,6 +812,7 @@ export async function listFiles(
     uploadedBy: string;
     uploadedAt: Date;
     persistent: boolean;
+    encrypted: boolean;
   }>
 > {
   const conditions = [
@@ -822,6 +834,7 @@ export async function listFiles(
       uploadedByName: meshFile.uploadedByName,
       uploadedAt: meshFile.uploadedAt,
       persistent: meshFile.persistent,
+      encrypted: meshFile.encrypted,
     })
     .from(meshFile)
     .where(and(...conditions))
@@ -835,6 +848,7 @@ export async function listFiles(
     uploadedBy: r.uploadedByName ?? "unknown",
     uploadedAt: r.uploadedAt,
     persistent: r.persistent,
+    encrypted: r.encrypted,
   }));
 }
 
@@ -890,6 +904,52 @@ export async function deleteFile(
         isNull(meshFile.deletedAt),
       ),
     );
+}
+
+/** Insert encrypted key blobs for a newly uploaded E2E file. */
+export async function insertFileKeys(
+  fileId: string,
+  keys: Array<{ peerPubkey: string; sealedKey: string; grantedByPubkey?: string }>,
+): Promise<void> {
+  if (keys.length === 0) return;
+  await db.insert(meshFileKey).values(
+    keys.map((k) => ({
+      fileId,
+      peerPubkey: k.peerPubkey,
+      sealedKey: k.sealedKey,
+      grantedByPubkey: k.grantedByPubkey ?? null,
+    })),
+  );
+}
+
+/** Get the sealed key for a specific peer, or null if not authorized. */
+export async function getFileKey(
+  fileId: string,
+  peerPubkey: string,
+): Promise<string | null> {
+  const [row] = await db
+    .select({ sealedKey: meshFileKey.sealedKey })
+    .from(meshFileKey)
+    .where(
+      and(eq(meshFileKey.fileId, fileId), eq(meshFileKey.peerPubkey, peerPubkey)),
+    );
+  return row?.sealedKey ?? null;
+}
+
+/** Grant a peer access to an encrypted file (upsert their key blob). */
+export async function grantFileKey(
+  fileId: string,
+  peerPubkey: string,
+  sealedKey: string,
+  grantedByPubkey: string,
+): Promise<void> {
+  await db
+    .insert(meshFileKey)
+    .values({ fileId, peerPubkey, sealedKey, grantedByPubkey })
+    .onConflictDoUpdate({
+      target: [meshFileKey.fileId, meshFileKey.peerPubkey],
+      set: { sealedKey, grantedByPubkey, grantedAt: new Date() },
+    });
 }
 
 // --- Context sharing ---

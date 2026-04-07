@@ -305,6 +305,8 @@ export const meshFile = meshSchema.table("file", {
   minioKey: text().notNull(),
   tags: text().array().default([]),
   persistent: boolean().notNull().default(true),
+  encrypted: boolean().notNull().default(false),
+  ownerPubkey: text(),
   uploadedByName: text(),
   uploadedByMember: text().references(() => meshMember.id),
   targetSpec: text(), // null = entire mesh
@@ -326,6 +328,29 @@ export const meshFileAccess = meshSchema.table("file_access", {
   peerName: text(),
   accessedAt: timestamp().defaultNow().notNull(),
 });
+
+/**
+ * Per-peer encrypted symmetric keys for E2E encrypted files.
+ * The file body is encrypted with a random key (Kf); Kf is sealed
+ * (crypto_box_seal) to each authorized peer's X25519 pubkey and stored here.
+ */
+export const meshFileKey = meshSchema.table("file_key", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  fileId: text()
+    .references(() => meshFile.id, { onDelete: "cascade" })
+    .notNull(),
+  peerPubkey: text().notNull(),
+  sealedKey: text().notNull(),
+  grantedAt: timestamp().defaultNow().notNull(),
+  grantedByPubkey: text(),
+});
+
+export const meshFileKeyRelations = relations(meshFileKey, ({ one }) => ({
+  file: one(meshFile, {
+    fields: [meshFileKey.fileId],
+    references: [meshFile.id],
+  }),
+}));
 
 /**
  * Per-peer context snapshot. Each peer (presence) has at most one context
@@ -531,6 +556,10 @@ export type SelectMeshFile = typeof meshFile.$inferSelect;
 export type InsertMeshFile = typeof meshFile.$inferInsert;
 export type SelectMeshFileAccess = typeof meshFileAccess.$inferSelect;
 export type InsertMeshFileAccess = typeof meshFileAccess.$inferInsert;
+export const selectMeshFileKeySchema = createSelectSchema(meshFileKey);
+export const insertMeshFileKeySchema = createInsertSchema(meshFileKey);
+export type SelectMeshFileKey = typeof meshFileKey.$inferSelect;
+export type InsertMeshFileKey = typeof meshFileKey.$inferInsert;
 export const selectMeshContextSchema = createSelectSchema(meshContext);
 export const insertMeshContextSchema = createInsertSchema(meshContext);
 export const selectMeshTaskSchema = createSelectSchema(meshTask);
