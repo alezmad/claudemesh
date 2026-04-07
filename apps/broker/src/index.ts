@@ -196,6 +196,14 @@ interface McpRegisteredServer {
 /** Keyed by "meshId:serverName" */
 const mcpRegistry = new Map<string, McpRegisteredServer>();
 
+/** Human-readable relative time string from an ISO timestamp. */
+function relativeTimeStr(iso: string): string {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s ago`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
+  return `${Math.round(ms / 3_600_000)}h ago`;
+}
+
 /** Pending MCP call forwards: callId → { resolve, timer } */
 const mcpCallResolvers = new Map<string, {
   resolve: (result: { result?: unknown; error?: string }) => void;
@@ -1235,6 +1243,34 @@ function handleConnection(ws: WebSocket): void {
             if (pid === presenceId) continue;
             if (peer.meshId !== joinedConn.meshId) continue;
             sendToPeer(pid, joinMsg);
+          }
+          // Restore persistent MCP servers owned by this member
+          for (const [, entry] of mcpRegistry) {
+            if (entry.memberId === joinedConn.memberId && entry.meshId === joinedConn.meshId && !entry.online) {
+              entry.online = true;
+              entry.presenceId = presenceId;
+              entry.offlineSince = undefined;
+              entry.hostedByName = joinedConn.displayName;
+              // Broadcast restoration
+              const restoreMsg: WSPushMessage = {
+                type: "push",
+                subtype: "system",
+                event: "mcp_restored",
+                eventData: { serverName: entry.serverName, hostedBy: joinedConn.displayName },
+                messageId: crypto.randomUUID(),
+                meshId: joinedConn.meshId,
+                senderPubkey: "system",
+                priority: "low",
+                nonce: "",
+                ciphertext: "",
+                createdAt: new Date().toISOString(),
+              };
+              for (const [pid2, peer2] of connections) {
+                if (peer2.meshId !== joinedConn.meshId) continue;
+                sendToPeer(pid2, restoreMsg);
+              }
+              log.info("mcp_restored", { server: entry.serverName, member: joinedConn.displayName });
+            }
           }
         }
         return;
@@ -2625,7 +2661,7 @@ function handleConnection(ws: WebSocket): void {
             description: mr.description,
             tools: mr.tools,
             hostedByName: conn.displayName,
-            persistent: !!(mr as any).persistent,
+            persistent: !!mr.persistent,
             online: true,
             memberId: conn.memberId,
             registeredAt: new Date().toISOString(),
@@ -2700,6 +2736,8 @@ function handleConnection(ws: WebSocket): void {
             description: string;
             hostedBy: string;
             tools: Array<{ name: string; description: string }>;
+            online: boolean;
+            offlineSince?: string;
           }> = [];
           for (const [, entry] of mcpRegistry) {
             if (entry.meshId !== conn.meshId) continue;
@@ -2708,6 +2746,8 @@ function handleConnection(ws: WebSocket): void {
               description: entry.description,
               hostedBy: entry.hostedByName,
               tools: entry.tools.map((t) => ({ name: t.name, description: t.description })),
+              online: entry.online,
+              ...(entry.offlineSince ? { offlineSince: entry.offlineSince } : {}),
             });
           }
           sendToPeer(presenceId, {
@@ -2733,10 +2773,28 @@ function handleConnection(ws: WebSocket): void {
             });
             break;
           }
+          // Check if server is offline (persistent but host disconnected)
+          if (!server.online) {
+            const ago = server.offlineSince
+              ? ` who disconnected ${relativeTimeStr(server.offlineSince)}`
+              : "";
+            sendToPeer(presenceId, {
+              type: "mcp_call_result",
+              error: `Server '${mc.serverName}' is offline — hosted by ${server.hostedByName}${ago}. It will restore when they reconnect.`,
+              ...(_reqId ? { _reqId } : {}),
+            });
+            break;
+          }
           // Check hosting peer is still connected
           const hostConn = connections.get(server.presenceId);
           if (!hostConn) {
-            mcpRegistry.delete(callKey);
+            if (server.persistent) {
+              server.online = false;
+              server.offlineSince = new Date().toISOString();
+              server.presenceId = "";
+            } else {
+              mcpRegistry.delete(callKey);
+            }
             sendToPeer(presenceId, {
               type: "mcp_call_result",
               error: `MCP server "${mc.serverName}" host disconnected`,

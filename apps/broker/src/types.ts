@@ -737,6 +737,7 @@ export interface WSMcpRegisterMessage {
   serverName: string;
   description: string;
   tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+  persistent?: boolean;
   _reqId?: string;
 }
 
@@ -787,6 +788,8 @@ export interface WSMcpListResultMessage {
     description: string;
     hostedBy: string;
     tools: Array<{ name: string; description: string }>;
+    online: boolean;
+    offlineSince?: string;
   }>;
   _reqId?: string;
 }

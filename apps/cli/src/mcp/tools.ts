@@ -682,6 +682,10 @@ export const TOOLS: Tool[] = [
           },
           description: "Tool definitions to expose",
         },
+        persistent: {
+          type: "boolean",
+          description: "If true, registration survives peer disconnect. Other peers see it as 'offline' until you reconnect. Default: false",
+        },
       },
       required: ["server_name", "description", "tools"],
     },

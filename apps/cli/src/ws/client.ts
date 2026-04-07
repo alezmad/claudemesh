@@ -931,6 +931,7 @@ export class BrokerClient {
     serverName: string,
     description: string,
     tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>,
+    persistent?: boolean,
   ): Promise<{ serverName: string; toolCount: number } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
     return new Promise((resolve) => {
@@ -938,7 +939,7 @@ export class BrokerClient {
       this.mcpRegisterResolvers.set(reqId, { resolve, timer: setTimeout(() => {
         if (this.mcpRegisterResolvers.delete(reqId)) resolve(null);
       }, 5_000) });
-      this.ws!.send(JSON.stringify({ type: "mcp_register", serverName, description, tools, _reqId: reqId }));
+      this.ws!.send(JSON.stringify({ type: "mcp_register", serverName, description, tools, ...(persistent ? { persistent: true } : {}), _reqId: reqId }));
     });
   }
 

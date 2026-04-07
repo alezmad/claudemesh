@@ -1144,27 +1144,32 @@ Your message mode is "${messageMode}".
 
       // --- MCP Proxy ---
       case "mesh_mcp_register": {
-        const { server_name, description, tools: regTools } = (args ?? {}) as {
+        const { server_name, description, tools: regTools, persistent: regPersistent } = (args ?? {}) as {
           server_name?: string;
           description?: string;
           tools?: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+          persistent?: boolean;
         };
         if (!server_name || !description || !regTools?.length)
           return text("mesh_mcp_register: `server_name`, `description`, and `tools` required", true);
         const client = allClients()[0];
         if (!client) return text("mesh_mcp_register: not connected", true);
-        const result = await client.mcpRegister(server_name, description, regTools);
+        const result = await client.mcpRegister(server_name, description, regTools, regPersistent);
         if (!result) return text("mesh_mcp_register: broker did not acknowledge", true);
-        return text(`Registered MCP server "${result.serverName}" with ${result.toolCount} tool(s). Other peers can now call its tools via mesh_tool_call.`);
+        const persistLabel = regPersistent ? " (persistent — survives disconnect)" : "";
+        return text(`Registered MCP server "${result.serverName}" with ${result.toolCount} tool(s)${persistLabel}. Other peers can now call its tools via mesh_tool_call.`);
       }
       case "mesh_mcp_list": {
         const client = allClients()[0];
         if (!client) return text("mesh_mcp_list: not connected", true);
         const servers = await client.mcpList();
         if (servers.length === 0) return text("No MCP servers registered in the mesh.");
-        const lines = servers.map((s) => {
-          const toolList = s.tools.map((t) => `    - **${t.name}**: ${t.description}`).join("\n");
-          return `- **${s.name}** (hosted by ${s.hostedBy}): ${s.description}\n${toolList}`;
+        const lines = servers.map((s: any) => {
+          const toolList = s.tools.map((t: any) => `    - **${t.name}**: ${t.description}`).join("\n");
+          const status = s.online === false
+            ? ` [OFFLINE${s.offlineSince ? ` since ${s.offlineSince}` : ""}]`
+            : "";
+          return `- **${s.name}** (hosted by ${s.hostedBy})${status}: ${s.description}\n${toolList}`;
         });
         return text(`${servers.length} MCP server(s) in mesh:\n${lines.join("\n")}`);
       }
@@ -1383,6 +1388,8 @@ Your message mode is "${messageMode}".
           content = `[system] New MCP server available: "${data.serverName}" (hosted by ${data.hostedBy}). Tools: ${tools}. Use mesh_tool_call to invoke.`;
         } else if (eventName === "mcp_unregistered") {
           content = `[system] MCP server "${data.serverName}" removed (was hosted by ${data.hostedBy})`;
+        } else if (eventName === "mcp_restored") {
+          content = `[system] MCP server "${data.serverName}" is back online (hosted by ${data.hostedBy})`;
         } else {
           content = `[system] ${eventName}: ${JSON.stringify(data)}`;
         }
