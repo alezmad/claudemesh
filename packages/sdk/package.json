@@ -1,0 +1,19 @@
+{
+  "name": "@claudemesh/sdk",
+  "version": "0.1.0",
+  "description": "SDK for connecting any process to a claudemesh mesh",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "libsodium-wrappers": "0.7.15",
+    "ws": "8.20.0"
+  },
+  "devDependencies": {
+    "@types/ws": "8.5.13",
+    "typescript": "catalog:"
+  }
+}
