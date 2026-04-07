@@ -101,6 +101,7 @@ interface PeerConn {
   sessionPubkey: string | null;
   displayName: string;
   cwd: string;
+  hostname?: string;
   peerType?: "ai" | "human" | "connector";
   channel?: string;
   model?: string;
@@ -920,6 +921,7 @@ async function handleHello(
     sessionPubkey: hello.sessionPubkey ?? null,
     displayName: effectiveDisplayName,
     cwd: hello.cwd,
+    hostname: hello.hostname,
     peerType: hello.peerType,
     channel: hello.channel,
     model: hello.model,
@@ -1138,6 +1140,7 @@ function handleConnection(ws: WebSocket): void {
                 sessionId: p.sessionId,
                 connectedAt: p.connectedAt.toISOString(),
                 cwd: pc?.cwd ?? p.cwd,
+                ...(pc?.hostname ? { hostname: pc.hostname } : {}),
                 ...(pc?.peerType ? { peerType: pc.peerType } : {}),
                 ...(pc?.channel ? { channel: pc.channel } : {}),
                 ...(pc?.model ? { model: pc.model } : {}),

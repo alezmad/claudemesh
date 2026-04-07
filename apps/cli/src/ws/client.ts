@@ -35,6 +35,7 @@ export interface PeerInfo {
   sessionId: string;
   connectedAt: string;
   cwd?: string;
+  hostname?: string;
   peerType?: "ai" | "human" | "connector";
   channel?: string;
   model?: string;
@@ -194,6 +195,7 @@ export class BrokerClient {
               sessionId: `${process.pid}-${Date.now()}`,
               pid: process.pid,
               cwd: process.cwd(),
+              hostname: require("os").hostname(),
               peerType: "ai" as const,
               channel: "claude-code",
               model: process.env.CLAUDE_MODEL || undefined,

@@ -228,6 +228,11 @@ Persistent knowledge that survives across sessions. Use remember(content, tags?)
 share_file for persistent references, send_message(file:) for ephemeral attachments.
 Tags on shared files make them searchable. Use list_files to find what peers shared.
 
+## Peer project files
+read_peer_file and list_peer_files request files from remote peers through the mesh (1MB limit, base64 relay).
+**Same-machine shortcut:** If a peer's \`hostname\` matches yours (visible in list_peers), they are a LOCAL peer — read their files directly via the filesystem using their \`cwd\` path. Faster, no size limit, no relay. Use read_peer_file only for REMOTE peers (different hostname).
+Each peer in list_peers shows a \`locality\` tag: "local" (same machine, direct filesystem access) or "remote" (different machine, use read_peer_file).
+
 ## Vectors
 Store and search semantic embeddings. Use vector_store to index content, vector_search to find similar content.
 
@@ -342,10 +347,12 @@ Your message mode is "${messageMode}".
               if (p.model) meta.push(`model:${p.model}`);
               const metaStr = meta.length ? ` {${meta.join(", ")}}` : "";
               const cwdStr = p.cwd ? ` cwd:${p.cwd}` : "";
+              const locality = p.hostname && p.hostname === require("os").hostname() ? "local" : "remote";
+              const localityTag = ` [${locality}]`;
               const profileAvatar = p.profile?.avatar ? `${p.profile.avatar} ` : "";
               const profileTitle = p.profile?.title ? ` (${p.profile.title})` : "";
               const hiddenTag = p.visible === false ? " [hidden]" : "";
-              return `- ${profileAvatar}**${p.displayName}**${profileTitle} [${p.status}]${hiddenTag}${groupsStr}${metaStr} (${p.pubkey.slice(0, 12)}…)${cwdStr}${summary}`;
+              return `- ${profileAvatar}**${p.displayName}**${profileTitle} [${p.status}]${localityTag}${hiddenTag}${groupsStr}${metaStr} (${p.pubkey.slice(0, 12)}…)${cwdStr}${summary}`;
             });
             sections.push(`${header}\n${peerLines.join("\n")}`);
           }

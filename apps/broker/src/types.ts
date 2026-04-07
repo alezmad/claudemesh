@@ -57,6 +57,8 @@ export interface WSHelloMessage {
   sessionId: string;
   pid: number;
   cwd: string;
+  /** OS hostname — used to detect same-machine peers for direct file access. */
+  hostname?: string;
   /** Peer type: ai session, human user, or external connector. */
   peerType?: "ai" | "human" | "connector";
   /** Channel the peer connected from (e.g. "claude-code", "telegram", "slack", "web"). */
@@ -226,6 +228,7 @@ export interface WSPeersListMessage {
     sessionId: string;
     connectedAt: string;
     cwd?: string;
+    hostname?: string;
     peerType?: "ai" | "human" | "connector";
     channel?: string;
     model?: string;
