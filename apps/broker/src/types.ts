@@ -295,6 +295,12 @@ export interface WSMeshSchemaMessage {
 
 // --- Vector/Graph response messages ---
 
+/** Broker → client: confirmation that a vector point was stored. */
+export interface WSVectorStoredMessage {
+  type: "vector_stored";
+  id: string;
+}
+
 /** Broker → client: vector search results. */
 export interface WSVectorResultsMessage {
   type: "vector_results";
@@ -606,6 +612,12 @@ export interface WSStreamDataMessage {
   publishedBy: string;
 }
 
+/** Broker → client: confirmation that a stream subscription was registered. */
+export interface WSSubscribedMessage {
+  type: "subscribed";
+  stream: string;
+}
+
 /** Broker → client: response to list_streams. */
 export interface WSStreamListMessage {
   type: "stream_list";
@@ -689,6 +701,7 @@ export type WSServerMessage =
   | WSContextListMessage
   | WSTaskCreatedMessage
   | WSTaskListMessage
+  | WSVectorStoredMessage
   | WSVectorResultsMessage
   | WSCollectionListMessage
   | WSGraphResultMessage
@@ -696,6 +709,7 @@ export type WSServerMessage =
   | WSMeshSchemaResultMessage
   | WSStreamCreatedMessage
   | WSStreamDataMessage
+  | WSSubscribedMessage
   | WSStreamListMessage
   | WSMeshInfoResultMessage
   | WSErrorMessage;
