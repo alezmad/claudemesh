@@ -12,6 +12,7 @@ import { env } from "../env";
 
 const clients = new Map<string, BrokerClient>();
 let configDisplayName: string | undefined;
+let configGroups: Config["groups"] = [];
 
 /** Ensure a BrokerClient exists + is connecting/open for this mesh. */
 export async function ensureClient(mesh: JoinedMesh): Promise<BrokerClient> {
@@ -21,6 +22,10 @@ export async function ensureClient(mesh: JoinedMesh): Promise<BrokerClient> {
   clients.set(mesh.meshId, client);
   try {
     await client.connect();
+    // Auto-join groups declared at launch time (--groups flag or config).
+    for (const g of configGroups ?? []) {
+      try { await client.joinGroup(g.name, g.role); } catch { /* best effort */ }
+    }
   } catch {
     // Connect failed → client is in "reconnecting" state, leave it
     // wired so tool calls can surface the status.
@@ -31,6 +36,7 @@ export async function ensureClient(mesh: JoinedMesh): Promise<BrokerClient> {
 /** Start clients for every joined mesh. Called once on MCP server start. */
 export async function startClients(config: Config): Promise<void> {
   configDisplayName = config.displayName;
+  configGroups = config.groups ?? [];
   await Promise.allSettled(config.meshes.map(ensureClient));
 }
 

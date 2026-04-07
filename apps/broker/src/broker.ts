@@ -1302,11 +1302,28 @@ export async function drainForMember(
   );
 
   // Build group target matching: @all (broadcast alias) + @<groupname>
-  // for each group the peer belongs to.
+  // for each group the peer belongs to, expanded to all ancestor paths.
+  //
+  // Hierarchical routing (downward propagation):
+  //   A peer in "flexicar/core" also matches messages sent to "@flexicar".
+  //   A peer in "flexicar/core/backend" matches "@flexicar/core" and "@flexicar".
+  //   This lets leads send to a parent group and reach all sub-teams.
+  //
+  // Resolution happens at drain time (pull model) — no duplicates stored,
+  // no schema changes, fully backward-compatible.
   const groupTargets = ["@all"];
   if (memberGroups) {
+    const seen = new Set<string>();
     for (const g of memberGroups) {
-      groupTargets.push(`@${g}`);
+      const parts = g.split("/");
+      // Add the group itself + every ancestor prefix.
+      for (let depth = parts.length; depth > 0; depth--) {
+        const ancestor = parts.slice(0, depth).join("/");
+        if (!seen.has(ancestor)) {
+          seen.add(ancestor);
+          groupTargets.push(`@${ancestor}`);
+        }
+      }
     }
   }
   const groupTargetList = sql.raw(

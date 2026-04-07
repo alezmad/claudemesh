@@ -130,6 +130,7 @@ export async function startMcpServer(): Promise<void> {
   const config = loadConfig();
 
   const myName = config.displayName ?? "unnamed";
+  const myRole = config.role ?? process.env.CLAUDEMESH_ROLE ?? null;
   const myGroups = (config.groups ?? []).map(g => `@${g.name}${g.role ? ':' + g.role : ''}`).join(', ') || "none";
   const messageMode = config.messageMode ?? "push";
 
@@ -141,7 +142,7 @@ export async function startMcpServer(): Promise<void> {
         tools: {},
       },
       instructions: `## Identity
-You are "${myName}" — a peer in the claudemesh network. Your groups: ${myGroups}. You are one of several Claude Code sessions connected to the same mesh. No orchestrator exists — peers are equals. Your identity comes from your name and group roles, not from a central authority.
+You are "${myName}"${myRole ? ` (${myRole})` : ""} — a peer in the claudemesh network. Your groups: ${myGroups}. You are one of several Claude Code sessions connected to the same mesh. No orchestrator exists — peers are equals. Your identity comes from your name and group roles, not from a central authority.
 
 ## Responding to messages
 When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATELY. Pause your current task, reply via send_message, then resume. Read from_name, mesh_slug, and priority from the channel attributes. Reply by setting \`to\` to the sender's from_name (display name). Stay in character per your system prompt. Do not ignore low-priority messages — acknowledge them briefly even if you defer action.

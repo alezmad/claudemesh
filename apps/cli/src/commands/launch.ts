@@ -27,6 +27,7 @@ interface LaunchArgs {
   joinLink: string | null;
   meshSlug: string | null;
   messageMode: "push" | "inbox" | "off" | null;
+  systemPrompt: string | null;
   quiet: boolean;
   skipPermConfirm: boolean;
   claudeArgs: string[];
@@ -40,6 +41,7 @@ function parseArgs(argv: string[]): LaunchArgs {
     joinLink: null,
     meshSlug: null,
     messageMode: null,
+    systemPrompt: null,
     quiet: false,
     skipPermConfirm: false,
     claudeArgs: [],
@@ -68,6 +70,16 @@ function parseArgs(argv: string[]): LaunchArgs {
       result.meshSlug = argv[++i]!;
     } else if (arg.startsWith("--mesh=")) {
       result.meshSlug = arg.slice("--mesh=".length);
+    } else if (arg === "--message-mode" && i + 1 < argv.length) {
+      const mode = argv[++i]! as "push" | "inbox" | "off";
+      if (["push", "inbox", "off"].includes(mode)) result.messageMode = mode;
+    } else if (arg.startsWith("--message-mode=")) {
+      const mode = arg.slice("--message-mode=".length) as "push" | "inbox" | "off";
+      if (["push", "inbox", "off"].includes(mode)) result.messageMode = mode;
+    } else if (arg === "--system-prompt" && i + 1 < argv.length) {
+      result.systemPrompt = argv[++i]!;
+    } else if (arg.startsWith("--system-prompt=")) {
+      result.systemPrompt = arg.slice("--system-prompt=".length);
     } else if (arg === "--inbox") {
       result.messageMode = "inbox";
     } else if (arg === "--no-messages") {
@@ -318,6 +330,7 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
     version: 1,
     meshes: [mesh],
     displayName,
+    ...(role ? { role } : {}),
     ...(parsedGroups.length > 0 ? { groups: parsedGroups } : {}),
     messageMode,
   };
@@ -351,6 +364,7 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
     "--dangerously-load-development-channels",
     "server:claudemesh",
     "--dangerously-skip-permissions",
+    ...(args.systemPrompt ? ["--system-prompt", args.systemPrompt] : []),
     ...filtered,
   ];
 
@@ -362,6 +376,7 @@ export async function runLaunch(extraArgs: string[]): Promise<void> {
       ...process.env,
       CLAUDEMESH_CONFIG_DIR: tmpDir,
       CLAUDEMESH_DISPLAY_NAME: displayName,
+      ...(role ? { CLAUDEMESH_ROLE: role } : {}),
     },
   });
 

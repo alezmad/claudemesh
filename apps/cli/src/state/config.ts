@@ -37,6 +37,7 @@ export interface Config {
   version: 1;
   meshes: JoinedMesh[];
   displayName?: string; // per-session override, written by `claudemesh launch --name`
+  role?: string;        // per-session role tag (display + hello)
   groups?: GroupEntry[];
   messageMode?: "push" | "inbox" | "off";
 }
@@ -54,7 +55,7 @@ export function loadConfig(): Config {
     if (!parsed || !Array.isArray(parsed.meshes)) {
       return { version: 1, meshes: [] };
     }
-    return { version: 1, meshes: parsed.meshes, displayName: parsed.displayName, groups: parsed.groups, messageMode: parsed.messageMode };
+    return { version: 1, meshes: parsed.meshes, displayName: parsed.displayName, role: parsed.role, groups: parsed.groups, messageMode: parsed.messageMode };
   } catch (e) {
     throw new Error(
       `Failed to load ${CONFIG_PATH}: ${e instanceof Error ? e.message : String(e)}`,
