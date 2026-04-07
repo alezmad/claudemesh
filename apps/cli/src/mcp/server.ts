@@ -224,14 +224,14 @@ Shared key-value store scoped to the mesh. Use get_state/set_state for live coor
 ## Memory
 Persistent knowledge that survives across sessions. Use remember(content, tags?) to store lessons, decisions, and incidents. Use recall(query) to search before asking peers. New peers should recall at session start to load institutional knowledge.
 
-## Files
-share_file for persistent references, send_message(file:) for ephemeral attachments.
-Tags on shared files make them searchable. Use list_files to find what peers shared.
+## File access — decision guide
+Three ways to access files. Pick the right one:
 
-## Peer project files
-read_peer_file and list_peer_files request files from remote peers through the mesh (1MB limit, base64 relay).
-**Same-machine shortcut:** If a peer's \`hostname\` matches yours (visible in list_peers), they are a LOCAL peer — read their files directly via the filesystem using their \`cwd\` path. Faster, no size limit, no relay. Use read_peer_file only for REMOTE peers (different hostname).
-Each peer in list_peers shows a \`locality\` tag: "local" (same machine, direct filesystem access) or "remote" (different machine, use read_peer_file).
+1. **Local peer (same machine, [local] tag):** Read files directly via filesystem using their \`cwd\` path from list_peers. No limit, instant. This is the default for local peers.
+2. **Remote peer (different machine, [remote] tag):** Use \`read_peer_file(peer, path)\` — relays through the mesh. **1 MB limit**, base64 encoded. Use \`list_peer_files\` to browse first.
+3. **Persistent sharing (any peer):** Use \`share_file(path)\` — uploads to mesh storage (MinIO). **No size limit**. All peers can download anytime via \`get_file\`. Use for files that need to persist or be shared with multiple peers.
+
+**Rule of thumb:** local peer → filesystem. Remote peer, small file → read_peer_file. Large file or needs to persist → share_file.
 
 ## Vectors
 Store and search semantic embeddings. Use vector_store to index content, vector_search to find similar content.
