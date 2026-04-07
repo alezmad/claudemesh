@@ -97,6 +97,48 @@ export const TOOLS: Tool[] = [
     },
   },
   {
+    name: "set_visible",
+    description:
+      "Control your visibility in the mesh. When hidden, you won't appear in list_peers and won't receive broadcasts — but direct messages still reach you.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        visible: {
+          type: "boolean",
+          description: "true to be visible (default), false to hide",
+        },
+      },
+      required: ["visible"],
+    },
+  },
+  {
+    name: "set_profile",
+    description:
+      "Set your public profile — what other peers see about you. Avatar (emoji), title, bio, and capabilities list.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        avatar: {
+          type: "string",
+          description: "Emoji or URL for your avatar",
+        },
+        title: {
+          type: "string",
+          description: "Short role label (e.g. 'Frontend Lead', 'DevOps')",
+        },
+        bio: {
+          type: "string",
+          description: "One-liner about yourself",
+        },
+        capabilities: {
+          type: "array",
+          items: { type: "string" },
+          description: "What you can help with",
+        },
+      },
+    },
+  },
+  {
     name: "join_group",
     description:
       "Join a group with an optional role. Other peers see your group membership in list_peers.",
@@ -713,6 +755,62 @@ export const TOOLS: Tool[] = [
     inputSchema: { type: "object", properties: {} },
   },
 
+  // --- Skills ---
+  {
+    name: "share_skill",
+    description:
+      "Publish a reusable skill to the mesh. Other peers can discover and load it. If a skill with the same name exists, it is updated.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Unique skill name (e.g. 'code-review', 'deploy-checklist')" },
+        description: { type: "string", description: "Short description of what the skill does" },
+        instructions: { type: "string", description: "Full instructions/prompt that a peer loads to acquire this capability" },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags for discoverability",
+        },
+      },
+      required: ["name", "description", "instructions"],
+    },
+  },
+  {
+    name: "get_skill",
+    description:
+      "Load a skill's full instructions by name. Use to acquire capabilities shared by other peers.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Skill name to load" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "list_skills",
+    description:
+      "Browse available skills in the mesh. Optionally filter by keyword across name, description, and tags.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search keyword (optional)" },
+      },
+    },
+  },
+  {
+    name: "remove_skill",
+    description:
+      "Remove a skill you published from the mesh.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Skill name to remove" },
+      },
+      required: ["name"],
+    },
+  },
+
   // --- Diagnostics ---
   {
     name: "ping_mesh",
@@ -727,6 +825,35 @@ export const TOOLS: Tool[] = [
           description: "Priorities to test (default: [\"now\", \"next\"])",
         },
       },
+    },
+  },
+
+  // --- Peer file sharing ---
+  {
+    name: "read_peer_file",
+    description:
+      "Read a file from another peer's project. Specify the peer (by name) and the file path relative to their working directory. The peer must be online and sharing files. Max file size: 1MB.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        peer: { type: "string", description: "Peer display name or pubkey" },
+        path: { type: "string", description: "File path relative to peer's working directory" },
+      },
+      required: ["peer", "path"],
+    },
+  },
+  {
+    name: "list_peer_files",
+    description:
+      "List files in a peer's shared directory. Returns a tree of file names (not contents). The peer must be online and sharing files.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        peer: { type: "string", description: "Peer display name or pubkey" },
+        path: { type: "string", description: "Directory path relative to peer's cwd (default: root)" },
+        pattern: { type: "string", description: "Glob-like filter pattern (e.g. '*.ts', 'src/*')" },
+      },
+      required: ["peer"],
     },
   },
 ];

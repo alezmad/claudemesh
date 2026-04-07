@@ -158,6 +158,8 @@ If the channel meta contains \`subtype: reminder\`, this is a scheduled reminder
 | check_messages() | Drain buffered inbound messages (auto-pushed in most cases, use as fallback). |
 | set_summary(summary) | Set 1-2 sentence description of your current work, visible to all peers. |
 | set_status(status) | Override status: idle, working, or dnd. |
+| set_visible(visible) | Toggle visibility. Hidden peers skip list_peers and broadcasts; direct messages still arrive. |
+| set_profile(avatar?, title?, bio?, capabilities?) | Set public profile: emoji avatar, short title, bio, capabilities list. |
 | join_group(name, role?) | Join a @group with optional role (lead, member, observer, or any string). |
 | leave_group(name) | Leave a @group. |
 | set_state(key, value) | Write shared state; pushes change to all peers. |
@@ -338,7 +340,10 @@ Your message mode is "${messageMode}".
               if (p.model) meta.push(`model:${p.model}`);
               const metaStr = meta.length ? ` {${meta.join(", ")}}` : "";
               const cwdStr = p.cwd ? ` cwd:${p.cwd}` : "";
-              return `- **${p.displayName}** [${p.status}]${groupsStr}${metaStr} (${p.pubkey.slice(0, 12)}…)${cwdStr}${summary}`;
+              const profileAvatar = p.profile?.avatar ? `${p.profile.avatar} ` : "";
+              const profileTitle = p.profile?.title ? ` (${p.profile.title})` : "";
+              const hiddenTag = p.visible === false ? " [hidden]" : "";
+              return `- ${profileAvatar}**${p.displayName}**${profileTitle} [${p.status}]${hiddenTag}${groupsStr}${metaStr} (${p.pubkey.slice(0, 12)}…)${cwdStr}${summary}`;
             });
             sections.push(`${header}\n${peerLines.join("\n")}`);
           }
@@ -397,6 +402,25 @@ Your message mode is "${messageMode}".
         const s = status as PeerStatus;
         for (const c of allClients()) await c.setStatus(s);
         return text(`Status set to ${s} across ${allClients().length} mesh(es).`);
+      }
+
+      case "set_visible": {
+        const { visible } = (args ?? {}) as { visible?: boolean };
+        if (visible === undefined) return text("set_visible: `visible` required", true);
+        for (const c of allClients()) await c.setVisible(visible);
+        return text(visible ? "You are now visible to peers." : "You are now hidden. Direct messages still reach you, but you won't appear in list_peers or receive broadcasts.");
+      }
+
+      case "set_profile": {
+        const { avatar, title, bio, capabilities } = (args ?? {}) as { avatar?: string; title?: string; bio?: string; capabilities?: string[] };
+        const profile = { avatar, title, bio, capabilities };
+        for (const c of allClients()) await c.setProfile(profile);
+        const parts: string[] = [];
+        if (avatar) parts.push(`Avatar: ${avatar}`);
+        if (title) parts.push(`Title: ${title}`);
+        if (bio) parts.push(`Bio: ${bio}`);
+        if (capabilities?.length) parts.push(`Capabilities: ${capabilities.join(", ")}`);
+        return text(parts.length > 0 ? `Profile updated:\n${parts.join("\n")}` : "Profile cleared.");
       }
 
       case "join_group": {
@@ -898,6 +922,63 @@ Your message mode is "${messageMode}".
         return text(lines.join("\n"));
       }
 
+      case "mesh_set_clock": {
+        const { speed } = (args ?? {}) as { speed?: number };
+        if (!speed || speed < 1 || speed > 100) return text("mesh_set_clock: speed must be 1-100", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_set_clock: not connected", true);
+        const result = await client.setClock(speed);
+        if (!result) return text("mesh_set_clock: timed out", true);
+        return text([
+          `**Clock set to x${result.speed}**`,
+          `Paused: ${result.paused}`,
+          `Tick: ${result.tick}`,
+          `Sim time: ${result.simTime}`,
+          `Started at: ${result.startedAt}`,
+        ].join("\n"));
+      }
+
+      case "mesh_pause_clock": {
+        const client = allClients()[0];
+        if (!client) return text("mesh_pause_clock: not connected", true);
+        const result = await client.pauseClock();
+        if (!result) return text("mesh_pause_clock: timed out", true);
+        return text([
+          "**Clock paused**",
+          `Speed: x${result.speed}`,
+          `Tick: ${result.tick}`,
+          `Sim time: ${result.simTime}`,
+        ].join("\n"));
+      }
+
+      case "mesh_resume_clock": {
+        const client = allClients()[0];
+        if (!client) return text("mesh_resume_clock: not connected", true);
+        const result = await client.resumeClock();
+        if (!result) return text("mesh_resume_clock: timed out", true);
+        return text([
+          "**Clock resumed**",
+          `Speed: x${result.speed}`,
+          `Tick: ${result.tick}`,
+          `Sim time: ${result.simTime}`,
+        ].join("\n"));
+      }
+
+      case "mesh_clock": {
+        const client = allClients()[0];
+        if (!client) return text("mesh_clock: not connected", true);
+        const result = await client.getClock();
+        if (!result) return text("mesh_clock: timed out", true);
+        const statusLabel = result.speed === 0 ? "not started" : result.paused ? "paused" : "running";
+        return text([
+          `**Clock status: ${statusLabel}**`,
+          `Speed: x${result.speed}`,
+          `Tick: ${result.tick}`,
+          `Sim time: ${result.simTime}`,
+          `Started at: ${result.startedAt}`,
+        ].join("\n"));
+      }
+
       case "mesh_info": {
         const client = allClients()[0];
         if (!client) return text("mesh_info: not connected", true);
@@ -937,6 +1018,53 @@ Your message mode is "${messageMode}".
           );
         }
         return text(sections.join("\n\n"));
+      }
+
+      // --- Skills ---
+      case "share_skill": {
+        const { name: skillName, description: skillDesc, instructions: skillInstr, tags: skillTags } = (args ?? {}) as { name?: string; description?: string; instructions?: string; tags?: string[] };
+        if (!skillName || !skillDesc || !skillInstr) return text("share_skill: `name`, `description`, and `instructions` required", true);
+        const client = allClients()[0];
+        if (!client) return text("share_skill: not connected", true);
+        const result = await client.shareSkill(skillName, skillDesc, skillInstr, skillTags);
+        if (!result) return text("share_skill: broker did not acknowledge", true);
+        return text(`Skill "${skillName}" published to the mesh.`);
+      }
+      case "get_skill": {
+        const { name: gsName } = (args ?? {}) as { name?: string };
+        if (!gsName) return text("get_skill: `name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("get_skill: not connected", true);
+        const skill = await client.getSkill(gsName);
+        if (!skill) return text(`Skill "${gsName}" not found in the mesh.`);
+        return text(
+          `# Skill: ${skill.name}\n\n` +
+          `**Description:** ${skill.description}\n` +
+          `**Author:** ${skill.author}\n` +
+          `**Tags:** ${skill.tags.length ? skill.tags.join(", ") : "none"}\n` +
+          `**Created:** ${skill.createdAt}\n\n` +
+          `---\n\n` +
+          `## Instructions\n\n${skill.instructions}`,
+        );
+      }
+      case "list_skills": {
+        const { query: skillQuery } = (args ?? {}) as { query?: string };
+        const client = allClients()[0];
+        if (!client) return text("list_skills: not connected", true);
+        const skills = await client.listSkills(skillQuery);
+        if (skills.length === 0) return text(skillQuery ? `No skills found for "${skillQuery}".` : "No skills in the mesh yet.");
+        const lines = skills.map(s =>
+          `- **${s.name}**: ${s.description}${s.tags.length ? ` [${s.tags.join(", ")}]` : ""} (by ${s.author})`,
+        );
+        return text(`${skills.length} skill(s):\n${lines.join("\n")}`);
+      }
+      case "remove_skill": {
+        const { name: rsName } = (args ?? {}) as { name?: string };
+        if (!rsName) return text("remove_skill: `name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("remove_skill: not connected", true);
+        const removed = await client.removeSkill(rsName);
+        return text(removed ? `Skill "${rsName}" removed.` : `Skill "${rsName}" not found.`, !removed);
       }
 
       case "ping_mesh": {
@@ -1096,7 +1224,12 @@ Your message mode is "${messageMode}".
         const eventName = msg.event;
         const data = msg.eventData ?? {};
         let content: string;
-        if (eventName === "peer_joined") {
+        if (eventName === "tick") {
+          const tick = data.tick ?? 0;
+          const simTime = String(data.simTime ?? "").replace("T", " ").replace(/\..*/,"");
+          const speed = data.speed ?? 1;
+          content = `[heartbeat] tick ${tick} | sim time: ${simTime} | speed: x${speed}`;
+        } else if (eventName === "peer_joined") {
           content = `[system] Peer "${data.name ?? "unknown"}" joined the mesh`;
         } else if (eventName === "peer_left") {
           content = `[system] Peer "${data.name ?? "unknown"}" left the mesh`;

@@ -39,6 +39,7 @@ import {
   meshMember as memberTable,
   meshMemory,
   meshState,
+  meshSkill,
   meshStream,
   meshTask,
   messageQueue,
@@ -702,6 +703,176 @@ export async function forgetMemory(
         isNull(meshMemory.forgottenAt),
       ),
     );
+}
+
+// --- Skills ---
+
+/**
+ * Upsert a skill in a mesh. If a skill with the same name exists, it is updated.
+ */
+export async function shareSkill(
+  meshId: string,
+  name: string,
+  description: string,
+  instructions: string,
+  tags: string[],
+  memberId?: string,
+  memberName?: string,
+): Promise<string> {
+  const existing = await db
+    .select({ id: meshSkill.id })
+    .from(meshSkill)
+    .where(and(eq(meshSkill.meshId, meshId), eq(meshSkill.name, name)))
+    .limit(1);
+
+  if (existing.length > 0) {
+    await db
+      .update(meshSkill)
+      .set({
+        description,
+        instructions,
+        tags,
+        authorMemberId: memberId ?? null,
+        authorName: memberName ?? null,
+        updatedAt: new Date(),
+      })
+      .where(eq(meshSkill.id, existing[0]!.id));
+    return existing[0]!.id;
+  }
+
+  const [row] = await db
+    .insert(meshSkill)
+    .values({
+      meshId,
+      name,
+      description,
+      instructions,
+      tags,
+      authorMemberId: memberId ?? null,
+      authorName: memberName ?? null,
+    })
+    .returning({ id: meshSkill.id });
+  if (!row) throw new Error("failed to insert skill");
+  return row.id;
+}
+
+/**
+ * Get a skill by name in a mesh.
+ */
+export async function getSkill(
+  meshId: string,
+  name: string,
+): Promise<{
+  name: string;
+  description: string;
+  instructions: string;
+  tags: string[];
+  author: string;
+  createdAt: Date;
+} | null> {
+  const rows = await db
+    .select({
+      name: meshSkill.name,
+      description: meshSkill.description,
+      instructions: meshSkill.instructions,
+      tags: meshSkill.tags,
+      authorName: meshSkill.authorName,
+      createdAt: meshSkill.createdAt,
+    })
+    .from(meshSkill)
+    .where(and(eq(meshSkill.meshId, meshId), eq(meshSkill.name, name)))
+    .limit(1);
+
+  if (rows.length === 0) return null;
+  const r = rows[0]!;
+  return {
+    name: r.name,
+    description: r.description,
+    instructions: r.instructions,
+    tags: r.tags ?? [],
+    author: r.authorName ?? "unknown",
+    createdAt: r.createdAt,
+  };
+}
+
+/**
+ * List skills in a mesh, optionally filtering by keyword across name, description, and tags.
+ */
+export async function listSkills(
+  meshId: string,
+  query?: string,
+): Promise<
+  Array<{
+    name: string;
+    description: string;
+    tags: string[];
+    author: string;
+    createdAt: Date;
+  }>
+> {
+  if (query) {
+    const pattern = `%${query}%`;
+    const rows = await db
+      .select({
+        name: meshSkill.name,
+        description: meshSkill.description,
+        tags: meshSkill.tags,
+        authorName: meshSkill.authorName,
+        createdAt: meshSkill.createdAt,
+      })
+      .from(meshSkill)
+      .where(
+        and(
+          eq(meshSkill.meshId, meshId),
+          or(
+            sql`${meshSkill.name} ILIKE ${pattern}`,
+            sql`${meshSkill.description} ILIKE ${pattern}`,
+            sql`EXISTS (SELECT 1 FROM unnest(${meshSkill.tags}) AS t WHERE t ILIKE ${pattern})`,
+          ),
+        ),
+      )
+      .orderBy(asc(meshSkill.name));
+    return rows.map((r) => ({
+      name: r.name,
+      description: r.description,
+      tags: r.tags ?? [],
+      author: r.authorName ?? "unknown",
+      createdAt: r.createdAt,
+    }));
+  }
+
+  const rows = await db
+    .select({
+      name: meshSkill.name,
+      description: meshSkill.description,
+      tags: meshSkill.tags,
+      authorName: meshSkill.authorName,
+      createdAt: meshSkill.createdAt,
+    })
+    .from(meshSkill)
+    .where(eq(meshSkill.meshId, meshId))
+    .orderBy(asc(meshSkill.name));
+  return rows.map((r) => ({
+    name: r.name,
+    description: r.description,
+    tags: r.tags ?? [],
+    author: r.authorName ?? "unknown",
+    createdAt: r.createdAt,
+  }));
+}
+
+/**
+ * Remove a skill by name in a mesh. Returns true if a row was deleted.
+ */
+export async function removeSkill(
+  meshId: string,
+  name: string,
+): Promise<boolean> {
+  const result = await db
+    .delete(meshSkill)
+    .where(and(eq(meshSkill.meshId, meshId), eq(meshSkill.name, name)))
+    .returning({ id: meshSkill.id });
+  return result.length > 0;
 }
 
 // --- File sharing ---
