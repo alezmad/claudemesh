@@ -203,7 +203,7 @@ export const TOOLS: Tool[] = [
   {
     name: "share_file",
     description:
-      "Share a persistent file with the mesh. All current and future peers can access it.",
+      "Share a persistent file with the mesh. All current and future peers can access it. If `to` is specified, the file is E2E encrypted and only accessible to that peer (and you).",
     inputSchema: {
       type: "object",
       properties: {
@@ -216,6 +216,10 @@ export const TOOLS: Tool[] = [
           type: "array",
           items: { type: "string" },
           description: "Tags for categorization",
+        },
+        to: {
+          type: "string",
+          description: "Peer display name or pubkey hex — if set, file is E2E encrypted for this peer only",
         },
       },
       required: ["path"],
@@ -267,6 +271,18 @@ export const TOOLS: Tool[] = [
         id: { type: "string", description: "File ID" },
       },
       required: ["id"],
+    },
+  },
+  {
+    name: "grant_file_access",
+    description: "Grant a peer access to an E2E encrypted file you shared. You must be the owner.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        fileId: { type: "string", description: "File ID" },
+        to: { type: "string", description: "Peer display name or pubkey hex to grant access to" },
+      },
+      required: ["fileId", "to"],
     },
   },
 

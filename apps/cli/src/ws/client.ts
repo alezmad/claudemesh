@@ -83,6 +83,7 @@ export class BrokerClient {
   private stateChangeHandlers = new Set<(change: { key: string; value: unknown; updatedBy: string }) => void>();
   private sessionPubkey: string | null = null;
   private sessionSecretKey: string | null = null;
+  private grantFileAccessResolvers: Array<(ok: boolean) => void> = [];
   private closed = false;
   private reconnectAttempt = 0;
   private helloTimer: NodeJS.Timeout | null = null;
@@ -109,6 +110,11 @@ export class BrokerClient {
   get pushHistory(): readonly InboundPush[] {
     return this.pushBuffer;
   }
+
+  /** Session public key hex (null before first connection). */
+  getSessionPubkey(): string | null { return this.sessionPubkey; }
+  /** Session secret key hex (null before first connection). */
+  getSessionSecretKey(): string | null { return this.sessionSecretKey; }
 
   /** Open WS, send hello, resolve when hello_ack received. */
   async connect(): Promise<void> {
@@ -412,7 +418,7 @@ export class BrokerClient {
 
   /** Check delivery status of a sent message. */
   private messageStatusResolvers: Array<(result: { messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null) => void> = [];
-  private fileUrlResolvers: Array<(result: { url: string; name: string } | null) => void> = [];
+  private fileUrlResolvers: Array<(result: { url: string; name: string; encrypted?: boolean; sealedKey?: string } | null) => void> = [];
   private fileListResolvers: Array<(files: Array<{ id: string; name: string; size: number; tags: string[]; uploadedBy: string; uploadedAt: string; persistent: boolean }>) => void> = [];
   private fileStatusResolvers: Array<(accesses: Array<{ peerName: string; accessedAt: string }>) => void> = [];
   private vectorStoredResolvers: Array<(id: string | null) => void> = [];
@@ -444,7 +450,7 @@ export class BrokerClient {
   // --- Files ---
 
   /** Get a download URL for a shared file. */
-  async getFile(fileId: string): Promise<{ url: string; name: string } | null> {
+  async getFile(fileId: string): Promise<{ url: string; name: string; encrypted?: boolean; sealedKey?: string } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
     return new Promise((resolve) => {
       this.fileUrlResolvers.push(resolve);
@@ -497,10 +503,11 @@ export class BrokerClient {
     this.ws.send(JSON.stringify({ type: "delete_file", fileId }));
   }
 
-  /** Upload a file to the broker via HTTP POST. Returns file ID or null. */
+  /** Upload a file to the broker via HTTP POST. Returns file ID. */
   async uploadFile(filePath: string, meshId: string, memberId: string, opts: {
     name?: string; tags?: string[]; persistent?: boolean; targetSpec?: string;
-  }): Promise<string | null> {
+    encrypted?: boolean; ownerPubkey?: string; fileKeys?: Array<{ peerPubkey: string; sealedKey: string }>;
+  }): Promise<string> {
     const { readFileSync } = await import("node:fs");
     const { basename } = await import("node:path");
     const data = readFileSync(filePath);
@@ -522,6 +529,9 @@ export class BrokerClient {
         "X-Tags": JSON.stringify(opts.tags ?? []),
         "X-Persistent": String(opts.persistent ?? true),
         "X-Target-Spec": opts.targetSpec ?? "",
+        ...(opts.encrypted ? { "X-Encrypted": "true" } : {}),
+        ...(opts.ownerPubkey ? { "X-Owner-Pubkey": opts.ownerPubkey } : {}),
+        ...(opts.fileKeys?.length ? { "X-File-Keys": JSON.stringify(opts.fileKeys) } : {}),
       },
       body: data,
       signal: AbortSignal.timeout(30_000),
@@ -531,6 +541,20 @@ export class BrokerClient {
       throw new Error(body.error ?? `HTTP ${res.status}`);
     }
     return body.fileId;
+  }
+
+  /** Grant a peer access to an encrypted file (owner only). */
+  async grantFileAccess(fileId: string, peerPubkey: string, sealedKey: string): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return false;
+    return new Promise((resolve) => {
+      const resolvers = this.grantFileAccessResolvers;
+      resolvers.push(resolve);
+      this.ws!.send(JSON.stringify({ type: "grant_file_access", fileId, peerPubkey, sealedKey }));
+      setTimeout(() => {
+        const idx = resolvers.indexOf(resolve);
+        if (idx !== -1) { resolvers.splice(idx, 1); resolve(false); }
+      }, 5_000);
+    });
   }
 
   // --- Vectors ---
@@ -945,7 +969,12 @@ export class BrokerClient {
       const resolver = this.fileUrlResolvers.shift();
       if (resolver) {
         if (msg.url) {
-          resolver({ url: String(msg.url), name: String(msg.name ?? "") });
+          resolver({
+            url: String(msg.url),
+            name: String(msg.name ?? ""),
+            encrypted: msg.encrypted ? true : undefined,
+            sealedKey: msg.sealedKey ? String(msg.sealedKey) : undefined,
+          });
         } else {
           resolver(null);
         }
@@ -962,6 +991,11 @@ export class BrokerClient {
       const accesses = (msg.accesses as Array<{ peerName: string; accessedAt: string }>) ?? [];
       const resolver = this.fileStatusResolvers.shift();
       if (resolver) resolver(accesses);
+      return;
+    }
+    if (msg.type === "grant_file_access_ok") {
+      const resolver = this.grantFileAccessResolvers.shift();
+      if (resolver) resolver(true);
       return;
     }
     if (msg.type === "vector_stored") {

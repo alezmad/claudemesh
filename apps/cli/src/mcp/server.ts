@@ -440,12 +440,75 @@ Your message mode is "${messageMode}".
 
       // --- Files ---
       case "share_file": {
-        const { path: filePath, name: fileName, tags } = (args ?? {}) as { path?: string; name?: string; tags?: string[] };
+        const { path: filePath, name: fileName, tags, to: fileTo } = (args ?? {}) as { path?: string; name?: string; tags?: string[]; to?: string };
         if (!filePath) return text("share_file: `path` required", true);
         const { existsSync } = await import("node:fs");
         if (!existsSync(filePath)) return text(`share_file: file not found: ${filePath}`, true);
         const client = allClients()[0];
         if (!client) return text("share_file: not connected", true);
+
+        // If 'to' specified, do E2E encryption
+        if (fileTo) {
+          const { encryptFile, sealKeyForPeer } = await import("../crypto/file-crypto");
+          const { readFileSync, writeFileSync, mkdtempSync, unlinkSync, rmdirSync } = await import("node:fs");
+          const { tmpdir } = await import("node:os");
+          const { join, basename } = await import("node:path");
+
+          // Resolve target peer pubkey
+          const peers = await client.listPeers();
+          const targetPeer = peers.find(p => p.pubkey === fileTo || p.displayName === fileTo);
+          if (!targetPeer) {
+            return text(`share_file: peer not found: ${fileTo}`, true);
+          }
+
+          // Read and encrypt file
+          const plaintext = readFileSync(filePath);
+          const { ciphertext, nonce, key } = await encryptFile(new Uint8Array(plaintext));
+
+          // Seal Kf for target peer
+          const sealedForTarget = await sealKeyForPeer(key, targetPeer.pubkey);
+
+          // Seal Kf for ourselves (owner)
+          const myPubkey = client.getSessionPubkey();
+          const sealedForSelf = myPubkey ? await sealKeyForPeer(key, myPubkey) : null;
+
+          const fileKeys = [
+            { peerPubkey: targetPeer.pubkey, sealedKey: sealedForTarget },
+            ...(sealedForSelf && myPubkey ? [{ peerPubkey: myPubkey, sealedKey: sealedForSelf }] : []),
+          ];
+
+          // Build combined buffer: nonce (24 bytes) + ciphertext
+          const { ensureSodium } = await import("../crypto/keypair");
+          const sodium = await ensureSodium();
+          const nonceBytes = sodium.from_base64(nonce, sodium.base64_variants.ORIGINAL);
+          const combined = new Uint8Array(nonceBytes.length + ciphertext.length);
+          combined.set(nonceBytes, 0);
+          combined.set(ciphertext, nonceBytes.length);
+
+          const baseName = fileName ?? basename(filePath);
+          const tmpDir = mkdtempSync(join(tmpdir(), "cm-"));
+          const tmpPath = join(tmpDir, baseName);
+          writeFileSync(tmpPath, combined);
+
+          try {
+            const fileId = await client.uploadFile(tmpPath, client.meshId, client.meshSlug, {
+              name: baseName,
+              tags,
+              persistent: true,
+              encrypted: true,
+              ownerPubkey: myPubkey ?? undefined,
+              fileKeys,
+            });
+            return text(`Shared (E2E encrypted): ${baseName} → ${targetPeer.displayName} (${fileId})`);
+          } catch (e) {
+            return text(`share_file: upload failed — ${e instanceof Error ? e.message : String(e)}`, true);
+          } finally {
+            try { unlinkSync(tmpPath); } catch { /* ignore */ }
+            try { rmdirSync(tmpDir); } catch { /* ignore */ }
+          }
+        }
+
+        // Plain (unencrypted) upload — existing code
         try {
           const fileId = await client.uploadFile(filePath, client.meshId, client.meshSlug, {
             name: fileName, tags, persistent: true,
@@ -463,6 +526,42 @@ Your message mode is "${messageMode}".
         if (!client) return text("get_file: not connected", true);
         const result = await client.getFile(id);
         if (!result) return text(`get_file: file ${id} not found`, true);
+
+        if (result.encrypted && result.sealedKey) {
+          const { openSealedKey, decryptFile } = await import("../crypto/file-crypto");
+          const { ensureSodium } = await import("../crypto/keypair");
+          const myPubkey = client.getSessionPubkey();
+          const mySecret = client.getSessionSecretKey();
+
+          if (!myPubkey || !mySecret) {
+            return text("get_file: no session keypair — cannot decrypt", true);
+          }
+
+          const kf = await openSealedKey(result.sealedKey, myPubkey, mySecret);
+          if (!kf) return text("get_file: failed to open sealed key", true);
+
+          // Download file bytes from presigned URL
+          const resp = await fetch(result.url, { signal: AbortSignal.timeout(30_000) });
+          if (!resp.ok) return text(`get_file: download failed (${resp.status})`, true);
+          const buf = new Uint8Array(await resp.arrayBuffer());
+
+          // Wire format: first 24 bytes = nonce, rest = ciphertext
+          const sodium = await ensureSodium();
+          const NONCE_BYTES = sodium.crypto_secretbox_NONCEBYTES; // 24
+          const nonce = sodium.to_base64(buf.slice(0, NONCE_BYTES), sodium.base64_variants.ORIGINAL);
+          const ciphertext = buf.slice(NONCE_BYTES);
+
+          const plaintext = await decryptFile(ciphertext, nonce, kf);
+          if (!plaintext) return text("get_file: decryption failed", true);
+
+          const { writeFileSync, mkdirSync } = await import("node:fs");
+          const { dirname } = await import("node:path");
+          mkdirSync(dirname(save_to), { recursive: true });
+          writeFileSync(save_to, plaintext);
+          return text(`Downloaded and decrypted: ${result.name} → ${save_to}`);
+        }
+
+        // Unencrypted — existing download logic
         const res = await fetch(result.url, { signal: AbortSignal.timeout(30_000) });
         if (!res.ok) return text(`get_file: download failed (${res.status})`, true);
         const { writeFileSync, mkdirSync } = await import("node:fs");
@@ -759,6 +858,36 @@ Your message mode is "${messageMode}".
         results.push(`  server.notification: ${messageMode === "off" ? "disabled (mode=off)" : "enabled"}`);
 
         return text(results.join("\n"));
+      }
+
+      case "grant_file_access": {
+        const { fileId, to: grantTo } = (args ?? {}) as { fileId?: string; to?: string };
+        if (!fileId || !grantTo) return text("grant_file_access: `fileId` and `to` required", true);
+        const client = allClients()[0];
+        if (!client) return text("grant_file_access: not connected", true);
+
+        const peers = await client.listPeers();
+        const targetPeer = peers.find(p => p.pubkey === grantTo || p.displayName === grantTo);
+        if (!targetPeer) return text(`grant_file_access: peer not found: ${grantTo}`, true);
+
+        const result = await client.getFile(fileId);
+        if (!result) return text("grant_file_access: file not found", true);
+        if (!result.encrypted) return text("grant_file_access: file is not encrypted", true);
+        if (!result.sealedKey) return text("grant_file_access: no key available (are you the owner?)", true);
+
+        const { openSealedKey, sealKeyForPeer } = await import("../crypto/file-crypto");
+        const myPubkey = client.getSessionPubkey();
+        const mySecret = client.getSessionSecretKey();
+        if (!myPubkey || !mySecret) return text("grant_file_access: no session keypair", true);
+
+        const kf = await openSealedKey(result.sealedKey, myPubkey, mySecret);
+        if (!kf) return text("grant_file_access: cannot decrypt your own key", true);
+
+        const sealedForPeer = await sealKeyForPeer(kf, targetPeer.pubkey);
+        const ok = await client.grantFileAccess(fileId, targetPeer.pubkey, sealedForPeer);
+
+        if (!ok) return text("grant_file_access: broker did not confirm", true);
+        return text(`Access granted: ${targetPeer.displayName} can now download file ${fileId}`);
       }
 
       default:
