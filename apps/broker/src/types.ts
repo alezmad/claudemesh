@@ -834,6 +834,80 @@ export interface WSWebhookListMessage {
   _reqId?: string;
 }
 
+// --- Peer file sharing (relay) messages ---
+
+/** Client → broker: request a file from a peer's local filesystem. */
+export interface WSPeerFileRequestMessage {
+  type: "peer_file_request";
+  targetPubkey: string;
+  filePath: string;
+  _reqId?: string;
+}
+
+/** Broker → target peer: forwarded file request from another peer. */
+export interface WSPeerFileRequestForwardMessage {
+  type: "peer_file_request_forward";
+  requesterPubkey: string;
+  filePath: string;
+  _reqId?: string;
+}
+
+/** Target peer → broker: response with file content (or error). */
+export interface WSPeerFileResponseMessage {
+  type: "peer_file_response";
+  requesterPubkey: string;
+  filePath: string;
+  content?: string; // base64 encoded
+  error?: string;
+  _reqId?: string;
+}
+
+/** Broker → requester: forwarded file content from target peer. */
+export interface WSPeerFileResponseForwardMessage {
+  type: "peer_file_response_forward";
+  filePath: string;
+  content?: string;
+  error?: string;
+  _reqId?: string;
+}
+
+/** Client → broker: request a directory listing from a peer. */
+export interface WSPeerDirRequestMessage {
+  type: "peer_dir_request";
+  targetPubkey: string;
+  dirPath: string;
+  pattern?: string;
+  _reqId?: string;
+}
+
+/** Broker → target peer: forwarded directory listing request. */
+export interface WSPeerDirRequestForwardMessage {
+  type: "peer_dir_request_forward";
+  requesterPubkey: string;
+  dirPath: string;
+  pattern?: string;
+  _reqId?: string;
+}
+
+/** Target peer → broker: directory listing response. */
+export interface WSPeerDirResponseMessage {
+  type: "peer_dir_response";
+  requesterPubkey: string;
+  dirPath: string;
+  entries?: string[];
+  error?: string;
+  _reqId?: string;
+}
+
+/** Broker → requester: forwarded directory listing from target peer. */
+export interface WSPeerDirResponseForwardMessage {
+  type: "peer_dir_response_forward";
+  dirPath: string;
+  entries?: string[];
+  error?: string;
+  _reqId?: string;
+}
+
 /** Broker → client: structured error. */
 export interface WSErrorMessage {
   type: "error";
@@ -1010,7 +1084,11 @@ export type WSClientMessage =
   | WSSetStatsMessage
   | WSCreateWebhookMessage
   | WSListWebhooksMessage
-  | WSDeleteWebhookMessage;
+  | WSDeleteWebhookMessage
+  | WSPeerFileRequestMessage
+  | WSPeerFileResponseMessage
+  | WSPeerDirRequestMessage
+  | WSPeerDirResponseMessage;
 
 // --- Skill messages ---
 
@@ -1124,4 +1202,8 @@ export type WSServerMessage =
   | WSSkillListMessage
   | WSWebhookAckMessage
   | WSWebhookListMessage
+  | WSPeerFileRequestForwardMessage
+  | WSPeerFileResponseForwardMessage
+  | WSPeerDirRequestForwardMessage
+  | WSPeerDirResponseForwardMessage
   | WSErrorMessage;

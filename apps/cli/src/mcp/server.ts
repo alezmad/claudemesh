@@ -264,6 +264,12 @@ Your message mode is "${messageMode}".
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;
+
+    // Track tool call count across all connected clients
+    for (const c of allClients()) {
+      c.incrementToolCalls();
+    }
+
     if (config.meshes.length === 0) {
       return text(
         "No meshes joined. Run `claudemesh join https://claudemesh.com/join/<token>` first.",
@@ -911,6 +917,26 @@ Your message mode is "${messageMode}".
           `**Your groups**: ${(info.yourGroups as any[])?.map((g: any) => `@${g.name}${g.role ? ':' + g.role : ''}`).join(", ") || "none"}`,
         ];
         return text(lines.join("\n"));
+      }
+
+      case "mesh_stats": {
+        const clients = allClients();
+        if (clients.length === 0) return text("mesh_stats: no joined meshes", true);
+        const sections: string[] = [];
+        for (const c of clients) {
+          const peers = await c.listPeers();
+          const header = `## ${c.meshSlug}`;
+          const rows = peers.map((p) => {
+            const s = p.stats;
+            if (!s) return `| ${p.displayName} | - | - | - | - | - |`;
+            const up = s.uptime != null ? `${Math.floor(s.uptime / 60)}m` : "-";
+            return `| ${p.displayName} | ${s.messagesIn ?? 0} | ${s.messagesOut ?? 0} | ${s.toolCalls ?? 0} | ${up} | ${s.errors ?? 0} |`;
+          });
+          sections.push(
+            `${header}\n| Peer | Msgs In | Msgs Out | Tool Calls | Uptime | Errors |\n|------|---------|----------|------------|--------|--------|\n${rows.join("\n")}`,
+          );
+        }
+        return text(sections.join("\n\n"));
       }
 
       case "ping_mesh": {

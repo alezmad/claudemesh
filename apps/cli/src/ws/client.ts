@@ -45,6 +45,13 @@ export interface PeerInfo {
     uptime?: number;
     errors?: number;
   };
+  visible?: boolean;
+  profile?: {
+    avatar?: string;
+    title?: string;
+    bio?: string;
+    capabilities?: string[];
+  };
 }
 
 export interface InboundPush {
@@ -219,6 +226,7 @@ export class BrokerClient {
           this.setConnStatus("open");
           this.reconnectAttempt = 0;
           this.flushOutbound();
+          this.startStatsReporting();
           resolve();
           return;
         }
@@ -270,6 +278,8 @@ export class BrokerClient {
       nonce = randomNonce();
       ciphertext = Buffer.from(message, "utf-8").toString("base64");
     }
+
+    this._statsCounters.messagesOut++;
 
     return new Promise((resolve) => {
       if (this.pendingSends.size >= MAX_QUEUED) {
@@ -941,8 +951,57 @@ export class BrokerClient {
 
   // --- Mesh info ---
   private meshInfoResolvers = new Map<string, { resolve: (result: Record<string, unknown> | null) => void; timer: NodeJS.Timeout }>();
+  private clockStatusResolvers = new Map<string, { resolve: (result: { speed: number; paused: boolean; tick: number; simTime: string; startedAt: string } | null) => void; timer: NodeJS.Timeout }>();
 
-  async meshInfo(): Promise<Record<string, unknown> | null> {
+  /** Set the simulation clock speed. Returns clock status. */
+  async setClock(speed: number): Promise<{ speed: number; paused: boolean; tick: number; simTime: string; startedAt: string } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.clockStatusResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.clockStatusResolvers.delete(reqId)) resolve(null);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "set_clock", speed, _reqId: reqId }));
+    });
+  }
+
+  /** Pause the simulation clock. Returns clock status. */
+  async pauseClock(): Promise<{ speed: number; paused: boolean; tick: number; simTime: string; startedAt: string } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.clockStatusResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.clockStatusResolvers.delete(reqId)) resolve(null);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "pause_clock", _reqId: reqId }));
+    });
+  }
+
+  /** Resume the simulation clock. Returns clock status. */
+  async resumeClock(): Promise<{ speed: number; paused: boolean; tick: number; simTime: string; startedAt: string } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.clockStatusResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.clockStatusResolvers.delete(reqId)) resolve(null);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "resume_clock", _reqId: reqId }));
+    });
+  }
+
+  /** Get current simulation clock status. */
+  async getClock(): Promise<{ speed: number; paused: boolean; tick: number; simTime: string; startedAt: string } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.clockStatusResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.clockStatusResolvers.delete(reqId)) resolve(null);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "get_clock", _reqId: reqId }));
+    });
+  }
+
+    async meshInfo(): Promise<Record<string, unknown> | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
     return new Promise((resolve) => {
       const reqId = this.makeReqId();
@@ -953,8 +1012,66 @@ export class BrokerClient {
     });
   }
 
+  // --- Skills ---
+  private skillAckResolvers = new Map<string, { resolve: (result: { name: string; action: string } | null) => void; timer: NodeJS.Timeout }>();
+  private skillDataResolvers = new Map<string, { resolve: (skill: { name: string; description: string; instructions: string; tags: string[]; author: string; createdAt: string } | null) => void; timer: NodeJS.Timeout }>();
+  private skillListResolvers = new Map<string, { resolve: (skills: Array<{ name: string; description: string; tags: string[]; author: string; createdAt: string }>) => void; timer: NodeJS.Timeout }>();
+
+  /** Publish a reusable skill to the mesh. */
+  async shareSkill(name: string, description: string, instructions: string, tags?: string[]): Promise<{ ok: boolean; action?: string } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.skillAckResolvers.set(reqId, { resolve: (result) => {
+        resolve(result ? { ok: true, action: result.action } : null);
+      }, timer: setTimeout(() => {
+        if (this.skillAckResolvers.delete(reqId)) resolve(null);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "share_skill", name, description, instructions, tags, _reqId: reqId }));
+    });
+  }
+
+  /** Load a skill's full instructions by name. */
+  async getSkill(name: string): Promise<{ name: string; description: string; instructions: string; tags: string[]; author: string; createdAt: string } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.skillDataResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.skillDataResolvers.delete(reqId)) resolve(null);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "get_skill", name, _reqId: reqId }));
+    });
+  }
+
+  /** Browse available skills in the mesh. */
+  async listSkills(query?: string): Promise<Array<{ name: string; description: string; tags: string[]; author: string; createdAt: string }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.skillListResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.skillListResolvers.delete(reqId)) resolve([]);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "list_skills", query, _reqId: reqId }));
+    });
+  }
+
+  /** Remove a skill you published. */
+  async removeSkill(name: string): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return false;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.skillAckResolvers.set(reqId, { resolve: (result) => {
+        resolve(result?.action === "removed");
+      }, timer: setTimeout(() => {
+        if (this.skillAckResolvers.delete(reqId)) resolve(false);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "remove_skill", name, _reqId: reqId }));
+    });
+  }
+
   close(): void {
     this.closed = true;
+    this.stopStatsReporting();
     if (this.helloTimer) clearTimeout(this.helloTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.ws) {
@@ -1013,6 +1130,7 @@ export class BrokerClient {
       return;
     }
     if (msg.type === "push") {
+      this._statsCounters.messagesIn++;
       const nonce = String(msg.nonce ?? "");
       const ciphertext = String(msg.ciphertext ?? "");
       const senderPubkey = String(msg.senderPubkey ?? "");
@@ -1234,6 +1352,16 @@ export class BrokerClient {
       }
       return;
     }
+    if (msg.type === "clock_status") {
+      this.resolveFromMap(this.clockStatusResolvers, msgReqId, {
+        speed: Number(msg.speed ?? 0),
+        paused: Boolean(msg.paused),
+        tick: Number(msg.tick ?? 0),
+        simTime: String(msg.simTime ?? ""),
+        startedAt: String(msg.startedAt ?? ""),
+      });
+      return;
+    }
     if (msg.type === "mesh_info_result") {
       this.resolveFromMap(this.meshInfoResolvers, msgReqId, msg as Record<string, unknown>);
       return;
@@ -1337,6 +1465,7 @@ export class BrokerClient {
           [this.streamCreatedResolvers, null],
           [this.listPeersResolvers, []],
           [this.meshInfoResolvers, null],
+          [this.clockStatusResolvers, null],
           [this.mcpRegisterResolvers, null],
           [this.mcpListResolvers, []],
           [this.mcpCallResolvers, { error: "broker error" }],

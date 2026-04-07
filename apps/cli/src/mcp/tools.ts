@@ -609,6 +609,14 @@ export const TOOLS: Tool[] = [
     inputSchema: { type: "object", properties: {} },
   },
 
+  // --- Stats ---
+  {
+    name: "mesh_stats",
+    description:
+      "View resource usage stats for all peers: messages sent/received, tool calls, uptime, errors.",
+    inputSchema: { type: "object", properties: {} },
+  },
+
   // --- MCP Proxy ---
   {
     name: "mesh_mcp_register",
@@ -667,6 +675,42 @@ export const TOOLS: Tool[] = [
       },
       required: ["server_name"],
     },
+  },
+
+
+  // --- Simulation clock tools ---
+  {
+    name: "mesh_set_clock",
+    description:
+      "Set the simulation clock speed. x1 = real-time, x10 = 10x faster, x100 = 100x. Peers receive heartbeat ticks at the simulated rate.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        speed: {
+          type: "number",
+          description: "Speed multiplier (1-100). x1 = tick every 60s, x10 = tick every 6s, x100 = tick every 600ms.",
+        },
+      },
+      required: ["speed"],
+    },
+  },
+  {
+    name: "mesh_pause_clock",
+    description:
+      "Pause the simulation clock. Ticks stop until resumed.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "mesh_resume_clock",
+    description:
+      "Resume a paused simulation clock.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "mesh_clock",
+    description:
+      "Get current simulation clock status: speed, tick count, simulated time.",
+    inputSchema: { type: "object", properties: {} },
   },
 
   // --- Diagnostics ---

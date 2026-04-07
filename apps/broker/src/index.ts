@@ -18,7 +18,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { and, eq, sql } from "drizzle-orm";
 import { env } from "./env";
 import { db } from "./db";
-import { messageQueue, scheduledMessage as scheduledMessageTable } from "@turbostarter/db/schema/mesh";
+import { messageQueue, scheduledMessage as scheduledMessageTable, meshWebhook } from "@turbostarter/db/schema/mesh";
 import {
   claimTask,
   completeTask,
@@ -85,6 +85,7 @@ import { TokenBucket } from "./rate-limit";
 import { isDbHealthy, startDbHealth, stopDbHealth } from "./db-health";
 import { buildInfo } from "./build-info";
 import { verifyHelloSignature } from "./crypto";
+import { handleWebhook } from "./webhooks";
 
 const PORT = env.BROKER_PORT;
 const WS_PATH = "/ws";
@@ -124,6 +125,57 @@ const connectionsPerMesh = new Map<string, number>();
 
 // Stream subscriptions: "meshId:streamName" → Set of presenceIds
 const streamSubscriptions = new Map<string, Set<string>>();
+
+// --- Simulation clock state (per-mesh) ---
+interface MeshClock {
+  speed: number;
+  paused: boolean;
+  tick: number;
+  simTimeMs: number;
+  realStartMs: number;
+  timer: ReturnType<typeof setInterval> | null;
+}
+const meshClocks = new Map<string, MeshClock>();
+
+function broadcastClockTick(meshId: string, clock: MeshClock): void {
+  clock.tick++;
+  clock.simTimeMs += 60_000;
+  const tickMsg: WSPushMessage = {
+    type: "push",
+    subtype: "system" as const,
+    event: "tick",
+    eventData: { tick: clock.tick, simTime: new Date(clock.simTimeMs).toISOString(), speed: clock.speed },
+    messageId: crypto.randomUUID(),
+    meshId,
+    senderPubkey: "system",
+    priority: "low",
+    nonce: "",
+    ciphertext: "",
+    createdAt: new Date().toISOString(),
+  };
+  for (const [pid, peer] of connections) {
+    if (peer.meshId !== meshId) continue;
+    sendToPeer(pid, tickMsg);
+  }
+}
+
+function startClockInterval(meshId: string, clock: MeshClock): void {
+  if (clock.timer) clearInterval(clock.timer);
+  const intervalMs = 60_000 / clock.speed;
+  clock.timer = setInterval(() => broadcastClockTick(meshId, clock), intervalMs);
+}
+
+function makeClockStatus(clock: MeshClock, reqId?: string): WSServerMessage {
+  return {
+    type: "clock_status",
+    speed: clock.speed,
+    paused: clock.paused,
+    tick: clock.tick,
+    simTime: new Date(clock.simTimeMs).toISOString(),
+    startedAt: new Date(clock.realStartMs).toISOString(),
+    ...(reqId ? { _reqId: reqId } : {}),
+  } as WSServerMessage;
+}
 
 // --- MCP proxy registry (in-memory, ephemeral) ---
 interface McpRegisteredServer {
@@ -399,6 +451,13 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
 
   if (req.method === "POST" && req.url === "/upload") {
     handleUploadPost(req, res, started);
+    return;
+  }
+
+  // Inbound webhook: POST /hook/:meshId/:secret
+  const webhookMatch = req.method === "POST" && req.url?.match(/^\/hook\/([^/]+)\/([^/]+)$/);
+  if (webhookMatch) {
+    handleWebhookPost(req, res, webhookMatch[1]!, webhookMatch[2]!, started);
     return;
   }
 
@@ -693,6 +752,64 @@ function handleUploadPost(
   });
 }
 
+/**
+ * Broadcast a push message to all connected peers in a mesh.
+ * Returns the number of peers the message was delivered to.
+ */
+function broadcastToMesh(meshId: string, msg: WSPushMessage): number {
+  let count = 0;
+  for (const [pid, peer] of connections) {
+    if (peer.meshId !== meshId) continue;
+    sendToPeer(pid, msg);
+    count++;
+  }
+  return count;
+}
+
+function handleWebhookPost(
+  req: IncomingMessage,
+  res: ServerResponse,
+  meshId: string,
+  secret: string,
+  started: number,
+): void {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let aborted = false;
+
+  req.on("data", (chunk: Buffer) => {
+    if (aborted) return;
+    total += chunk.length;
+    if (total > env.MAX_MESSAGE_BYTES) {
+      aborted = true;
+      writeJson(res, 413, { ok: false, error: "payload too large" });
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+
+  req.on("end", async () => {
+    if (aborted) return;
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const result = await handleWebhook(meshId, secret, body, broadcastToMesh);
+      writeJson(res, result.status, result.body);
+      log.info("webhook", {
+        route: `POST /hook/${meshId}/***`,
+        status: result.status,
+        delivered: result.body.delivered,
+        latency_ms: Date.now() - started,
+      });
+    } catch (e) {
+      writeJson(res, 400, { ok: false, error: "invalid JSON" });
+      log.warn("webhook parse error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+}
+
 function handleUpgrade(
   wss: WebSocketServer,
   req: IncomingMessage,
@@ -880,9 +997,11 @@ async function handleSend(
     if (peer.meshId !== conn.meshId) continue;
 
     if (isBroadcast) {
-      // broadcast — deliver to everyone
+      // broadcast — skip hidden peers
+      if (!peer.visible) continue;
     } else if (groupName) {
-      // group routing — deliver only if peer is in the group
+      // group routing — deliver only if peer is in the group; skip hidden
+      if (!peer.visible) continue;
       if (!peer.groups.some((g) => g.name === groupName)) continue;
     } else {
       // direct routing — match by pubkey
@@ -993,7 +1112,13 @@ function handleConnection(ws: WebSocket): void {
           }
           const resp: WSServerMessage = {
             type: "peers_list",
-            peers: peers.map((p) => {
+            peers: peers
+              .filter((p) => {
+                const pc = connByPubkey.get(p.pubkey);
+                if (pc && !pc.visible && pc.memberPubkey !== conn.memberPubkey) return false;
+                return true;
+              })
+              .map((p) => {
               const pc = connByPubkey.get(p.pubkey);
               return {
                 pubkey: p.pubkey,
@@ -1008,6 +1133,8 @@ function handleConnection(ws: WebSocket): void {
                 ...(pc?.channel ? { channel: pc.channel } : {}),
                 ...(pc?.model ? { model: pc.model } : {}),
                 ...(pc?.stats ? { stats: pc.stats } : {}),
+                ...(pc ? { visible: pc.visible } : {}),
+                ...(pc?.profile && Object.keys(pc.profile).length > 0 ? { profile: pc.profile } : {}),
               };
             }),
             ...(_reqId ? { _reqId } : {}),
@@ -1036,6 +1163,45 @@ function handleConnection(ws: WebSocket): void {
             presence_id: presenceId,
             stats: conn.stats,
           });
+          break;
+        }
+        case "set_visible": {
+          const sv = msg as Extract<WSClientMessage, { type: "set_visible" }>;
+          conn.visible = sv.visible;
+          // Broadcast visibility change to peers in same mesh
+          const visEvent: WSPushMessage = {
+            type: "push",
+            subtype: "system",
+            event: sv.visible ? "peer_visible" : "peer_hidden",
+            eventData: {
+              name: conn.displayName,
+              pubkey: conn.sessionPubkey ?? conn.memberPubkey,
+            },
+            messageId: crypto.randomUUID(),
+            meshId: conn.meshId,
+            senderPubkey: "system",
+            priority: "low",
+            nonce: "",
+            ciphertext: "",
+            createdAt: new Date().toISOString(),
+          };
+          for (const [pid, peer] of connections) {
+            if (pid === presenceId) continue;
+            if (peer.meshId !== conn.meshId) continue;
+            sendToPeer(pid, visEvent);
+          }
+          conn.ws.send(JSON.stringify({ type: "ack", id: _reqId ?? "", messageId: "", queued: false, ...(_reqId ? { _reqId } : {}) }));
+          log.info("ws set_visible", { presence_id: presenceId, visible: sv.visible });
+          break;
+        }
+        case "set_profile": {
+          const sp = msg as Extract<WSClientMessage, { type: "set_profile" }>;
+          if (sp.avatar !== undefined) conn.profile.avatar = sp.avatar;
+          if (sp.title !== undefined) conn.profile.title = sp.title;
+          if (sp.bio !== undefined) conn.profile.bio = sp.bio;
+          if (sp.capabilities !== undefined) conn.profile.capabilities = sp.capabilities;
+          conn.ws.send(JSON.stringify({ type: "ack", id: _reqId ?? "", messageId: "", queued: false, ...(_reqId ? { _reqId } : {}) }));
+          log.info("ws set_profile", { presence_id: presenceId, profile: conn.profile });
           break;
         }
         case "join_group": {
@@ -2187,6 +2353,68 @@ function handleConnection(ws: WebSocket): void {
           break;
         }
 
+
+        // --- Simulation clock ---
+        case "set_clock": {
+          const sc = msg as Extract<WSClientMessage, { type: "set_clock" }>;
+          const speed = Math.max(1, Math.min(100, Number(sc.speed) || 1));
+          let clock = meshClocks.get(conn.meshId);
+          if (!clock) {
+            clock = {
+              speed,
+              paused: false,
+              tick: 0,
+              simTimeMs: Date.now(),
+              realStartMs: Date.now(),
+              timer: null,
+            };
+            meshClocks.set(conn.meshId, clock);
+          } else {
+            clock.speed = speed;
+          }
+          if (!clock.paused) {
+            startClockInterval(conn.meshId, clock);
+          }
+          sendToPeer(presenceId, makeClockStatus(clock, _reqId));
+          log.info("ws set_clock", { presence_id: presenceId, mesh_id: conn.meshId, speed });
+          break;
+        }
+
+        case "pause_clock": {
+          const clock = meshClocks.get(conn.meshId);
+          if (clock) {
+            clock.paused = true;
+            if (clock.timer) { clearInterval(clock.timer); clock.timer = null; }
+          }
+          sendToPeer(presenceId, clock
+            ? makeClockStatus(clock, _reqId)
+            : { type: "error", code: "no_clock", message: "No clock running for this mesh", ...(_reqId ? { _reqId } : {}) } as WSServerMessage);
+          log.info("ws pause_clock", { presence_id: presenceId, mesh_id: conn.meshId });
+          break;
+        }
+
+        case "resume_clock": {
+          const clock = meshClocks.get(conn.meshId);
+          if (clock && clock.paused) {
+            clock.paused = false;
+            startClockInterval(conn.meshId, clock);
+          }
+          sendToPeer(presenceId, clock
+            ? makeClockStatus(clock, _reqId)
+            : { type: "error", code: "no_clock", message: "No clock running for this mesh", ...(_reqId ? { _reqId } : {}) } as WSServerMessage);
+          log.info("ws resume_clock", { presence_id: presenceId, mesh_id: conn.meshId });
+          break;
+        }
+
+        case "get_clock": {
+          const clock = meshClocks.get(conn.meshId);
+          sendToPeer(presenceId, clock
+            ? makeClockStatus(clock, _reqId)
+            : { type: "clock_status", speed: 0, paused: true, tick: 0, simTime: new Date().toISOString(), startedAt: new Date().toISOString(), ...(_reqId ? { _reqId } : {}) } as WSServerMessage);
+          log.info("ws get_clock", { presence_id: presenceId, mesh_id: conn.meshId });
+          break;
+        }
+
         // --- MCP proxy ---
         case "mcp_register": {
           const mr = msg as Extract<WSClientMessage, { type: "mcp_register" }>;
@@ -2322,6 +2550,80 @@ function handleConnection(ws: WebSocket): void {
           }
           break;
         }
+
+        // --- Skills ---
+        case "share_skill": {
+          const sk = msg as Extract<WSClientMessage, { type: "share_skill" }>;
+          const memberInfo = conn.memberPubkey
+            ? await findMemberByPubkey(conn.meshId, conn.memberPubkey)
+            : null;
+          await shareSkill(
+            conn.meshId,
+            sk.name,
+            sk.description,
+            sk.instructions,
+            sk.tags ?? [],
+            memberInfo?.id,
+            memberInfo?.displayName,
+          );
+          sendToPeer(presenceId, {
+            type: "skill_ack",
+            name: sk.name,
+            action: "shared",
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws share_skill", { presence_id: presenceId, name: sk.name });
+          break;
+        }
+        case "get_skill": {
+          const gs = msg as Extract<WSClientMessage, { type: "get_skill" }>;
+          const skill = await getSkill(conn.meshId, gs.name);
+          sendToPeer(presenceId, {
+            type: "skill_data",
+            skill: skill
+              ? {
+                  name: skill.name,
+                  description: skill.description,
+                  instructions: skill.instructions,
+                  tags: skill.tags,
+                  author: skill.author,
+                  createdAt: skill.createdAt.toISOString(),
+                }
+              : null,
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws get_skill", { presence_id: presenceId, name: gs.name, found: !!skill });
+          break;
+        }
+        case "list_skills": {
+          const ls = msg as Extract<WSClientMessage, { type: "list_skills" }>;
+          const skills = await listSkills(conn.meshId, ls.query);
+          sendToPeer(presenceId, {
+            type: "skill_list",
+            skills: skills.map((s) => ({
+              name: s.name,
+              description: s.description,
+              tags: s.tags,
+              author: s.author,
+              createdAt: s.createdAt.toISOString(),
+            })),
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws list_skills", { presence_id: presenceId, query: ls.query ?? "", count: skills.length });
+          break;
+        }
+        case "remove_skill": {
+          const rs = msg as Extract<WSClientMessage, { type: "remove_skill" }>;
+          const removed = await removeSkill(conn.meshId, rs.name);
+          sendToPeer(presenceId, {
+            type: "skill_ack",
+            name: rs.name,
+            action: removed ? "removed" : "not_found",
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws remove_skill", { presence_id: presenceId, name: rs.name, removed });
+          break;
+        }
       }
     } catch (e) {
       metrics.messagesRejectedTotal.inc({ reason: "parse_or_handler" });
@@ -2368,6 +2670,16 @@ function handleConnection(ws: WebSocket): void {
       // Clean up MCP servers registered by this peer
       for (const [key, entry] of mcpRegistry) {
         if (entry.presenceId === presenceId) mcpRegistry.delete(key);
+      }
+      // Auto-pause clock when mesh becomes empty
+      if (conn && !connectionsPerMesh.has(conn.meshId)) {
+        const clock = meshClocks.get(conn.meshId);
+        if (clock && clock.timer) {
+          clearInterval(clock.timer);
+          clock.timer = null;
+          clock.paused = true;
+          log.info("clock auto-paused (mesh empty)", { mesh_id: conn.meshId });
+        }
       }
       log.info("ws close", { presence_id: presenceId });
     }
