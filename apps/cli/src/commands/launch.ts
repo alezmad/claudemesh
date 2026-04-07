@@ -1,9 +1,12 @@
 /**
  * `claudemesh launch` — spawn `claude` with peer mesh identity.
  *
+ * Flags are defined in index.ts (citty command) — that is the source of
+ * truth. This file receives already-parsed flags and rawArgs.
+ *
  * Flow:
- *   1. Parse --name, --join, --mesh, --quiet flags
- *   2. If --join: run join flow first (accepts token or URL)
+ *   1. Receive parsed flags from citty + rawArgs for -- passthrough
+ *   2. If --join: run join flow first
  *   3. Load config → pick mesh (auto if 1, interactive picker if >1)
  *   4. Write per-session config to tmpdir (isolates mesh selection)
  *   5. Spawn claude with CLAUDEMESH_CONFIG_DIR + CLAUDEMESH_DISPLAY_NAME
@@ -18,85 +21,17 @@ import { createInterface } from "node:readline";
 import { loadConfig, getConfigPath } from "../state/config";
 import type { Config, JoinedMesh, GroupEntry } from "../state/config";
 
-// --- Arg parsing ---
-
-interface LaunchArgs {
-  name: string | null;
-  role: string | null;
-  groups: string | null; // comma-separated, e.g. "frontend:lead,reviewers:member"
-  joinLink: string | null;
-  meshSlug: string | null;
-  messageMode: "push" | "inbox" | "off" | null;
-  systemPrompt: string | null;
-  quiet: boolean;
-  skipPermConfirm: boolean;
-  claudeArgs: string[];
-}
-
-function parseArgs(argv: string[]): LaunchArgs {
-  const result: LaunchArgs = {
-    name: null,
-    role: null,
-    groups: null,
-    joinLink: null,
-    meshSlug: null,
-    messageMode: null,
-    systemPrompt: null,
-    quiet: false,
-    skipPermConfirm: false,
-    claudeArgs: [],
-  };
-
-  let i = 0;
-  while (i < argv.length) {
-    const arg = argv[i]!;
-    if (arg === "--name" && i + 1 < argv.length) {
-      result.name = argv[++i]!;
-    } else if (arg.startsWith("--name=")) {
-      result.name = arg.slice("--name=".length);
-    } else if (arg === "--role" && i + 1 < argv.length) {
-      result.role = argv[++i]!;
-    } else if (arg.startsWith("--role=")) {
-      result.role = arg.slice("--role=".length);
-    } else if (arg === "--groups" && i + 1 < argv.length) {
-      result.groups = argv[++i]!;
-    } else if (arg.startsWith("--groups=")) {
-      result.groups = arg.slice("--groups=".length);
-    } else if (arg === "--join" && i + 1 < argv.length) {
-      result.joinLink = argv[++i]!;
-    } else if (arg.startsWith("--join=")) {
-      result.joinLink = arg.slice("--join=".length);
-    } else if (arg === "--mesh" && i + 1 < argv.length) {
-      result.meshSlug = argv[++i]!;
-    } else if (arg.startsWith("--mesh=")) {
-      result.meshSlug = arg.slice("--mesh=".length);
-    } else if (arg === "--message-mode" && i + 1 < argv.length) {
-      const mode = argv[++i]! as "push" | "inbox" | "off";
-      if (["push", "inbox", "off"].includes(mode)) result.messageMode = mode;
-    } else if (arg.startsWith("--message-mode=")) {
-      const mode = arg.slice("--message-mode=".length) as "push" | "inbox" | "off";
-      if (["push", "inbox", "off"].includes(mode)) result.messageMode = mode;
-    } else if (arg === "--system-prompt" && i + 1 < argv.length) {
-      result.systemPrompt = argv[++i]!;
-    } else if (arg.startsWith("--system-prompt=")) {
-      result.systemPrompt = arg.slice("--system-prompt=".length);
-    } else if (arg === "--inbox") {
-      result.messageMode = "inbox";
-    } else if (arg === "--no-messages") {
-      result.messageMode = "off";
-    } else if (arg === "--quiet") {
-      result.quiet = true;
-    } else if (arg === "-y" || arg === "--yes") {
-      result.skipPermConfirm = true;
-    } else if (arg === "--") {
-      result.claudeArgs.push(...argv.slice(i + 1));
-      break;
-    } else {
-      result.claudeArgs.push(arg);
-    }
-    i++;
-  }
-  return result;
+// Flags as parsed by citty (index.ts is the source of truth for definitions).
+export interface LaunchFlags {
+  name?: string;
+  role?: string;
+  groups?: string;
+  join?: string;
+  mesh?: string;
+  "message-mode"?: string;
+  "system-prompt"?: string;
+  yes?: boolean;
+  quiet?: boolean;
 }
 
 // --- Interactive mesh picker ---
@@ -218,8 +153,26 @@ function printBanner(name: string, meshSlug: string, role: string | null, groups
 
 // --- Main ---
 
-export async function runLaunch(extraArgs: string[]): Promise<void> {
-  const args = parseArgs(extraArgs);
+export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<void> {
+  // Extract args that follow "--" — passed straight through to claude.
+  const dashIdx = rawArgs.indexOf("--");
+  const claudePassthrough = dashIdx >= 0 ? rawArgs.slice(dashIdx + 1) : [];
+
+  // Normalise flags into the internal shape used below.
+  const args = {
+    name: flags.name ?? null,
+    role: flags.role ?? null,
+    groups: flags.groups ?? null,
+    joinLink: flags.join ?? null,
+    meshSlug: flags.mesh ?? null,
+    messageMode: (["push", "inbox", "off"].includes(flags["message-mode"] ?? "")
+      ? flags["message-mode"] as "push" | "inbox" | "off"
+      : null),
+    systemPrompt: flags["system-prompt"] ?? null,
+    quiet: flags.quiet ?? false,
+    skipPermConfirm: flags.yes ?? false,
+    claudeArgs: claudePassthrough,
+  };
 
   // 1. If --join, run join flow first.
   if (args.joinLink) {

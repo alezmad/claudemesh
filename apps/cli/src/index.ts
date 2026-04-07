@@ -1,13 +1,15 @@
 /**
  * claudemesh-cli entry point.
  *
+ * Uses citty to define commands and flags. --help is generated from
+ * the command definitions — the flag list here IS the documentation.
+ *
  * Dispatches between two modes:
  *   - `claudemesh mcp`           → MCP server (stdio transport)
  *   - `claudemesh <subcommand>`  → CLI subcommand
- *
- * Claude Code invokes the `mcp` mode via stdio. Humans use all others.
  */
 
+import { defineCommand, runMain } from "citty";
 import { startMcpServer } from "./mcp/server";
 import { runInstall, runUninstall } from "./commands/install";
 import { runJoin } from "./commands/join";
@@ -21,119 +23,152 @@ import { runDoctor } from "./commands/doctor";
 import { runWelcome } from "./commands/welcome";
 import { VERSION } from "./version";
 
-const HELP = `claudemesh v${VERSION} — peer mesh for Claude Code sessions
-
-Usage:
-  claudemesh <command> [args]
-
-Commands:
-  install         Register MCP server + status hooks with Claude Code
-                  --no-hooks      Register MCP only, skip hooks
-  uninstall       Remove MCP server and hooks
-  launch [opts]   Launch Claude Code connected to a mesh
-  join <url>      Join a mesh via invite URL
-  list            Show joined meshes and identities
-  leave <slug>    Leave a mesh
-  status          Check broker reachability for each joined mesh
-  doctor          Diagnose install, config, keypairs, and PATH
-  mcp             Start MCP server (stdio — Claude Code only)
-  --help, -h      Show this help
-  --version, -v   Show version
-
-launch options:
-  --name <name>             Display name for this session
-  --role <role>             Role tag (dev, lead, analyst — free-form)
-  --groups <spec>           Groups to join: "g1:role,g2" (colon = role)
-  --mesh <slug>             Select mesh by slug (interactive if omitted)
-  --join <url>              Join a mesh before launching
-  --message-mode <mode>     push (default) | inbox | off
-                              push   — peer messages arrive in real time
-                              inbox  — held until you call check_messages
-                              off    — no messages; use tools only
-  --system-prompt <text>    Set Claude's system prompt for this session
-  -y, --yes                 Skip permission confirmation
-  --quiet                   Skip banner and all interactive prompts
-  -- <args>                 Pass remaining args directly to claude
-
-  Full non-interactive launch:
-    claudemesh launch \\
-      --name Worker --mesh myteam --role analyst \\
-      --groups "myteam/docs:member" \\
-      --message-mode push \\
-      --system-prompt "You are a documentation analyst..." \\
-      -y --quiet
-
-  Groups support hierarchy (slash-separated):
-    --groups "eng/frontend:lead,eng/reviewers"
-    @eng delivers to members of @eng, @eng/frontend, @eng/reviewers, etc.
-
-Environment:
-  CLAUDEMESH_BROKER_URL     Override broker URL (default: wss://ic.claudemesh.com/ws)
-  CLAUDEMESH_CONFIG_DIR     Override config directory (default: ~/.claudemesh/)
-  CLAUDEMESH_DISPLAY_NAME   Override display name (set automatically by launch)
-  CLAUDEMESH_ROLE           Override role tag (set automatically by launch)
-  CLAUDEMESH_DEBUG=1        Verbose logging
-`;
-
-const cmd = process.argv[2];
-const args = process.argv.slice(3);
-
-async function main(): Promise<void> {
-  switch (cmd) {
-    case "mcp":
-      await startMcpServer();
-      return;
-    case "install":
-      runInstall(args);
-      return;
-    case "uninstall":
-      runUninstall();
-      return;
-    case "hook":
-      await runHook(args);
-      return;
-    case "launch":
-      await runLaunch(args);
-      return;
-    case "join":
-      await runJoin(args);
-      return;
-    case "list":
-      runList();
-      return;
-    case "leave":
-      runLeave(args);
-      return;
-    case "status":
-      await runStatus();
-      return;
-    case "doctor":
-      await runDoctor();
-      return;
-    case "seed-test-mesh":
-      runSeedTestMesh(args);
-      return;
-    case "--version":
-    case "-v":
-    case "version":
-      console.log(VERSION);
-      return;
-    case "--help":
-    case "-h":
-    case "help":
-      console.log(HELP);
-      return;
-    case undefined:
-      runWelcome();
-      return;
-    default:
-      console.error(`Unknown command: ${cmd}`);
-      console.error("Run `claudemesh --help` for usage.");
-      process.exit(1);
-  }
-}
-
-main().catch((e) => {
-  console.error(`claudemesh: ${e instanceof Error ? e.message : String(e)}`);
-  process.exit(1);
+const launch = defineCommand({
+  meta: {
+    name: "launch",
+    description: "Launch Claude Code connected to a mesh with real-time peer messaging",
+  },
+  args: {
+    name: {
+      type: "string",
+      description: "Display name for this session",
+    },
+    role: {
+      type: "string",
+      description: "Role tag (dev, lead, analyst — free-form)",
+    },
+    groups: {
+      type: "string",
+      description: 'Groups to join: "group:role,group2" — colon sets role. Hierarchy via slash: "eng/frontend:lead"',
+    },
+    mesh: {
+      type: "string",
+      description: "Select mesh by slug (interactive picker if omitted and >1 joined)",
+    },
+    join: {
+      type: "string",
+      description: "Join a mesh via invite URL before launching",
+    },
+    "message-mode": {
+      type: "string",
+      description: "push (default) | inbox | off — controls how peer messages are delivered",
+    },
+    "system-prompt": {
+      type: "string",
+      description: "Set Claude's system prompt for this session",
+    },
+    yes: {
+      type: "boolean",
+      alias: "y",
+      description: "Skip permission confirmation",
+      default: false,
+    },
+    quiet: {
+      type: "boolean",
+      description: "Skip banner and all interactive prompts",
+      default: false,
+    },
+  },
+  run({ args, rawArgs }) {
+    // Forward to the existing launch runner, preserving -- passthrough to claude.
+    return runLaunch(args, rawArgs);
+  },
 });
+
+const install = defineCommand({
+  meta: {
+    name: "install",
+    description: "Register MCP server + status hooks with Claude Code",
+  },
+  args: {
+    "no-hooks": {
+      type: "boolean",
+      description: "Register MCP server only, skip hooks",
+      default: false,
+    },
+  },
+  run({ rawArgs }) {
+    runInstall(rawArgs);
+  },
+});
+
+const join = defineCommand({
+  meta: {
+    name: "join",
+    description: "Join a mesh via invite URL",
+  },
+  args: {
+    url: {
+      type: "positional",
+      description: "Invite URL (https://claudemesh.com/join/...)",
+      required: true,
+    },
+  },
+  run({ args }) {
+    return runJoin([args.url]);
+  },
+});
+
+const leave = defineCommand({
+  meta: {
+    name: "leave",
+    description: "Leave a joined mesh",
+  },
+  args: {
+    slug: {
+      type: "positional",
+      description: "Mesh slug to leave",
+      required: true,
+    },
+  },
+  run({ args }) {
+    runLeave([args.slug]);
+  },
+});
+
+const main = defineCommand({
+  meta: {
+    name: "claudemesh",
+    version: VERSION,
+    description: "Peer mesh for Claude Code sessions",
+  },
+  subCommands: {
+    launch,
+    install,
+    uninstall: defineCommand({
+      meta: { name: "uninstall", description: "Remove MCP server and hooks" },
+      run() { runUninstall(); },
+    }),
+    join,
+    list: defineCommand({
+      meta: { name: "list", description: "Show joined meshes and identities" },
+      run() { runList(); },
+    }),
+    leave,
+    status: defineCommand({
+      meta: { name: "status", description: "Check broker reachability for each joined mesh" },
+      async run() { await runStatus(); },
+    }),
+    doctor: defineCommand({
+      meta: { name: "doctor", description: "Diagnose install, config, keypairs, and PATH" },
+      async run() { await runDoctor(); },
+    }),
+    mcp: defineCommand({
+      meta: { name: "mcp", description: "Start MCP server (stdio — invoked by Claude Code, not users)" },
+      async run() { await startMcpServer(); },
+    }),
+    "seed-test-mesh": defineCommand({
+      meta: { name: "seed-test-mesh", description: "Dev only: inject a mesh into config (skips invite flow)" },
+      run({ rawArgs }) { runSeedTestMesh(rawArgs); },
+    }),
+    hook: defineCommand({
+      meta: { name: "hook", description: "Internal hook handler (invoked by Claude Code hooks)" },
+      async run({ rawArgs }) { await runHook(rawArgs); },
+    }),
+  },
+  run() {
+    runWelcome();
+  },
+});
+
+runMain(main);
