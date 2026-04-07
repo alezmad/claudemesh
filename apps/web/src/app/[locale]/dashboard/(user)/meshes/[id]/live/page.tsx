@@ -15,6 +15,7 @@ import {
   DashboardHeaderTitle,
 } from "~/modules/common/layout/dashboard/header";
 import { LiveStreamPanel } from "~/modules/mesh/live-stream-panel";
+import { PeerGraphPanel } from "~/modules/mesh/peer-graph-panel";
 
 export const generateMetadata = getMetadata({
   title: "Live mesh",
@@ -63,7 +64,10 @@ export default async function LiveMeshPage({
         </div>
       </DashboardHeader>
 
-      <LiveStreamPanel meshId={id} />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <PeerGraphPanel meshId={id} />
+        <LiveStreamPanel meshId={id} />
+      </div>
     </>
   );
 }
