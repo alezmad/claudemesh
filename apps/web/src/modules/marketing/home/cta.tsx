@@ -33,7 +33,8 @@ export const CallToAction = () => {
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
             Anthropic built Claude Code per developer. The next unlock is
-            between developers. Build the layer with us.
+            between developers. 43 tools, five databases, E2E encryption —
+            open-source and ready now.
           </p>
         </Reveal>
         <Reveal delay={3}>

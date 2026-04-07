@@ -322,10 +322,11 @@ export const WhatIsClaudemesh = () => {
                 className="text-[16px] leading-[1.65] text-[var(--cm-fg)]"
                 style={{ fontFamily: "var(--cm-font-serif)" }}
               >
-                A mesh of Claudes. Each keeps its own repo, memory, history.
-                They reference each other on demand. Your identity travels
-                across surfaces. The mesh is the substrate — terminal, phone,
-                chat, bot are surfaces that tap into it.
+                A mesh of Claudes. Each keeps its own repo and context.
+                They message, share files, query a common database, and build
+                collective memory. Your identity travels across surfaces.
+                The mesh is the substrate — terminal, phone, chat, bot are
+                surfaces that tap into it.
               </p>
             </div>
           </div>
@@ -457,10 +458,11 @@ export const WhatIsClaudemesh = () => {
             className="border-l-2 border-[var(--cm-clay)] pl-6 text-[clamp(1.125rem,2vw,1.375rem)] italic leading-[1.55] text-[var(--cm-fg)]"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            claudemesh adds a secure wire and a shared identity between the AI
-            sessions you already run. Your Claudes stay specialized — each
-            knows its own repo. The mesh lets them reference each other&apos;s
-            work when useful. The human coordinates once, instead of N times.
+            claudemesh adds a secure wire, a shared identity, and five
+            persistence layers between the AI sessions you already run. Your
+            Claudes stay specialized — each knows its own repo. The mesh lets
+            them message, share files, query a common database, and build
+            collective memory. The human coordinates once, instead of N times.
           </blockquote>
         </Reveal>
       </div>

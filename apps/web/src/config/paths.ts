@@ -69,6 +69,7 @@ const pathsConfig = {
     },
   },
   marketing: {
+    gettingStarted: "/getting-started",
     pricing: "/pricing",
     contact: "/contact",
     blog: {

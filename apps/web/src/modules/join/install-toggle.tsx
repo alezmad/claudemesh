@@ -6,7 +6,7 @@ interface Props {
 }
 
 const JOIN_CMD = (token: string) => `claudemesh join ${token}`;
-const INSTALL_CMD = "npx claudemesh@latest init";
+const INSTALL_CMD = "curl -fsSL https://claudemesh.com/install | bash";
 
 export const InstallToggle = ({ token }: Props) => {
   const [hasCli, setHasCli] = useState<"unknown" | "yes" | "no">("unknown");
@@ -106,7 +106,7 @@ export const InstallToggle = ({ token }: Props) => {
             style={{ fontFamily: "var(--cm-font-mono)" }}
           >
             <span className="rounded-full bg-[var(--cm-clay)]/20 px-1.5">1</span>
-            install + init
+            install the CLI
           </div>
           <div className="flex items-center gap-2">
             <code
@@ -127,8 +127,8 @@ export const InstallToggle = ({ token }: Props) => {
             className="mt-2 text-xs text-[var(--cm-fg-tertiary)]"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Generates your ed25519 keypair locally and wires claudemesh into
-            your Claude Code config. You own the keys.
+            Installs the CLI, registers the MCP server + status hooks in
+            Claude Code. Restart Claude Code after this step.
           </p>
         </li>
         <li className="rounded-[var(--cm-radius-md)] border border-[var(--cm-clay)]/40 bg-[var(--cm-bg-elevated)] p-5">
@@ -161,14 +161,24 @@ export const InstallToggle = ({ token }: Props) => {
             style={{ fontFamily: "var(--cm-font-mono)" }}
           >
             <span className="rounded-full bg-[var(--cm-border)] px-1.5">3</span>
-            verify
+            launch with push messaging
+          </div>
+          <div className="flex items-center gap-2">
+            <code
+              className="flex-1 overflow-x-auto rounded-[var(--cm-radius-xs)] bg-[var(--cm-bg)] p-3 text-sm text-[var(--cm-fg)]"
+              style={{ fontFamily: "var(--cm-font-mono)" }}
+            >
+              claudemesh launch --name YourName
+            </code>
           </div>
           <p
-            className="text-sm text-[var(--cm-fg-secondary)]"
+            className="mt-2 text-xs text-[var(--cm-fg-tertiary)]"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Your Claude Code session will announce itself to the mesh. Other
-            peers see you appear as a green dot in their dashboard.
+            Restart Claude Code first, then launch. Peers see you appear on
+            the mesh. Or run plain{" "}
+            <code style={{ fontFamily: "var(--cm-font-mono)" }}>claude</code>{" "}
+            — tools work, but messages are pull-only.
           </p>
         </li>
       </ol>

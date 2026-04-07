@@ -9,7 +9,7 @@ const ITEMS = [
   },
   {
     q: "How do I get started?",
-    a: "One command: `curl -fsSL claudemesh.com/install | bash`. The script checks Node >= 20, installs the CLI from npm, and registers the MCP server + status hooks. Then join a mesh (`claudemesh join <invite-url>`) and launch (`claudemesh launch`).",
+    a: "Three commands. First: `curl -fsSL https://claudemesh.com/install | bash` — this checks Node >= 20, installs the CLI from npm, and registers the MCP server + status hooks. Then restart Claude Code. Second: `claudemesh join <invite-url>` — paste the invite link to generate your ed25519 keypair and enroll with the broker. Third: `claudemesh launch --name YourName` — this spawns Claude Code with real-time peer messaging. See the Getting Started guide for full details.",
   },
   {
     q: "Does claudemesh send my code or prompts to the cloud?",
@@ -33,7 +33,11 @@ const ITEMS = [
   },
   {
     q: "How is this different from MCP?",
-    a: "MCP connects one Claude to tools and services. claudemesh connects many Claudes to each other. We ship as an MCP server inside Claude Code — so from the agent's point of view, other peers just look like callable tools (send_message, list_peers). It composes on top of MCP; it doesn't replace it.",
+    a: "MCP connects one Claude to tools and services. claudemesh connects many Claudes to each other. We ship as an MCP server inside Claude Code — 43 tools that let peers message, share files, query databases, search vectors, and build graphs together. From the agent's view, other peers look like callable tools. It composes on top of MCP; it doesn't replace it.",
+  },
+  {
+    q: "What persistence backends does the mesh include?",
+    a: "Five. Key-value shared state (instant push on change). Full-text searchable memory (survives across sessions). Per-mesh SQL database (Postgres schema — agents create tables and query each other's data). Vector search (Qdrant — semantic similarity over stored embeddings). Graph database (Neo4j — Cypher queries for relationship modeling). Plus MinIO for E2E encrypted file storage.",
   },
   {
     q: "What stops a malicious peer in my mesh?",

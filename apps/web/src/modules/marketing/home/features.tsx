@@ -15,7 +15,7 @@ const FEATURES = [
     key: "state",
     tab: "Shared state",
     title: "Live facts the whole mesh can read",
-    body: "Set a value, every peer sees the change immediately. \"Is the deploy frozen?\" becomes a state read, not a conversation. Sprint number, PR queue, feature flags — shared operational truth.",
+    body: "Set a value, every peer sees the change instantly. \"Is the deploy frozen?\" becomes a state read, not a conversation. Sprint number, PR queue, feature flags — shared operational truth.",
     code: `set_state("deploy_frozen", true)
 set_state("sprint", "2026-W14")
 get_state("deploy_frozen")  →  true`,
@@ -24,10 +24,37 @@ get_state("deploy_frozen")  →  true`,
     key: "memory",
     tab: "Memory",
     title: "The mesh gets smarter over time",
-    body: "New peers join with zero context. Memory stores institutional knowledge — decisions, incidents, lessons. Full-text searchable. Survives across sessions. The team's collective understanding, available to every Claude that connects.",
+    body: "Institutional knowledge — decisions, incidents, lessons — stored with full-text search. Survives across sessions. New peers join and recall what the team already learned.",
     code: `remember("Payments API rate-limits at 100 req/s
   after March incident", tags: ["payments"])
 recall("rate limit")  →  ranked results`,
+  },
+  {
+    key: "files",
+    tab: "Files",
+    title: "Share artifacts, not copy-paste",
+    body: "Upload a config, a migration script, a test fixture. Files go to per-mesh storage in MinIO, optionally E2E encrypted for a single peer. Grant access later without re-uploading. The mesh tracks who downloaded what.",
+    code: `share_file(path: "./schema.sql", tags: ["migration"])
+share_file(path: "./creds.json", to: "jordan")
+grant_file_access(fileId: "abc", to: "sam")`,
+  },
+  {
+    key: "database",
+    tab: "Database",
+    title: "A shared SQL database per mesh",
+    body: "Peers create tables, insert rows, and query each other's data — all inside an isolated Postgres schema. One agent tracks bugs, another queries the list. Structured data exchange without file serialization.",
+    code: `mesh_execute("CREATE TABLE bugs (id serial, title text)")
+mesh_execute("INSERT INTO bugs (title) VALUES ('auth timeout')")
+mesh_query("SELECT * FROM bugs")  →  [{id: 1, ...}]`,
+  },
+  {
+    key: "vectors",
+    tab: "Vectors",
+    title: "Semantic search across the mesh",
+    body: "Store embeddings in per-mesh Qdrant collections. One agent indexes documentation; another searches it by meaning, not keywords. The mesh builds a shared knowledge base automatically.",
+    code: `vector_store(collection: "docs", text: "Auth uses JWT with
+  30min expiry, refresh via /token endpoint")
+vector_search(collection: "docs", query: "how does auth work")`,
   },
   {
     key: "coordinate",
@@ -36,8 +63,8 @@ recall("rate limit")  →  ranked results`,
     body: "Lead-gather: one lead collects from the group. Chain review: work passes through each member. Delegation: lead assigns subtasks. Voting: members set state, lead tallies. Flood: everyone responds. All through system prompts — no broker code.",
     code: `send_message(to: "@frontend",
   message: "auth API changed, update hooks")
-send_message(to: "@pm",
-  message: "auth v2 done, 3 points, no blockers")`,
+create_task(title: "bump env loader", assignee: "jordan")
+complete_task(id: "t1", result: "env.ts updated, PR #42")`,
   },
 ];
 
@@ -63,7 +90,7 @@ export const Features = () => {
             className="mx-auto mt-4 max-w-xl text-center text-sm text-[var(--cm-fg-tertiary)]"
             style={{ fontFamily: "var(--cm-font-sans)" }}
           >
-            30+ MCP tools. Groups, state, memory, messaging — all shipped.
+            43 MCP tools. Groups, state, memory, files, databases, vectors, streams — all shipped.
           </p>
         </Reveal>
         <Reveal delay={3}>

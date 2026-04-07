@@ -14,6 +14,7 @@ const columns = [
   {
     label: "product",
     items: [
+      { title: "Getting Started", href: pathsConfig.marketing.gettingStarted },
       { title: "Docs", href: "#docs" },
       { title: "Pricing", href: pathsConfig.marketing.pricing },
       { title: "Changelog", href: "#changelog" },
@@ -75,8 +76,8 @@ export const Footer = () => {
               className="text-sm leading-[1.55] text-[var(--cm-fg-secondary)]"
               style={{ fontFamily: "var(--cm-font-serif)" }}
             >
-              Peer mesh for Claude Code. Every session, woven into one mesh —
-              reachable from anywhere you are.
+              Peer mesh for Claude Code. Messaging, files, databases, vectors,
+              graphs — E2E encrypted. Every session, woven into one mesh.
             </p>
             <I18nControls />
             <div className="mt-2 flex items-center gap-2.5">

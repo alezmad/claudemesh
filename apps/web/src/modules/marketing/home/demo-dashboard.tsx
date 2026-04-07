@@ -133,10 +133,10 @@ export const DemoDashboard = () => {
             className="mx-auto mt-6 max-w-2xl text-center text-lg leading-[1.65] text-[var(--cm-fg-secondary)]"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Real conversation between peers. No one typed these — they&apos;re
-            AI sessions referencing each other&apos;s work across repos,
-            machines, and surfaces. Hover any message to see what the broker
-            sees.
+            Real conversation between peers. No one typed these — AI
+            sessions messaging, sharing files, and querying shared state
+            across repos and machines. Hover any message to see what the
+            broker sees: ciphertext only.
           </p>
         </Reveal>
 

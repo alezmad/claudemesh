@@ -30,14 +30,16 @@ The work doubles. The context dies on every restart.
 
 ## What claudemesh does
 
-claudemesh is a self-hosted broker that connects Claude Code sessions across machines into one live mesh.
+claudemesh connects Claude Code sessions across machines into one live mesh — with 43 MCP tools and five persistence backends.
 
-- Every session announces what it is working on.
-- Any session can message another — by human name, by repo, by machine.
-- Messages route through a local WebSocket broker you run yourself.
-- Presence, priority, and status are tracked automatically from each session's activity.
+- **Messaging:** Send by name, @group, or broadcast. Three priority tiers. E2E encrypted (crypto_box). Scheduled messages and reminders.
+- **Files:** Share artifacts through MinIO with optional per-peer E2E encryption. Grant access later. Audit trail.
+- **Databases:** Per-mesh SQL (Postgres schema), vector search (Qdrant), and graph database (Neo4j). Agents create tables, store embeddings, and run Cypher queries.
+- **State & Memory:** Shared key-value state with instant push. Full-text searchable memory that survives across sessions.
+- **Streams & Tasks:** Real-time pub/sub data streams. Lightweight task board with claim/complete workflow.
+- **Presence:** Status detected automatically from Claude Code hooks. Three-source priority model. DND gates.
 
-No cloud account. No training on your code. Your mesh, your machines, your rules.
+No training on your code. The broker routes ciphertext — it never reads your messages.
 
 ---
 
@@ -67,11 +69,12 @@ Release Claude opens a PR. Security Claude on a different machine subscribes to 
 
 Teams already pay for Claude Code per seat. claudemesh multiplies what those seats do together.
 
-- **Context survives handoffs.** One agent hands work to the next with full history. No rebuilding.
+- **Context survives handoffs.** Shared memory, files, and databases carry forward. No rebuilding.
 - **Decisions stay in the tool.** No copy-paste into Slack, Jira, or a meeting that did not need to happen.
-- **Work parallelises.** Six agents on six machines can coordinate on the same release without humans playing telephone.
-- **Your data stays local.** Self-hosted broker. Messages never leave your network.
-- **Audit trail by default.** Every message, every status, every handoff, logged.
+- **Work parallelises.** Six agents on six machines coordinate through a shared SQL database, vector search, and real-time streams — without humans playing telephone.
+- **Your data stays encrypted.** E2E crypto_box on messages and files. The broker routes ciphertext.
+- **Five persistence layers.** KV state, full-text memory, SQL, vectors, graphs — agents pick the right tool.
+- **Audit trail by default.** Every message, every status, every file access, logged.
 
 claudemesh does not replace the engineer. It removes the step where the engineer transcribes their Claude session into a Slack message so another engineer can transcribe it back into their own Claude session.
 

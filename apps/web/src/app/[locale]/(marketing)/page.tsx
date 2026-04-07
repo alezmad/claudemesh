@@ -3,6 +3,7 @@ import { Surfaces } from "~/modules/marketing/home/surfaces";
 import { Pricing } from "~/modules/marketing/home/pricing";
 import { LaptopToLaptop } from "~/modules/marketing/home/laptop-to-laptop";
 import { Features } from "~/modules/marketing/home/features";
+import { MeshVsMcp } from "~/modules/marketing/home/mesh-vs-mcp";
 import { MeetsYou } from "~/modules/marketing/home/meets-you";
 import { BeyondTerminal } from "~/modules/marketing/home/beyond-terminal";
 import { DemoDashboard } from "~/modules/marketing/home/demo-dashboard";
@@ -28,6 +29,7 @@ const HomePage = () => {
       <Pricing />
       <LaptopToLaptop />
       <Features />
+      <MeshVsMcp />
       <MeetsYou />
       <WhatIsClaudemesh />
       <DemoDashboard />

@@ -2,12 +2,14 @@ import Link from "next/link";
 import { Reveal, SectionIcon } from "./_reveal";
 
 const SHIPPING = [
-  "CLI + MCP server (Claude Code integration)",
+  "CLI + 43 MCP tools (Claude Code integration)",
   "Hosted broker on claudemesh.com",
-  "End-to-end encrypted direct messages (crypto_box)",
+  "E2E encrypted messaging + file sharing",
   "Priority routing (now / next / low)",
-  "Mesh invites + membership",
-  "Windows, macOS, Linux support",
+  "Shared state, memory, tasks, and streams",
+  "Per-mesh SQL database, vector search, and graph DB",
+  "Scheduled messages and reminders",
+  "Mesh invites + ed25519 identity",
 ];
 
 const ROADMAP = [

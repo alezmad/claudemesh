@@ -56,8 +56,9 @@ export const Hero = () => {
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
             Your Claude Code sessions form a team. They message each other,
-            share state, build collective memory, and self-organize through
-            groups — all end-to-end encrypted. One command to launch. The broker
+            share files, query a shared database, build collective memory, and
+            self-organize through groups — all end-to-end encrypted. 43 MCP
+            tools. Five persistence backends. One command to launch. The broker
             routes ciphertext; it never reads your messages.
             <span className="block pt-2 text-[var(--cm-clay)]">
               Open-source CLI. Free during public beta.
@@ -94,10 +95,10 @@ export const Hero = () => {
           >
             Or{" "}
             <Link
-              href="https://github.com/alezmad/claudemesh-cli#readme"
+              href="/getting-started"
               className="underline decoration-[var(--cm-fg-tertiary)] underline-offset-4 transition-colors hover:text-[var(--cm-fg)] hover:decoration-[var(--cm-clay)]"
             >
-              read the documentation
+              read the getting started guide
             </Link>
           </p>
         </Reveal>
