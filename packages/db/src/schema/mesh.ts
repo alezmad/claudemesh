@@ -353,24 +353,37 @@ export const meshFileKeyRelations = relations(meshFileKey, ({ one }) => ({
 }));
 
 /**
- * Per-peer context snapshot. Each peer (presence) has at most one context
+ * Per-peer context snapshot. Each peer (member) has at most one context
  * entry per mesh, upserted on each share_context call. Allows peers to
  * discover what others are working on, which files they've read, and
  * key findings — without sending a direct message.
+ *
+ * `memberId` is the stable upsert key (survives reconnects). `presenceId`
+ * is kept for backwards-compat but is nullable — new rows should always
+ * populate `memberId`. The unique index on (meshId, memberId) prevents
+ * stale rows from accumulating when a session reconnects with a new
+ * ephemeral presenceId.
  */
-export const meshContext = meshSchema.table("context", {
-  id: text().primaryKey().notNull().$defaultFn(generateId),
-  meshId: text()
-    .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
-    .notNull(),
-  presenceId: text().references(() => presence.id, { onDelete: "cascade" }),
-  peerName: text(),
-  summary: text().notNull(),
-  filesRead: text().array().default([]),
-  keyFindings: text().array().default([]),
-  tags: text().array().default([]),
-  updatedAt: timestamp().defaultNow().notNull(),
-});
+export const meshContext = meshSchema.table(
+  "context",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    memberId: text().references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    presenceId: text().references(() => presence.id, { onDelete: "cascade" }),
+    peerName: text(),
+    summary: text().notNull(),
+    filesRead: text().array().default([]),
+    keyFindings: text().array().default([]),
+    tags: text().array().default([]),
+    updatedAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("context_mesh_member_idx").on(table.meshId, table.memberId),
+  ],
+);
 
 /**
  * Mesh-scoped task board. Peers can create tasks, claim them, and mark

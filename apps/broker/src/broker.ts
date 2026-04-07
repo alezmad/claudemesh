@@ -955,8 +955,13 @@ export async function grantFileKey(
 // --- Context sharing ---
 
 /**
- * Upsert a context snapshot for a peer. Each (meshId, presenceId) pair
- * has at most one context row — repeated calls update it in place.
+ * Upsert a context snapshot for a peer. When `memberId` is provided the
+ * row is keyed on (meshId, memberId) — a stable identifier that survives
+ * reconnects. This prevents stale rows from accumulating every time a
+ * session reconnects with a fresh ephemeral presenceId.
+ *
+ * Falls back to (meshId, presenceId) lookup when memberId is absent
+ * (e.g. legacy callers or anonymous connections).
  */
 export async function shareContext(
   meshId: string,
@@ -966,24 +971,27 @@ export async function shareContext(
   filesRead?: string[],
   keyFindings?: string[],
   tags?: string[],
+  memberId?: string,
 ): Promise<string> {
   const now = new Date();
-  // Try to find existing context for this presence in this mesh.
+
+  // Build the WHERE clause: prefer stable memberId, fall back to presenceId.
+  const lookupWhere = memberId
+    ? and(eq(meshContext.meshId, meshId), eq(meshContext.memberId, memberId))
+    : and(eq(meshContext.meshId, meshId), eq(meshContext.presenceId, presenceId));
+
   const [existing] = await db
     .select({ id: meshContext.id })
     .from(meshContext)
-    .where(
-      and(
-        eq(meshContext.meshId, meshId),
-        eq(meshContext.presenceId, presenceId),
-      ),
-    )
+    .where(lookupWhere)
     .limit(1);
 
   if (existing) {
     await db
       .update(meshContext)
       .set({
+        // Keep presenceId current so it reflects the latest connection.
+        presenceId,
         peerName: peerName ?? null,
         summary,
         filesRead: filesRead ?? [],
@@ -999,6 +1007,7 @@ export async function shareContext(
     .insert(meshContext)
     .values({
       meshId,
+      memberId: memberId ?? null,
       presenceId,
       peerName: peerName ?? null,
       summary,
@@ -1248,16 +1257,22 @@ export async function createStream(
   name: string,
   createdByName: string,
 ): Promise<string> {
-  const existing = await db
+  // Atomic upsert: INSERT ... ON CONFLICT DO NOTHING to avoid TOCTOU race
+  // when two callers concurrently attempt to create the same stream.
+  const [inserted] = await db
+    .insert(meshStream)
+    .values({ meshId, name, createdByName })
+    .onConflictDoNothing()
+    .returning({ id: meshStream.id });
+
+  if (inserted) return inserted.id;
+
+  // Row already existed — fetch the id.
+  const [existing] = await db
     .select({ id: meshStream.id })
     .from(meshStream)
     .where(and(eq(meshStream.meshId, meshId), eq(meshStream.name, name)));
-  if (existing.length > 0) return existing[0]!.id;
-  const [row] = await db
-    .insert(meshStream)
-    .values({ meshId, name, createdByName })
-    .returning({ id: meshStream.id });
-  return row!.id;
+  return existing!.id;
 }
 
 /**
