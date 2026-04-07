@@ -34,24 +34,24 @@ import { VERSION } from "./version";
 const launch = defineCommand({
   meta: {
     name: "launch",
-    description: "Launch Claude Code connected to a mesh with real-time peer messaging",
+    description: "Spawn a Claude Code session with mesh connectivity and MCP tools",
   },
   args: {
     name: {
       type: "string",
-      description: "Display name for this session",
+      description: "Display name visible to other peers",
     },
     role: {
       type: "string",
-      description: "Role tag (dev, lead, analyst — free-form)",
+      description: "Free-form role tag: `dev`, `lead`, `analyst`, etc",
     },
     groups: {
       type: "string",
-      description: 'Groups to join: "group:role,group2" — colon sets role. Hierarchy via slash: "eng/frontend:lead"',
+      description: 'Groups to join as `group:role,...` — e.g. `"eng/frontend:lead,qa:member"`',
     },
     mesh: {
       type: "string",
-      description: "Select mesh by slug (interactive picker if omitted and >1 joined)",
+      description: "Mesh slug (interactive picker if omitted and >1 joined)",
     },
     join: {
       type: "string",
@@ -59,21 +59,21 @@ const launch = defineCommand({
     },
     "message-mode": {
       type: "string",
-      description: "push (default) | inbox | off — controls how peer messages are delivered",
+      description: '`"push"` (default) | `"inbox"` | `"off"` — how peer messages arrive',
     },
     "system-prompt": {
       type: "string",
-      description: "Set Claude's system prompt for this session",
+      description: "Custom system prompt for this Claude session",
     },
     yes: {
       type: "boolean",
       alias: "y",
-      description: "Skip permission confirmation",
+      description: "Skip the --dangerously-skip-permissions confirmation",
       default: false,
     },
     quiet: {
       type: "boolean",
-      description: "Skip banner and all interactive prompts",
+      description: "Suppress banner and interactive prompts",
       default: false,
     },
   },
@@ -86,7 +86,7 @@ const launch = defineCommand({
 const install = defineCommand({
   meta: {
     name: "install",
-    description: "Register MCP server + status hooks with Claude Code",
+    description: "Register MCP server and status hooks with Claude Code",
   },
   args: {
     "no-hooks": {
@@ -103,12 +103,12 @@ const install = defineCommand({
 const join = defineCommand({
   meta: {
     name: "join",
-    description: "Join a mesh via invite URL",
+    description: "Join a mesh via invite URL or token",
   },
   args: {
     url: {
       type: "positional",
-      description: "Invite URL (https://claudemesh.com/join/...)",
+      description: "Invite URL (`https://claudemesh.com/join/...`) or token",
       required: true,
     },
   },
@@ -120,12 +120,12 @@ const join = defineCommand({
 const leave = defineCommand({
   meta: {
     name: "leave",
-    description: "Leave a joined mesh",
+    description: "Leave a joined mesh and remove its local keypair",
   },
   args: {
     slug: {
       type: "positional",
-      description: "Mesh slug to leave",
+      description: "Mesh slug to leave (see `claudemesh list`)",
       required: true,
     },
   },
@@ -145,24 +145,24 @@ const main = defineCommand({
     create: defineCommand({
       meta: { name: "create", description: "Create a new mesh from a template" },
       args: {
-        template: { type: "string", description: "Template name (dev-team, research, ops-incident, simulation, personal)" },
-        "list-templates": { type: "boolean", description: "List available templates", default: false },
+        template: { type: "string", description: "Template name: `dev-team`, `research`, `ops-incident`, `simulation`, `personal`" },
+        "list-templates": { type: "boolean", description: "List available templates and exit", default: false },
       },
       run({ args }) { runCreate(args); },
     }),
     install,
     uninstall: defineCommand({
-      meta: { name: "uninstall", description: "Remove MCP server and hooks" },
+      meta: { name: "uninstall", description: "Remove MCP server and hooks from Claude Code config" },
       run() { runUninstall(); },
     }),
     join,
     list: defineCommand({
-      meta: { name: "list", description: "Show joined meshes and identities" },
+      meta: { name: "list", description: "Show joined meshes, slugs, and local identities" },
       run() { runList(); },
     }),
     leave,
     peers: defineCommand({
-      meta: { name: "peers", description: "List connected peers in the mesh" },
+      meta: { name: "peers", description: "List online peers with status, summary, and groups" },
       args: {
         mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
         json: { type: "boolean", description: "Output as JSON", default: false },
@@ -170,32 +170,32 @@ const main = defineCommand({
       async run({ args }) { await runPeers(args); },
     }),
     send: defineCommand({
-      meta: { name: "send", description: "Send a message to a peer, group, or broadcast" },
+      meta: { name: "send", description: "Send a message to a peer, group, or all peers" },
       args: {
-        to: { type: "positional", description: "Recipient: display name, @group, pubkey, or *", required: true },
+        to: { type: "positional", description: "Recipient: display name, `@group`, `*` (broadcast), or pubkey hex", required: true },
         message: { type: "positional", description: "Message text", required: true },
         mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
-        priority: { type: "string", description: "now | next (default) | low" },
+        priority: { type: "string", description: '`"now"` | `"next"` (default) | `"low"`' },
       },
       async run({ args }) { await runSend(args, args.to, args.message); },
     }),
     inbox: defineCommand({
-      meta: { name: "inbox", description: "Read pending peer messages" },
+      meta: { name: "inbox", description: "Drain pending inbound messages" },
       args: {
         mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
         json: { type: "boolean", description: "Output as JSON", default: false },
-        wait: { type: "string", description: "Seconds to wait for broker delivery (default: 1)" },
+        wait: { type: "string", description: "Seconds to wait for broker delivery (default: `1`)" },
       },
       async run({ args }) {
         await runInbox({ ...args, wait: args.wait ? parseInt(args.wait, 10) : undefined });
       },
     }),
     state: defineCommand({
-      meta: { name: "state", description: "Read or write shared mesh state" },
+      meta: { name: "state", description: "Get, set, or list shared key-value state in the mesh" },
       args: {
-        action: { type: "positional", description: "get | set | list", required: true },
-        key: { type: "positional", description: "State key (required for get/set)" },
-        value: { type: "positional", description: "Value to set (required for set)" },
+        action: { type: "positional", description: "`get <key>` | `set <key> <value>` | `list`", required: true },
+        key: { type: "positional", description: "State key (required for `get` and `set`)" },
+        value: { type: "positional", description: "Value to store (required for `set`)" },
         mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
         json: { type: "boolean", description: "Output as JSON", default: false },
       },
@@ -223,32 +223,32 @@ const main = defineCommand({
       async run({ args }) { await runInfo(args); },
     }),
     remember: defineCommand({
-      meta: { name: "remember", description: "Store a memory in the mesh (accessible to all peers)" },
+      meta: { name: "remember", description: "Store a persistent memory visible to all peers" },
       args: {
-        content: { type: "positional", description: "Text to remember", required: true },
+        content: { type: "positional", description: "Text to store", required: true },
         mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
-        tags: { type: "string", description: "Comma-separated tags (e.g. task,context)" },
+        tags: { type: "string", description: "Comma-separated tags, e.g. `task,context`" },
         json: { type: "boolean", description: "Output as JSON", default: false },
       },
       async run({ args }) { await runRemember(args, args.content); },
     }),
     recall: defineCommand({
-      meta: { name: "recall", description: "Search mesh memory by keyword or phrase" },
+      meta: { name: "recall", description: "Search mesh memories by keyword or phrase" },
       args: {
-        query: { type: "positional", description: "Search query", required: true },
+        query: { type: "positional", description: "Full-text search query", required: true },
         mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
         json: { type: "boolean", description: "Output as JSON", default: false },
       },
       async run({ args }) { await runRecall(args, args.query); },
     }),
     remind: defineCommand({
-      meta: { name: "remind", description: "Schedule a reminder or delayed message via the broker" },
+      meta: { name: "remind", description: "Schedule a delayed message. Also: `remind list`, `remind cancel <id>`" },
       args: {
-        message: { type: "positional", description: "Message text, or: list | cancel <id>", required: false },
-        extra: { type: "positional", description: "Additional positional args", required: false },
-        in: { type: "string", description: 'Deliver after duration: "2h", "30m", "90s"' },
-        at: { type: "string", description: 'Deliver at time: "15:00" or ISO timestamp' },
-        to: { type: "string", description: "Recipient (default: self). Name, @group, pubkey, or *" },
+        message: { type: "positional", description: "Message text — or `list` / `cancel <id>` to manage reminders", required: false },
+        extra: { type: "positional", description: "Reminder ID for `cancel`", required: false },
+        in: { type: "string", description: 'Deliver after duration: `"2h"`, `"30m"`, `"90s"`' },
+        at: { type: "string", description: 'Deliver at time: `"15:00"` or ISO timestamp' },
+        to: { type: "string", description: "Recipient (default: self). Name, `@group`, `*`, or pubkey" },
         mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
         json: { type: "boolean", description: "Output as JSON", default: false },
       },
@@ -259,23 +259,23 @@ const main = defineCommand({
       },
     }),
     status: defineCommand({
-      meta: { name: "status", description: "Check broker reachability for each joined mesh" },
+      meta: { name: "status", description: "Check broker connectivity for each joined mesh" },
       async run() { await runStatus(); },
     }),
     doctor: defineCommand({
-      meta: { name: "doctor", description: "Diagnose install, config, keypairs, and PATH" },
+      meta: { name: "doctor", description: "Diagnose install, config, keypairs, and PATH issues" },
       async run() { await runDoctor(); },
     }),
     mcp: defineCommand({
-      meta: { name: "mcp", description: "Start MCP server (stdio — invoked by Claude Code, not users)" },
+      meta: { name: "mcp", description: "Start MCP server on stdio (called by Claude Code, not users)" },
       async run() { await startMcpServer(); },
     }),
     "seed-test-mesh": defineCommand({
-      meta: { name: "seed-test-mesh", description: "Dev only: inject a mesh into config (skips invite flow)" },
+      meta: { name: "seed-test-mesh", description: "Dev: inject a mesh into local config, skip invite flow" },
       run({ rawArgs }) { runSeedTestMesh(rawArgs); },
     }),
     hook: defineCommand({
-      meta: { name: "hook", description: "Internal hook handler (invoked by Claude Code hooks)" },
+      meta: { name: "hook", description: "Internal: handle Claude Code hook events" },
       async run({ rawArgs }) { await runHook(rawArgs); },
     }),
   },
