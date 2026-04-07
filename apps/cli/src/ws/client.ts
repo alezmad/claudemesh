@@ -38,6 +38,13 @@ export interface PeerInfo {
   peerType?: "ai" | "human" | "connector";
   channel?: string;
   model?: string;
+  stats?: {
+    messagesIn?: number;
+    messagesOut?: number;
+    toolCalls?: number;
+    uptime?: number;
+    errors?: number;
+  };
 }
 
 export interface InboundPush {
@@ -99,6 +106,16 @@ export class BrokerClient {
   private reconnectAttempt = 0;
   private helloTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+
+  // --- Stats counters ---
+  private _statsCounters = {
+    messagesIn: 0,
+    messagesOut: 0,
+    toolCalls: 0,
+    errors: 0,
+  };
+  private _sessionStartedAt = Date.now();
+  private _statsReportTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private mesh: JoinedMesh,
@@ -337,6 +354,42 @@ export class BrokerClient {
     this.ws.send(JSON.stringify({ type: "set_summary", summary }));
   }
 
+  /** Report resource usage stats to the broker. */
+  setStats(stats?: Record<string, number>): void {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    const payload = stats ?? {
+      ...this._statsCounters,
+      uptime: Math.round((Date.now() - this._sessionStartedAt) / 1000),
+    };
+    this.ws.send(JSON.stringify({ type: "set_stats", stats: payload }));
+  }
+
+  /** Increment the tool call counter. */
+  incrementToolCalls(): void {
+    this._statsCounters.toolCalls++;
+  }
+
+  /** Increment the error counter. */
+  incrementErrors(): void {
+    this._statsCounters.errors++;
+  }
+
+  /** Start auto-reporting stats every 60 seconds. */
+  startStatsReporting(): void {
+    if (this._statsReportTimer) return;
+    this._statsReportTimer = setInterval(() => {
+      this.setStats();
+    }, 60_000);
+  }
+
+  /** Stop auto-reporting stats. */
+  stopStatsReporting(): void {
+    if (this._statsReportTimer) {
+      clearInterval(this._statsReportTimer);
+      this._statsReportTimer = null;
+    }
+  }
+
   /** Join a group with an optional role. */
   async joinGroup(name: string, role?: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
@@ -486,6 +539,11 @@ export class BrokerClient {
   private scheduledAckResolvers = new Map<string, { resolve: (result: { scheduledId: string; deliverAt: number } | null) => void; timer: NodeJS.Timeout }>();
   private scheduledListResolvers = new Map<string, { resolve: (messages: Array<{ id: string; to: string; message: string; deliverAt: number; createdAt: number }>) => void; timer: NodeJS.Timeout }>();
   private cancelScheduledResolvers = new Map<string, { resolve: (ok: boolean) => void; timer: NodeJS.Timeout }>();
+  private mcpRegisterResolvers = new Map<string, { resolve: (result: { serverName: string; toolCount: number } | null) => void; timer: NodeJS.Timeout }>();
+  private mcpListResolvers = new Map<string, { resolve: (servers: Array<{ name: string; description: string; hostedBy: string; tools: Array<{ name: string; description: string }> }>) => void; timer: NodeJS.Timeout }>();
+  private mcpCallResolvers = new Map<string, { resolve: (result: { result?: unknown; error?: string }) => void; timer: NodeJS.Timeout }>();
+  /** Handler for inbound mcp_call_forward messages. Set by the MCP server. */
+  private mcpCallForwardHandler: ((forward: { callId: string; serverName: string; toolName: string; args: Record<string, unknown>; callerName: string }) => Promise<{ result?: unknown; error?: string }>) | null = null;
 
   async messageStatus(messageId: string): Promise<{ messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
@@ -822,6 +880,65 @@ export class BrokerClient {
     return () => this.stateChangeHandlers.delete(handler);
   }
 
+  // --- MCP proxy ---
+
+  /** Register an MCP server with the mesh. */
+  async mcpRegister(
+    serverName: string,
+    description: string,
+    tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>,
+  ): Promise<{ serverName: string; toolCount: number } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.mcpRegisterResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.mcpRegisterResolvers.delete(reqId)) resolve(null);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "mcp_register", serverName, description, tools, _reqId: reqId }));
+    });
+  }
+
+  /** Unregister an MCP server from the mesh. */
+  async mcpUnregister(serverName: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "mcp_unregister", serverName }));
+  }
+
+  /** List MCP servers available in the mesh. */
+  async mcpList(): Promise<Array<{ name: string; description: string; hostedBy: string; tools: Array<{ name: string; description: string }> }>> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.mcpListResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.mcpListResolvers.delete(reqId)) resolve([]);
+      }, 5_000) });
+      this.ws!.send(JSON.stringify({ type: "mcp_list", _reqId: reqId }));
+    });
+  }
+
+  /** Call a tool on a mesh-registered MCP server. 30s timeout. */
+  async mcpCall(serverName: string, toolName: string, args: Record<string, unknown>): Promise<{ result?: unknown; error?: string }> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return { error: "not connected" };
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.mcpCallResolvers.set(reqId, { resolve, timer: setTimeout(() => {
+        if (this.mcpCallResolvers.delete(reqId)) resolve({ error: "MCP call timed out (30s)" });
+      }, 30_000) });
+      this.ws!.send(JSON.stringify({ type: "mcp_call", serverName, toolName, args, _reqId: reqId }));
+    });
+  }
+
+  /** Set the handler for inbound forwarded MCP calls. */
+  onMcpCallForward(handler: (forward: { callId: string; serverName: string; toolName: string; args: Record<string, unknown>; callerName: string }) => Promise<{ result?: unknown; error?: string }>): void {
+    this.mcpCallForwardHandler = handler;
+  }
+
+  /** Send a response to a forwarded MCP call back to the broker. */
+  private sendMcpCallResponse(callId: string, result?: unknown, error?: string): void {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "mcp_call_response", callId, result, error }));
+  }
+
   // --- Mesh info ---
   private meshInfoResolvers = new Map<string, { resolve: (result: Record<string, unknown> | null) => void; timer: NodeJS.Timeout }>();
 
@@ -1138,6 +1255,42 @@ export class BrokerClient {
       this.resolveFromMap(this.cancelScheduledResolvers, msgReqId, Boolean(msg.ok));
       return;
     }
+    if (msg.type === "mcp_register_ack") {
+      this.resolveFromMap(this.mcpRegisterResolvers, msgReqId, {
+        serverName: String(msg.serverName ?? ""),
+        toolCount: Number(msg.toolCount ?? 0),
+      });
+      return;
+    }
+    if (msg.type === "mcp_list_result") {
+      const servers = (msg.servers as Array<{ name: string; description: string; hostedBy: string; tools: Array<{ name: string; description: string }> }>) ?? [];
+      this.resolveFromMap(this.mcpListResolvers, msgReqId, servers);
+      return;
+    }
+    if (msg.type === "mcp_call_result") {
+      this.resolveFromMap(this.mcpCallResolvers, msgReqId, {
+        ...(msg.result !== undefined ? { result: msg.result } : {}),
+        ...(msg.error ? { error: String(msg.error) } : {}),
+      });
+      return;
+    }
+    if (msg.type === "mcp_call_forward") {
+      const forward = {
+        callId: String(msg.callId ?? ""),
+        serverName: String(msg.serverName ?? ""),
+        toolName: String(msg.toolName ?? ""),
+        args: (msg.args as Record<string, unknown>) ?? {},
+        callerName: String(msg.callerName ?? ""),
+      };
+      if (this.mcpCallForwardHandler) {
+        this.mcpCallForwardHandler(forward)
+          .then((res) => this.sendMcpCallResponse(forward.callId, res.result, res.error))
+          .catch((e) => this.sendMcpCallResponse(forward.callId, undefined, e instanceof Error ? e.message : String(e)));
+      } else {
+        this.sendMcpCallResponse(forward.callId, undefined, "No MCP call handler registered on this peer");
+      }
+      return;
+    }
     if (msg.type === "error") {
       this.debug(`broker error: ${msg.code} ${msg.message}`);
       const id = msg.id ? String(msg.id) : null;
@@ -1184,6 +1337,9 @@ export class BrokerClient {
           [this.streamCreatedResolvers, null],
           [this.listPeersResolvers, []],
           [this.meshInfoResolvers, null],
+          [this.mcpRegisterResolvers, null],
+          [this.mcpListResolvers, []],
+          [this.mcpCallResolvers, { error: "broker error" }],
         ];
         for (const [map, defaultVal] of allMaps) {
           const first = (map as Map<string, any>).entries().next().value as [string, { resolve: (v: unknown) => void; timer: NodeJS.Timeout }] | undefined;

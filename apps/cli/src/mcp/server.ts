@@ -194,6 +194,10 @@ If the channel meta contains \`subtype: reminder\`, this is a scheduled reminder
 | schedule_reminder(message, in_seconds?, deliver_at?, to?) | Schedule a reminder to yourself (no \`to\`) or a delayed message to a peer/group. Delivered as a push with \`subtype: reminder\` in the channel meta. |
 | list_scheduled() | List pending scheduled reminders and messages. |
 | cancel_scheduled(id) | Cancel a pending scheduled item. |
+| mesh_mcp_register(server_name, description, tools) | Register an MCP server with the mesh. Other peers can call its tools. |
+| mesh_mcp_list() | List MCP servers available in the mesh with their tools. |
+| mesh_tool_call(server_name, tool_name, args?) | Call a tool on a mesh-registered MCP server (30s timeout). |
+| mesh_mcp_remove(server_name) | Unregister an MCP server you registered. |
 
 If multiple meshes are joined, prefix \`to\` with \`<mesh-slug>:\` to disambiguate (e.g. \`dev-team:Alice\`).
 
@@ -957,6 +961,55 @@ Your message mode is "${messageMode}".
         results.push(`  server.notification: ${messageMode === "off" ? "disabled (mode=off)" : "enabled"}`);
 
         return text(results.join("\n"));
+      }
+
+      // --- MCP Proxy ---
+      case "mesh_mcp_register": {
+        const { server_name, description, tools: regTools } = (args ?? {}) as {
+          server_name?: string;
+          description?: string;
+          tools?: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+        };
+        if (!server_name || !description || !regTools?.length)
+          return text("mesh_mcp_register: `server_name`, `description`, and `tools` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_register: not connected", true);
+        const result = await client.mcpRegister(server_name, description, regTools);
+        if (!result) return text("mesh_mcp_register: broker did not acknowledge", true);
+        return text(`Registered MCP server "${result.serverName}" with ${result.toolCount} tool(s). Other peers can now call its tools via mesh_tool_call.`);
+      }
+      case "mesh_mcp_list": {
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_list: not connected", true);
+        const servers = await client.mcpList();
+        if (servers.length === 0) return text("No MCP servers registered in the mesh.");
+        const lines = servers.map((s) => {
+          const toolList = s.tools.map((t) => `    - **${t.name}**: ${t.description}`).join("\n");
+          return `- **${s.name}** (hosted by ${s.hostedBy}): ${s.description}\n${toolList}`;
+        });
+        return text(`${servers.length} MCP server(s) in mesh:\n${lines.join("\n")}`);
+      }
+      case "mesh_tool_call": {
+        const { server_name: callServer, tool_name: callTool, args: callArgs } = (args ?? {}) as {
+          server_name?: string;
+          tool_name?: string;
+          args?: Record<string, unknown>;
+        };
+        if (!callServer || !callTool)
+          return text("mesh_tool_call: `server_name` and `tool_name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_tool_call: not connected", true);
+        const callResult = await client.mcpCall(callServer, callTool, callArgs ?? {});
+        if (callResult.error) return text(`mesh_tool_call error: ${callResult.error}`, true);
+        return text(typeof callResult.result === "string" ? callResult.result : JSON.stringify(callResult.result, null, 2));
+      }
+      case "mesh_mcp_remove": {
+        const { server_name: rmServer } = (args ?? {}) as { server_name?: string };
+        if (!rmServer) return text("mesh_mcp_remove: `server_name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_remove: not connected", true);
+        await client.mcpUnregister(rmServer);
+        return text(`Unregistered MCP server "${rmServer}" from the mesh.`);
       }
 
       case "grant_file_access": {

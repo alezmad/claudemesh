@@ -609,6 +609,66 @@ export const TOOLS: Tool[] = [
     inputSchema: { type: "object", properties: {} },
   },
 
+  // --- MCP Proxy ---
+  {
+    name: "mesh_mcp_register",
+    description:
+      "Register an MCP server with the mesh. Other peers can invoke its tools through the mesh without restarting their sessions. Provide the server name, description, and full tool definitions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_name: { type: "string", description: "Unique name for the MCP server (e.g. 'github', 'jira')" },
+        description: { type: "string", description: "What this MCP server does" },
+        tools: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              description: { type: "string" },
+              inputSchema: { type: "object", description: "JSON Schema for tool arguments" },
+            },
+            required: ["name", "description", "inputSchema"],
+          },
+          description: "Tool definitions to expose",
+        },
+      },
+      required: ["server_name", "description", "tools"],
+    },
+  },
+  {
+    name: "mesh_mcp_list",
+    description:
+      "List MCP servers available in the mesh with their tools. Shows which peer hosts each server.",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "mesh_tool_call",
+    description:
+      "Call a tool on a mesh-registered MCP server. Route: you -> broker -> hosting peer -> execute -> result back. Timeout: 30s.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_name: { type: "string", description: "Name of the MCP server" },
+        tool_name: { type: "string", description: "Name of the tool to call" },
+        args: { type: "object", description: "Tool arguments (JSON object)" },
+      },
+      required: ["server_name", "tool_name"],
+    },
+  },
+  {
+    name: "mesh_mcp_remove",
+    description:
+      "Unregister an MCP server you previously registered with the mesh.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_name: { type: "string", description: "Name of the MCP server to remove" },
+      },
+      required: ["server_name"],
+    },
+  },
+
   // --- Diagnostics ---
   {
     name: "ping_mesh",

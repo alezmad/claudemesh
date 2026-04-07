@@ -118,6 +118,36 @@ export interface WSSetSummaryMessage {
   summary: string;
 }
 
+
+/** Client → broker: toggle visibility in the mesh. */
+export interface WSSetVisibleMessage {
+  type: "set_visible";
+  visible: boolean;
+  _reqId?: string;
+}
+
+/** Client → broker: set public profile metadata. */
+export interface WSSetProfileMessage {
+  type: "set_profile";
+  avatar?: string; // emoji or URL
+  title?: string; // short role label
+  bio?: string; // one-liner
+  capabilities?: string[]; // what I can help with
+  _reqId?: string;
+}
+/** Client → broker: self-report resource usage stats. */
+export interface WSSetStatsMessage {
+  type: "set_stats";
+  stats: {
+    messagesIn?: number;
+    messagesOut?: number;
+    toolCalls?: number;
+    uptime?: number; // seconds since session start
+    errors?: number;
+  };
+  _reqId?: string;
+}
+
 /** Client → broker: join a group with optional role. */
 export interface WSJoinGroupMessage {
   type: "join_group";
@@ -199,6 +229,20 @@ export interface WSPeersListMessage {
     peerType?: "ai" | "human" | "connector";
     channel?: string;
     model?: string;
+    stats?: {
+      messagesIn?: number;
+      messagesOut?: number;
+      toolCalls?: number;
+      uptime?: number;
+      errors?: number;
+    };
+    visible?: boolean;
+    profile?: {
+      avatar?: string;
+      title?: string;
+      bio?: string;
+      capabilities?: string[];
+    };
   }>;
   _reqId?: string;
 }
@@ -672,12 +716,168 @@ export interface WSStreamListMessage {
   _reqId?: string;
 }
 
+// --- MCP proxy messages ---
+
+/** Client → broker: register an MCP server with the mesh. */
+export interface WSMcpRegisterMessage {
+  type: "mcp_register";
+  serverName: string;
+  description: string;
+  tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+  _reqId?: string;
+}
+
+/** Client → broker: unregister an MCP server. */
+export interface WSMcpUnregisterMessage {
+  type: "mcp_unregister";
+  serverName: string;
+  _reqId?: string;
+}
+
+/** Client → broker: list all MCP servers in the mesh. */
+export interface WSMcpListMessage {
+  type: "mcp_list";
+  _reqId?: string;
+}
+
+/** Client → broker: call a tool on a mesh-registered MCP server. */
+export interface WSMcpCallMessage {
+  type: "mcp_call";
+  serverName: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  _reqId?: string;
+}
+
+/** Client → broker: response to a forwarded MCP call. */
+export interface WSMcpCallResponseMessage {
+  type: "mcp_call_response";
+  callId: string;
+  result?: unknown;
+  error?: string;
+  _reqId?: string;
+}
+
+/** Broker → client: acknowledgement for mcp_register. */
+export interface WSMcpRegisterAckMessage {
+  type: "mcp_register_ack";
+  serverName: string;
+  toolCount: number;
+  _reqId?: string;
+}
+
+/** Broker → client: list of MCP servers in the mesh. */
+export interface WSMcpListResultMessage {
+  type: "mcp_list_result";
+  servers: Array<{
+    name: string;
+    description: string;
+    hostedBy: string;
+    tools: Array<{ name: string; description: string }>;
+  }>;
+  _reqId?: string;
+}
+
+/** Broker → client: result of an MCP tool call. */
+export interface WSMcpCallResultMessage {
+  type: "mcp_call_result";
+  result?: unknown;
+  error?: string;
+  _reqId?: string;
+}
+
+/** Broker → client: forwarded MCP tool call to execute locally. */
+export interface WSMcpCallForwardMessage {
+  type: "mcp_call_forward";
+  callId: string;
+  serverName: string;
+  toolName: string;
+  args: Record<string, unknown>;
+  callerName: string;
+}
+
+// --- Webhook CRUD messages ---
+
+/** Client → broker: create an inbound webhook. */
+export interface WSCreateWebhookMessage {
+  type: "create_webhook";
+  name: string;
+  _reqId?: string;
+}
+
+/** Client → broker: list webhooks for the mesh. */
+export interface WSListWebhooksMessage {
+  type: "list_webhooks";
+  _reqId?: string;
+}
+
+/** Client → broker: deactivate a webhook. */
+export interface WSDeleteWebhookMessage {
+  type: "delete_webhook";
+  name: string;
+  _reqId?: string;
+}
+
+/** Broker → client: acknowledgement for create_webhook. */
+export interface WSWebhookAckMessage {
+  type: "webhook_ack";
+  name: string;
+  url: string;
+  secret: string;
+  _reqId?: string;
+}
+
+/** Broker → client: list of webhooks for the mesh. */
+export interface WSWebhookListMessage {
+  type: "webhook_list";
+  webhooks: Array<{ name: string; url: string; active: boolean; createdAt: string }>;
+  _reqId?: string;
+}
+
 /** Broker → client: structured error. */
 export interface WSErrorMessage {
   type: "error";
   code: string;
   message: string;
   id?: string;
+  _reqId?: string;
+}
+
+// --- Simulation clock messages ---
+
+/** Client → broker: set the simulation clock speed. */
+export interface WSSetClockMessage {
+  type: "set_clock";
+  speed: number; // multiplier: 1, 2, 5, 10, 50, 100
+  _reqId?: string;
+}
+
+/** Client → broker: pause the simulation clock. */
+export interface WSPauseClockMessage {
+  type: "pause_clock";
+  _reqId?: string;
+}
+
+/** Client → broker: resume a paused simulation clock. */
+export interface WSResumeClockMessage {
+  type: "resume_clock";
+  _reqId?: string;
+}
+
+/** Client → broker: get current clock status. */
+export interface WSGetClockMessage {
+  type: "get_clock";
+  _reqId?: string;
+}
+
+/** Broker → client: current simulation clock status. */
+export interface WSClockStatusMessage {
+  type: "clock_status";
+  speed: number;
+  paused: boolean;
+  tick: number;
+  simTime: string; // ISO timestamp
+  startedAt: string;
   _reqId?: string;
 }
 
@@ -753,6 +953,8 @@ export type WSClientMessage =
   | WSSetStatusMessage
   | WSListPeersMessage
   | WSSetSummaryMessage
+  | WSSetVisibleMessage
+  | WSSetProfileMessage
   | WSJoinGroupMessage
   | WSLeaveGroupMessage
   | WSSetStateMessage
@@ -789,9 +991,94 @@ export type WSClientMessage =
   | WSUnsubscribeMessage
   | WSListStreamsMessage
   | WSMeshInfoMessage
+  | WSSetClockMessage
+  | WSPauseClockMessage
+  | WSResumeClockMessage
+  | WSGetClockMessage
   | WSScheduleMessage
   | WSListScheduledMessage
-  | WSCancelScheduledMessage;
+  | WSCancelScheduledMessage
+  | WSMcpRegisterMessage
+  | WSMcpUnregisterMessage
+  | WSMcpListMessage
+  | WSMcpCallMessage
+  | WSMcpCallResponseMessage
+  | WSShareSkillMessage
+  | WSGetSkillMessage
+  | WSListSkillsMessage
+  | WSRemoveSkillMessage
+  | WSSetStatsMessage
+  | WSCreateWebhookMessage
+  | WSListWebhooksMessage
+  | WSDeleteWebhookMessage;
+
+// --- Skill messages ---
+
+/** Client → broker: publish or update a skill. */
+export interface WSShareSkillMessage {
+  type: "share_skill";
+  name: string;
+  description: string;
+  instructions: string;
+  tags?: string[];
+  _reqId?: string;
+}
+
+/** Client → broker: load a skill by name. */
+export interface WSGetSkillMessage {
+  type: "get_skill";
+  name: string;
+  _reqId?: string;
+}
+
+/** Client → broker: list skills, optionally filtered by keyword. */
+export interface WSListSkillsMessage {
+  type: "list_skills";
+  query?: string;
+  _reqId?: string;
+}
+
+/** Client → broker: remove a skill by name. */
+export interface WSRemoveSkillMessage {
+  type: "remove_skill";
+  name: string;
+  _reqId?: string;
+}
+
+/** Broker → client: acknowledgement for share_skill or remove_skill. */
+export interface WSSkillAckMessage {
+  type: "skill_ack";
+  name: string;
+  action: "shared" | "removed" | "not_found";
+  _reqId?: string;
+}
+
+/** Broker → client: response to get_skill with full skill data. */
+export interface WSSkillDataMessage {
+  type: "skill_data";
+  skill: {
+    name: string;
+    description: string;
+    instructions: string;
+    tags: string[];
+    author: string;
+    createdAt: string;
+  } | null;
+  _reqId?: string;
+}
+
+/** Broker → client: response to list_skills. */
+export interface WSSkillListMessage {
+  type: "skill_list";
+  skills: Array<{
+    name: string;
+    description: string;
+    tags: string[];
+    author: string;
+    createdAt: string;
+  }>;
+  _reqId?: string;
+}
 
 export type WSServerMessage =
   | WSHelloAckMessage
@@ -827,4 +1114,14 @@ export type WSServerMessage =
   | WSScheduledAckMessage
   | WSScheduledListMessage
   | WSCancelScheduledAckMessage
+  | WSMcpRegisterAckMessage
+  | WSMcpListResultMessage
+  | WSMcpCallResultMessage
+  | WSMcpCallForwardMessage
+  | WSClockStatusMessage
+  | WSSkillAckMessage
+  | WSSkillDataMessage
+  | WSSkillListMessage
+  | WSWebhookAckMessage
+  | WSWebhookListMessage
   | WSErrorMessage;

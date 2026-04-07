@@ -65,6 +65,10 @@ import {
   meshSchema,
   createStream,
   listStreams,
+  shareSkill,
+  getSkill,
+  listSkills,
+  removeSkill,
 } from "./broker";
 import { ensureBucket, meshBucketName, minioClient } from "./minio";
 import { qdrant, meshCollectionName, ensureCollection } from "./qdrant";
@@ -99,6 +103,20 @@ interface PeerConn {
   channel?: string;
   model?: string;
   groups: Array<{ name: string; role?: string }>;
+  stats?: {
+    messagesIn?: number;
+    messagesOut?: number;
+    toolCalls?: number;
+    uptime?: number;
+    errors?: number;
+  };
+  visible: boolean;
+  profile: {
+    avatar?: string;
+    title?: string;
+    bio?: string;
+    capabilities?: string[];
+  };
 }
 
 const connections = new Map<string, PeerConn>();
@@ -106,6 +124,24 @@ const connectionsPerMesh = new Map<string, number>();
 
 // Stream subscriptions: "meshId:streamName" → Set of presenceIds
 const streamSubscriptions = new Map<string, Set<string>>();
+
+// --- MCP proxy registry (in-memory, ephemeral) ---
+interface McpRegisteredServer {
+  meshId: string;
+  presenceId: string;
+  serverName: string;
+  description: string;
+  tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+  hostedByName: string;
+}
+/** Keyed by "meshId:serverName" */
+const mcpRegistry = new Map<string, McpRegisteredServer>();
+
+/** Pending MCP call forwards: callId → { resolve, timer } */
+const mcpCallResolvers = new Map<string, {
+  resolve: (result: { result?: unknown; error?: string }) => void;
+  timer: ReturnType<typeof setTimeout>;
+}>();
 
 /// Scheduled messages: meshId → Map<scheduledId, entry>
 interface ScheduledEntry {
@@ -770,6 +806,8 @@ async function handleHello(
     channel: hello.channel,
     model: hello.model,
     groups: initialGroups,
+    visible: true,
+    profile: {},
   });
   incMeshCount(hello.meshId);
   log.info("ws hello", {
@@ -969,6 +1007,7 @@ function handleConnection(ws: WebSocket): void {
                 ...(pc?.peerType ? { peerType: pc.peerType } : {}),
                 ...(pc?.channel ? { channel: pc.channel } : {}),
                 ...(pc?.model ? { model: pc.model } : {}),
+                ...(pc?.stats ? { stats: pc.stats } : {}),
               };
             }),
             ...(_reqId ? { _reqId } : {}),
@@ -987,6 +1026,15 @@ function handleConnection(ws: WebSocket): void {
           log.info("ws set_summary", {
             presence_id: presenceId,
             summary: summary.slice(0, 80),
+          });
+          break;
+        }
+        case "set_stats": {
+          const sm = msg as Extract<WSClientMessage, { type: "set_stats" }>;
+          conn.stats = sm.stats ?? {};
+          log.info("ws set_stats", {
+            presence_id: presenceId,
+            stats: conn.stats,
           });
           break;
         }
@@ -2138,6 +2186,142 @@ function handleConnection(ws: WebSocket): void {
           log.info("ws cancel_scheduled", { presence_id: presenceId, scheduled_id: cs.scheduledId, ok });
           break;
         }
+
+        // --- MCP proxy ---
+        case "mcp_register": {
+          const mr = msg as Extract<WSClientMessage, { type: "mcp_register" }>;
+          const regKey = `${conn.meshId}:${mr.serverName}`;
+          mcpRegistry.set(regKey, {
+            meshId: conn.meshId,
+            presenceId: presenceId,
+            serverName: mr.serverName,
+            description: mr.description,
+            tools: mr.tools,
+            hostedByName: conn.displayName,
+          });
+          sendToPeer(presenceId, {
+            type: "mcp_register_ack",
+            serverName: mr.serverName,
+            toolCount: mr.tools.length,
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws mcp_register", {
+            presence_id: presenceId,
+            server: mr.serverName,
+            tools: mr.tools.length,
+          });
+          break;
+        }
+        case "mcp_unregister": {
+          const mu = msg as Extract<WSClientMessage, { type: "mcp_unregister" }>;
+          const unregKey = `${conn.meshId}:${mu.serverName}`;
+          const entry = mcpRegistry.get(unregKey);
+          if (entry && entry.presenceId === presenceId) {
+            mcpRegistry.delete(unregKey);
+          }
+          log.info("ws mcp_unregister", {
+            presence_id: presenceId,
+            server: mu.serverName,
+          });
+          break;
+        }
+        case "mcp_list": {
+          const servers: Array<{
+            name: string;
+            description: string;
+            hostedBy: string;
+            tools: Array<{ name: string; description: string }>;
+          }> = [];
+          for (const [, entry] of mcpRegistry) {
+            if (entry.meshId !== conn.meshId) continue;
+            servers.push({
+              name: entry.serverName,
+              description: entry.description,
+              hostedBy: entry.hostedByName,
+              tools: entry.tools.map((t) => ({ name: t.name, description: t.description })),
+            });
+          }
+          sendToPeer(presenceId, {
+            type: "mcp_list_result",
+            servers,
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws mcp_list", {
+            presence_id: presenceId,
+            count: servers.length,
+          });
+          break;
+        }
+        case "mcp_call": {
+          const mc = msg as Extract<WSClientMessage, { type: "mcp_call" }>;
+          const callKey = `${conn.meshId}:${mc.serverName}`;
+          const server = mcpRegistry.get(callKey);
+          if (!server) {
+            sendToPeer(presenceId, {
+              type: "mcp_call_result",
+              error: `MCP server "${mc.serverName}" not found in mesh`,
+              ...(_reqId ? { _reqId } : {}),
+            });
+            break;
+          }
+          // Check hosting peer is still connected
+          const hostConn = connections.get(server.presenceId);
+          if (!hostConn) {
+            mcpRegistry.delete(callKey);
+            sendToPeer(presenceId, {
+              type: "mcp_call_result",
+              error: `MCP server "${mc.serverName}" host disconnected`,
+              ...(_reqId ? { _reqId } : {}),
+            });
+            break;
+          }
+          // Forward the call to the hosting peer
+          const callId = crypto.randomUUID();
+          const callPromise = new Promise<{ result?: unknown; error?: string }>((resolve) => {
+            const timer = setTimeout(() => {
+              if (mcpCallResolvers.delete(callId)) {
+                resolve({ error: "MCP call timed out (30s)" });
+              }
+            }, 30_000);
+            mcpCallResolvers.set(callId, { resolve, timer });
+          });
+          sendToPeer(server.presenceId, {
+            type: "mcp_call_forward",
+            callId,
+            serverName: mc.serverName,
+            toolName: mc.toolName,
+            args: mc.args,
+            callerName: conn.displayName,
+          });
+          // Wait for response from hosting peer
+          const callResult = await callPromise;
+          sendToPeer(presenceId, {
+            type: "mcp_call_result",
+            ...(callResult.result !== undefined ? { result: callResult.result } : {}),
+            ...(callResult.error ? { error: callResult.error } : {}),
+            ...(_reqId ? { _reqId } : {}),
+          });
+          log.info("ws mcp_call", {
+            presence_id: presenceId,
+            server: mc.serverName,
+            tool: mc.toolName,
+            ok: !callResult.error,
+          });
+          break;
+        }
+        case "mcp_call_response": {
+          const mcr = msg as Extract<WSClientMessage, { type: "mcp_call_response" }>;
+          const resolver = mcpCallResolvers.get(mcr.callId);
+          if (resolver) {
+            clearTimeout(resolver.timer);
+            mcpCallResolvers.delete(mcr.callId);
+            resolver.resolve({
+              ...(mcr.result !== undefined ? { result: mcr.result } : {}),
+              ...(mcr.error ? { error: mcr.error } : {}),
+            });
+          }
+          break;
+        }
       }
     } catch (e) {
       metrics.messagesRejectedTotal.inc({ reason: "parse_or_handler" });
@@ -2180,6 +2364,10 @@ function handleConnection(ws: WebSocket): void {
       for (const [key, subs] of streamSubscriptions) {
         subs.delete(presenceId);
         if (subs.size === 0) streamSubscriptions.delete(key);
+      }
+      // Clean up MCP servers registered by this peer
+      for (const [key, entry] of mcpRegistry) {
+        if (entry.presenceId === presenceId) mcpRegistry.delete(key);
       }
       log.info("ws close", { presence_id: presenceId });
     }
