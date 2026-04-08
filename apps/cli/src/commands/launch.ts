@@ -14,6 +14,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, writeFileSync, rmSync, readdirSync, statSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir, hostname, homedir } from "node:os";
 import { join } from "node:path";
@@ -421,9 +422,16 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   // passes -y / --yes. Without it, claudemesh tools still work because
   // `claudemesh install` pre-approves them via allowedTools in settings.json.
   // This keeps permissions tight for multi-person meshes.
+  // Generate a stable session ID for this launch. Used by the broker to:
+  // - detect reconnections (same session ID = restore state)
+  // - disambiguate multiple peers in the same project
+  // - persist identity across --resume (Claude reuses the session ID)
+  const claudeSessionId = randomUUID();
+
   const claudeArgs = [
     "--dangerously-load-development-channels",
     "server:claudemesh",
+    "--session-id", claudeSessionId,
     ...(args.skipPermConfirm ? ["--dangerously-skip-permissions"] : []),
     ...(args.systemPrompt ? ["--system-prompt", args.systemPrompt] : []),
     ...filtered,
@@ -437,6 +445,7 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
       ...process.env,
       CLAUDEMESH_CONFIG_DIR: tmpDir,
       CLAUDEMESH_DISPLAY_NAME: displayName,
+      CLAUDEMESH_SESSION_ID: claudeSessionId,
       MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? "30000",
       MAX_MCP_OUTPUT_TOKENS: process.env.MAX_MCP_OUTPUT_TOKENS ?? "50000",
       ...(role ? { CLAUDEMESH_ROLE: role } : {}),

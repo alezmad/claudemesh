@@ -23,6 +23,43 @@ import {
 import { signHello } from "../crypto/hello-sig";
 import { generateKeypair } from "../crypto/keypair";
 
+/**
+ * Detect the Claude Code session ID from the filesystem.
+ * Fallback for when CLAUDEMESH_SESSION_ID env var isn't set
+ * (e.g., claude --resume without going through claudemesh launch).
+ *
+ * Scans ~/.claude/projects/<project-hash>/ for the most recently
+ * modified .jsonl file and extracts its sessionId.
+ */
+function detectClaudeSessionId(): string | null {
+  try {
+    const { readdirSync, statSync, readFileSync } = require("node:fs");
+    const { join } = require("node:path");
+    const { homedir } = require("node:os");
+    const cwd = process.cwd();
+    // Claude Code hashes the project path for the directory name
+    const projectsDir = join(homedir(), ".claude", "projects");
+    // Find matching project dir — the hash includes the full path with dashes
+    const cwdHash = cwd.replace(/\//g, "-");
+    const entries = readdirSync(projectsDir) as string[];
+    const projectDir = entries.find((e: string) => e === cwdHash || e.startsWith(cwdHash));
+    if (!projectDir) return null;
+
+    const fullDir = join(projectsDir, projectDir);
+    const jsonls = (readdirSync(fullDir) as string[])
+      .filter((f: string) => f.endsWith(".jsonl"))
+      .map((f: string) => ({ name: f, mtime: statSync(join(fullDir, f)).mtimeMs }))
+      .sort((a: any, b: any) => b.mtime - a.mtime);
+
+    if (jsonls.length === 0) return null;
+    const latest = jsonls[0]!;
+    // Session ID is the filename without .jsonl
+    return latest.name.replace(".jsonl", "");
+  } catch {
+    return null;
+  }
+}
+
 export type Priority = "now" | "next" | "low";
 export type ConnStatus = "connecting" | "open" | "closed" | "reconnecting";
 
@@ -194,7 +231,7 @@ export class BrokerClient {
               pubkey: this.mesh.pubkey,
               sessionPubkey: this.sessionPubkey,
               displayName: process.env.CLAUDEMESH_DISPLAY_NAME || this.opts.displayName || undefined,
-              sessionId: `${process.pid}-${Date.now()}`,
+              sessionId: process.env.CLAUDEMESH_SESSION_ID || detectClaudeSessionId() || `${process.pid}-${Date.now()}`,
               pid: process.pid,
               cwd: process.cwd(),
               hostname: require("os").hostname(),
