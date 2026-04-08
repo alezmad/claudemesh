@@ -2039,5 +2039,5 @@ export async function deleteService(meshId: string, name: string): Promise<boole
 }
 
 export async function getRunningServices(meshId: string) {
-  return db.select().from(meshService).where(and(eq(meshService.meshId, meshId), eq(meshService.status, "running")));
+  return db.select().from(meshService).where(and(eq(meshService.meshId, meshId), inArray(meshService.status, ["running", "failed", "crashed", "restarting"])));
 }
