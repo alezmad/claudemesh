@@ -1,6 +1,6 @@
 {
   "name": "claudemesh-cli",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "description": "Claude Code MCP client for claudemesh — peer mesh messaging between Claude sessions.",
   "keywords": [
     "claude-code",

@@ -3228,53 +3228,31 @@ function handleConnection(ws: WebSocket): void {
             // --- Source extraction + runner spawn (async, non-blocking) ---
             (async () => {
               try {
-                const { mkdirSync, writeFileSync } = await import("node:fs");
-                const { join } = await import("node:path");
-                const sourcePath = join(env.CLAUDEMESH_SERVICES_DIR, conn.meshId, md.server_name, "source");
-                mkdirSync(sourcePath, { recursive: true });
-
-                // Extract source
-                if (md.source.type === "git") {
-                  const { execSync } = await import("node:child_process");
-                  const gitUrl = md.source.url;
-                  const branch = md.source.branch ?? "main";
-                  execSync(`git clone --depth 1 --branch ${branch} ${gitUrl} .`, { cwd: sourcePath, timeout: 60_000 });
-                  log.info("git clone complete", { name: md.server_name, url: gitUrl });
-                } else if (md.source.type === "zip" && md.source.file_id) {
-                  // Download from MinIO and extract
-                  const bucket = meshBucketName(conn.meshId);
-                  const fileRow = await getFile(conn.meshId, md.source.file_id);
-                  if (!fileRow) throw new Error(`file ${md.source.file_id} not found`);
-                  const stream = await minioClient.getObject(bucket, (fileRow as any).minioKey);
-                  const chunks: Buffer[] = [];
-                  for await (const chunk of stream) chunks.push(chunk as Buffer);
-                  const zipBuf = Buffer.concat(chunks);
-                  // Write zip and extract
-                  const zipPath = join(sourcePath, ".._upload.zip");
-                  writeFileSync(zipPath, zipBuf);
-                  const { execSync } = await import("node:child_process");
-                  execSync(`unzip -o "${zipPath}" -d .`, { cwd: sourcePath, timeout: 30_000 });
-                  execSync(`rm -f "${zipPath}"`, { cwd: sourcePath });
-                  log.info("zip extracted", { name: md.server_name, file_id: md.source.file_id });
-                } else if (md.source.type === "npx") {
-                  // npx-based: no source extraction needed, runner spawns via npx
-                  // Write a marker file so runner knows the spawn command
-                  writeFileSync(join(sourcePath, ".npx-package"), md.source.package ?? md.server_name);
-                }
-
                 // Resolve env vars (decrypted by CLI, sent as plaintext over TLS)
                 const resolvedEnv = md.config?.env ?? {};
+
+                // Build runner load payload — runner handles git clone / npm install
+                const loadPayload: Record<string, unknown> = {
+                  name: md.server_name,
+                  env: resolvedEnv,
+                  runtime: md.config?.runtime,
+                };
+                if (md.source.type === "git") {
+                  loadPayload.gitUrl = md.source.url;
+                  loadPayload.gitBranch = md.source.branch;
+                } else if (md.source.type === "npx") {
+                  loadPayload.npxPackage = md.source.package ?? md.server_name;
+                } else if (md.source.type === "zip" && md.source.file_id) {
+                  // TODO: download zip from MinIO, upload to runner via multipart
+                  // For now, zip deploy requires shared volume
+                  loadPayload.sourcePath = `${env.CLAUDEMESH_SERVICES_DIR}/${conn.meshId}/${md.server_name}/source`;
+                }
 
                 // Call runner HTTP API to load the service
                 const runnerRes = await fetch(`${env.RUNNER_URL}/load`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    name: md.server_name,
-                    sourcePath,
-                    env: resolvedEnv,
-                    runtime: md.config?.runtime,
-                  }),
+                  body: JSON.stringify(loadPayload),
                 });
                 const runnerResult = await runnerRes.json() as { status?: string; tools?: any[]; error?: string };
 

@@ -117,7 +117,14 @@ async function initMcp(svc) {
 // --- Spawn ---
 
 function spawnService(svc) {
-  const { cmd, args } = detectEntry(svc.sourcePath, svc.runtime);
+  // npx packages have a pre-resolved binary
+  let cmd, args;
+  if (svc._npxBin) {
+    cmd = "node";
+    args = [svc._npxBin];
+  } else {
+    ({ cmd, args } = detectEntry(svc.sourcePath, svc.runtime));
+  }
   const child = spawn(cmd, args, {
     cwd: svc.sourcePath,
     stdio: ["pipe", "pipe", "pipe"],
@@ -208,26 +215,66 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && req.url === "/load") {
       const body = await readBody(req);
-      const { name, sourcePath, env: svcEnv, runtime: rt } = body;
-      if (!name || !sourcePath) return json(res, 400, { error: "name and sourcePath required" });
+      const { name, sourcePath, gitUrl, gitBranch, npxPackage, env: svcEnv, runtime: rt } = body;
+      if (!name) return json(res, 400, { error: "name required" });
 
       // Kill existing
       const existing = services.get(name);
       if (existing?.process) { existing.status = "stopped"; existing.process.kill("SIGTERM"); await new Promise(r => setTimeout(r, 1000)); }
 
-      const runtime = rt || detectRuntime(sourcePath);
-      const svc = { name, sourcePath, runtime, env: svcEnv || {}, process: null, pid: null, tools: [], status: "installing", pending: new Map(), logs: [], restarts: 0, healthFailures: 0 };
+      // Determine source path — git clone, npx, or pre-existing path
+      let svcSourcePath = sourcePath;
+      let svcRuntime = rt;
+
+      if (gitUrl) {
+        // Git clone into runner's local storage
+        svcSourcePath = join("/var/claudemesh/services", name);
+        const { execSync } = await import("node:child_process");
+        mkdirSync(svcSourcePath, { recursive: true });
+        try {
+          // Clean existing clone
+          execSync(`rm -rf ${svcSourcePath}/*`, { timeout: 10_000 });
+          execSync(`git clone --depth 1 ${gitBranch ? `--branch ${gitBranch}` : ""} ${gitUrl} .`, { cwd: svcSourcePath, timeout: 120_000, stdio: "pipe" });
+          console.log(`[runner] git clone complete: ${gitUrl} -> ${svcSourcePath}`);
+        } catch (e) {
+          return json(res, 500, { error: `git clone failed: ${e.message}` });
+        }
+      } else if (npxPackage) {
+        // npx-based: create a minimal package.json that depends on the package
+        svcSourcePath = join("/var/claudemesh/services", name);
+        mkdirSync(svcSourcePath, { recursive: true });
+        const pkg = { name: `mcp-${name}`, private: true, dependencies: { [npxPackage]: "*" } };
+        writeFileSync(join(svcSourcePath, "package.json"), JSON.stringify(pkg, null, 2));
+        svcRuntime = svcRuntime || "node";
+      } else if (!svcSourcePath) {
+        return json(res, 400, { error: "one of sourcePath, gitUrl, or npxPackage required" });
+      }
+
+      const runtime = svcRuntime || detectRuntime(svcSourcePath);
+      const svc = { name, sourcePath: svcSourcePath, runtime, env: svcEnv || {}, process: null, pid: null, tools: [], status: "installing", pending: new Map(), logs: [], restarts: 0, healthFailures: 0 };
       services.set(name, svc);
 
       // Install deps
-      try { await installDeps(sourcePath, runtime); } catch (e) {
+      try { await installDeps(svcSourcePath, runtime); } catch (e) {
         svc.status = "failed"; svc.logs.push(`install failed: ${e.message}`);
         return json(res, 500, { error: e.message });
       }
 
+      // For npx packages: find the binary in node_modules/.bin
+      if (npxPackage) {
+        const binDir = join(svcSourcePath, "node_modules", ".bin");
+        if (existsSync(binDir)) {
+          // Override detectEntry for npx packages
+          const bins = await import("node:fs").then(fs => fs.readdirSync(binDir));
+          if (bins.length > 0) {
+            svc._npxBin = join(binDir, bins[0]);
+          }
+        }
+      }
+
       // Spawn + MCP handshake
       spawnService(svc);
-      await new Promise(r => setTimeout(r, 500));
+      await new Promise(r => setTimeout(r, 1000)); // npx packages may need more startup time
       try {
         svc.tools = await initMcp(svc);
         console.log(`[runner] ${name} ready, ${svc.tools.length} tools`);

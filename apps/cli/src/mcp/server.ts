@@ -1400,18 +1400,21 @@ Your message mode is "${messageMode}".
 
       // --- Service deployment tools ---
       case "mesh_mcp_deploy": {
-        const { server_name, file_id, git_url, git_branch, env: deployEnv, runtime, memory_mb, network_allow, scope } = (args ?? {}) as {
+        const { server_name, file_id, git_url, git_branch, npx_package, env: deployEnv, runtime, memory_mb, network_allow, scope } = (args ?? {}) as {
           server_name?: string; file_id?: string; git_url?: string; git_branch?: string;
+          npx_package?: string;
           env?: Record<string, string>; runtime?: string; memory_mb?: number;
           network_allow?: string[]; scope?: unknown;
         };
         if (!server_name) return text("mesh_mcp_deploy: `server_name` required", true);
-        if (!file_id && !git_url) return text("mesh_mcp_deploy: either `file_id` or `git_url` required", true);
+        if (!file_id && !git_url && !npx_package) return text("mesh_mcp_deploy: one of `file_id`, `git_url`, or `npx_package` required", true);
         const client = allClients()[0];
         if (!client) return text("mesh_mcp_deploy: not connected", true);
-        const source = file_id
-          ? { type: "zip" as const, file_id }
-          : { type: "git" as const, url: git_url!, branch: git_branch };
+        const source = npx_package
+          ? { type: "npx" as const, package: npx_package }
+          : file_id
+            ? { type: "zip" as const, file_id }
+            : { type: "git" as const, url: git_url!, branch: git_branch };
 
         // Resolve $vault: references in env vars — decrypt client-side
         const resolvedEnv: Record<string, string> = {};

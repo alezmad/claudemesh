@@ -906,6 +906,7 @@ export const TOOLS: Tool[] = [
         file_id: { type: "string", description: "File ID of uploaded zip (from share_file)" },
         git_url: { type: "string", description: "Git repo URL" },
         git_branch: { type: "string", description: "Branch to clone (default: main)" },
+        npx_package: { type: "string", description: "npm package name to run via npx (e.g. @upstash/context7-mcp)" },
         env: { type: "object", description: "Environment variables. Use $vault:<key> for vault secrets." },
         runtime: { type: "string", enum: ["node", "python", "bun"], description: "Runtime (auto-detected if omitted)" },
         memory_mb: { type: "number", description: "Memory limit in MB (default: 256)" },
