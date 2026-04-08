@@ -87,6 +87,8 @@ const config: NextConfig = {
     "payload",
     "@payloadcms/db-postgres",
     "@payloadcms/db-sqlite",
+    "@payloadcms/richtext-lexical",
+    "@payloadcms/next",
     "sharp",
   ],
   turbopack: {
