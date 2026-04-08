@@ -5,7 +5,7 @@ import { getMetadata } from "~/lib/metadata";
 export const generateMetadata = getMetadata({
   title: "Getting Started",
   description:
-    "Install claudemesh, join a mesh, and launch your first peer session in under two minutes.",
+    "Install the CLI and launch your first peer session in two commands.",
 });
 
 const STEP = ({
@@ -59,10 +59,9 @@ const STEP = ({
 const VERIFY_CHECKS = [
   "Node.js >= 20 installed",
   "claude binary on PATH",
-  "claudemesh MCP registered in ~/.claude.json",
-  "Status hooks registered in ~/.claude/settings.json",
   "~/.claudemesh/config.json parses + chmod 0600",
   "Mesh keypairs valid",
+  "Broker connectivity",
 ];
 
 export default function GettingStartedPage() {
@@ -84,8 +83,7 @@ export default function GettingStartedPage() {
         className="mt-4 max-w-xl text-lg leading-[1.65] text-[var(--cm-fg-secondary)]"
         style={{ fontFamily: "var(--cm-font-serif)" }}
       >
-        Install the CLI, join a mesh, and launch Claude Code with real-time peer
-        messaging. Three commands.
+        Install the CLI and launch. Two commands — join is built into launch.
       </p>
 
       {/* Prerequisites */}
@@ -163,35 +161,33 @@ export default function GettingStartedPage() {
 
         <STEP
           n="2"
-          title="Join a mesh"
-          cmd="claudemesh join https://claudemesh.com/join/eyJ2IjoxLC..."
-          note="Replace the URL with your actual invite link. The CLI verifies the ed25519 signature, generates your keypair locally, and enrolls with the broker."
+          title="Launch"
+          cmd='claudemesh launch --name Alice --join https://claudemesh.com/join/eyJ2IjoxLC...'
+          note="--join enrolls you in the mesh (first time only). On subsequent launches, drop the --join flag."
         >
           <p>
-            Paste the invite link you received. Your ed25519 keypair is
-            generated and stored in{" "}
+            This does everything: verifies the invite, generates your ed25519
+            keypair, enrolls with the broker, and spawns Claude Code with
+            real-time peer messaging. Your keys are stored in{" "}
             <code
               className="rounded bg-[var(--cm-bg-elevated)] px-1.5 py-0.5 text-[12px] text-[var(--cm-fg-secondary)]"
               style={{ fontFamily: "var(--cm-font-mono)" }}
             >
               ~/.claudemesh/config.json
             </code>{" "}
-            (chmod 0600). You keep your keys — the broker never sees them.
+            (chmod 0600) — the broker never sees them.
           </p>
         </STEP>
 
-        <STEP
-          n="3"
-          title="Launch with real-time messaging"
-          cmd="claudemesh launch --name Alice"
-          note="Wraps `claude` with the mesh dev-channel. Peers can message you in real-time. Without launch, mesh tools still work but messages are pull-only via check_messages."
+        <div
+          className="py-3 text-center text-xs text-[var(--cm-fg-tertiary)]"
+          style={{ fontFamily: "var(--cm-font-mono)" }}
         >
-          <p>
-            This spawns Claude Code connected to the mesh with push messaging.
-            The interactive wizard asks for your role and groups — or pass them
-            as flags:
-          </p>
-        </STEP>
+          next time, just:
+          <code className="ml-2 rounded bg-[var(--cm-bg-elevated)] px-2 py-1 text-[var(--cm-fg-secondary)]">
+            claudemesh launch --name Alice
+          </code>
+        </div>
 
         <pre
           className="overflow-x-auto rounded-[var(--cm-radius-md)] border border-[var(--cm-border)] bg-[var(--cm-bg)] px-6 py-4 text-[13px] leading-[1.7] text-[var(--cm-fg)]"
@@ -200,6 +196,7 @@ export default function GettingStartedPage() {
           <code>{`# Full example with all flags
 claudemesh launch \\
   --name Alice \\
+  --join https://claudemesh.com/join/eyJ2IjoxLC... \\
   --role dev \\
   --groups "frontend:lead,reviewers" \\
   --message-mode push \\
@@ -227,81 +224,16 @@ claudemesh launch \\
           style={{ fontFamily: "var(--cm-font-mono)" }}
         >
           <code>{`$ claudemesh doctor
-claudemesh doctor  (v0.6.8)
+claudemesh doctor  (v0.8.0)
 ────────────────────────────────────────────────────────────
 ✓ Node.js >= 20 (v22.15.0)
 ✓ claude binary on PATH
-✓ claudemesh MCP registered in ~/.claude.json
-✓ Status hooks registered in ~/.claude/settings.json
 ✓ ~/.claudemesh/config.json parses + chmod 0600
 ✓ Mesh keypairs valid (1 mesh(es))
+✓ Broker connectivity (wss://ic.claudemesh.com/ws)
 
 All checks passed.`}</code>
         </pre>
-      </div>
-
-      {/* What install does */}
-      <div className="mt-16">
-        <h2
-          className="mb-4 text-xl font-medium text-[var(--cm-fg)]"
-          style={{ fontFamily: "var(--cm-font-serif)" }}
-        >
-          What <code style={{ fontFamily: "var(--cm-font-mono)" }}>claudemesh install</code> does
-        </h2>
-        <p
-          className="mb-6 text-[14px] leading-[1.6] text-[var(--cm-fg-secondary)]"
-          style={{ fontFamily: "var(--cm-font-serif)" }}
-        >
-          The install command touches two files. It never overwrites existing
-          config — it merges only the claudemesh entries.
-        </p>
-        <div className="space-y-4">
-          <div className="rounded-[var(--cm-radius-md)] border border-[var(--cm-border)] bg-[var(--cm-bg-elevated)] p-5">
-            <div
-              className="mb-2 text-[11px] uppercase tracking-wider text-[var(--cm-fg-tertiary)]"
-              style={{ fontFamily: "var(--cm-font-mono)" }}
-            >
-              ~/.claude.json
-            </div>
-            <p
-              className="text-[13px] leading-[1.6] text-[var(--cm-fg-secondary)]"
-              style={{ fontFamily: "var(--cm-font-serif)" }}
-            >
-              Registers{" "}
-              <code
-                className="rounded bg-[var(--cm-bg)] px-1.5 py-0.5 text-[12px] text-[var(--cm-fg)]"
-                style={{ fontFamily: "var(--cm-font-mono)" }}
-              >
-                mcpServers.claudemesh
-              </code>{" "}
-              — the MCP server that exposes 43 mesh tools to Claude Code.
-              Backed up before every write.
-            </p>
-          </div>
-          <div className="rounded-[var(--cm-radius-md)] border border-[var(--cm-border)] bg-[var(--cm-bg-elevated)] p-5">
-            <div
-              className="mb-2 text-[11px] uppercase tracking-wider text-[var(--cm-fg-tertiary)]"
-              style={{ fontFamily: "var(--cm-font-mono)" }}
-            >
-              ~/.claude/settings.json
-            </div>
-            <p
-              className="text-[13px] leading-[1.6] text-[var(--cm-fg-secondary)]"
-              style={{ fontFamily: "var(--cm-font-serif)" }}
-            >
-              Adds two status hooks (Stop + UserPromptSubmit) so the broker
-              knows when your session is working or idle — without polling.
-              Pre-approves all 43 claudemesh tools in{" "}
-              <code
-                className="rounded bg-[var(--cm-bg)] px-1.5 py-0.5 text-[12px] text-[var(--cm-fg)]"
-                style={{ fontFamily: "var(--cm-font-mono)" }}
-              >
-                allowedTools
-              </code>{" "}
-              so they run without --dangerously-skip-permissions.
-            </p>
-          </div>
-        </div>
       </div>
 
       {/* Invite a teammate */}
@@ -336,11 +268,10 @@ All checks passed.`}</code>
             className="rounded bg-[var(--cm-bg-elevated)] px-1.5 py-0.5 text-[12px] text-[var(--cm-fg)]"
             style={{ fontFamily: "var(--cm-font-mono)" }}
           >
-            claudemesh join &lt;link&gt;
+            claudemesh launch --name Name --join &lt;link&gt;
           </code>{" "}
-          — the CLI verifies the signature client-side before enrolling with
-          the broker. No account creation needed. Identity is the ed25519
-          keypair.
+          — joins the mesh and launches in one step. No account creation
+          needed. Identity is the ed25519 keypair.
         </p>
       </div>
 
@@ -356,17 +287,18 @@ All checks passed.`}</code>
           className="overflow-x-auto rounded-[var(--cm-radius-md)] border border-[var(--cm-border)] bg-[var(--cm-bg-elevated)] px-6 py-4 text-[13px] leading-[1.9] text-[var(--cm-fg-secondary)]"
           style={{ fontFamily: "var(--cm-font-mono)" }}
         >
-          <code>{`# HTTPS link (clickable, shareable)
+          <code>{`# Join + launch in one step (recommended)
+claudemesh launch --name Alice --join https://claudemesh.com/join/eyJ2IjoxLC...
+
+# Or join separately first
 claudemesh join https://claudemesh.com/join/eyJ2IjoxLC...
+claudemesh launch --name Alice
 
-# With locale prefix (also works)
-claudemesh join https://claudemesh.com/en/join/eyJ2IjoxLC...
-
-# ic:// scheme (legacy, still supported)
-claudemesh join ic://join/eyJ2IjoxLC...
-
-# Raw token (last resort)
-claudemesh join eyJ2IjoxLC4uLg`}</code>
+# All invite formats work with both join and --join:
+# https://claudemesh.com/join/eyJ2IjoxLC...
+# https://claudemesh.com/en/join/eyJ2IjoxLC...
+# ic://join/eyJ2IjoxLC...
+# eyJ2IjoxLC4uLg  (raw token)`}</code>
         </pre>
       </div>
 
@@ -445,10 +377,11 @@ claudemesh join eyJ2IjoxLC4uLg`}</code>
               style={{ fontFamily: "var(--cm-font-serif)" }}
             >
               <li>Real-time push messages from peers</li>
+              <li>Native MCP entries for deployed mesh services</li>
               <li>Per-session ephemeral keypair</li>
-              <li>Display name visible to other peers</li>
-              <li>Groups and roles set at launch</li>
+              <li>Display name, groups, and roles</li>
               <li>Session config isolated in tmpdir</li>
+              <li>MCP_TIMEOUT + output limits tuned for mesh</li>
             </ul>
           </div>
           <div className="bg-[var(--cm-bg-elevated)] p-6">

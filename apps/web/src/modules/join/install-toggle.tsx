@@ -5,6 +5,7 @@ interface Props {
   token: string;
 }
 
+const LAUNCH_CMD = (token: string) => `claudemesh launch --name YourName --join ${token}`;
 const JOIN_CMD = (token: string) => `claudemesh join ${token}`;
 const INSTALL_CMD = "npm i -g claudemesh-cli";
 
@@ -60,7 +61,7 @@ export const InstallToggle = ({ token }: Props) => {
   }
 
   if (hasCli === "yes") {
-    const cmd = JOIN_CMD(token);
+    const cmd = LAUNCH_CMD(token);
     return (
       <div className="space-y-4">
         <div className="rounded-[var(--cm-radius-md)] border border-[var(--cm-clay)]/40 bg-[var(--cm-bg-elevated)] p-5">
@@ -68,7 +69,7 @@ export const InstallToggle = ({ token }: Props) => {
             className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[var(--cm-clay)]"
             style={{ fontFamily: "var(--cm-font-mono)" }}
           >
-            run this in your terminal
+            join + launch in one step
           </div>
           <div className="flex items-center gap-2">
             <code
@@ -96,7 +97,7 @@ export const InstallToggle = ({ token }: Props) => {
     );
   }
 
-  const joinCmd = JOIN_CMD(token);
+  const launchCmd = LAUNCH_CMD(token);
   return (
     <div className="space-y-4">
       <ol className="space-y-3">
@@ -127,7 +128,7 @@ export const InstallToggle = ({ token }: Props) => {
             className="mt-2 text-xs text-[var(--cm-fg-tertiary)]"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Installs the CLI globally. Requires Node.js 20+.
+            Requires Node.js 20+.
           </p>
         </li>
         <li className="rounded-[var(--cm-radius-md)] border border-[var(--cm-clay)]/40 bg-[var(--cm-bg-elevated)] p-5">
@@ -136,46 +137,28 @@ export const InstallToggle = ({ token }: Props) => {
             style={{ fontFamily: "var(--cm-font-mono)" }}
           >
             <span className="rounded-full bg-[var(--cm-clay)]/20 px-1.5">2</span>
-            join the mesh
+            join + launch
           </div>
           <div className="flex items-center gap-2">
             <code
               className="flex-1 overflow-x-auto rounded-[var(--cm-radius-xs)] bg-[var(--cm-bg)] p-3 text-sm text-[var(--cm-fg)]"
               style={{ fontFamily: "var(--cm-font-mono)" }}
             >
-              {joinCmd}
+              {launchCmd}
             </code>
             <button
-              onClick={() => copy(joinCmd, "join")}
+              onClick={() => copy(launchCmd, "join")}
               className="rounded-[var(--cm-radius-xs)] bg-[var(--cm-clay)] px-3 py-3 text-sm font-medium text-[var(--cm-fg)] transition-colors hover:bg-[var(--cm-clay-hover)]"
               style={{ fontFamily: "var(--cm-font-sans)" }}
             >
               {copiedKey === "join" ? "Copied ✓" : "Copy"}
             </button>
           </div>
-        </li>
-        <li className="rounded-[var(--cm-radius-md)] border border-[var(--cm-border)] bg-[var(--cm-bg-elevated)] p-5">
-          <div
-            className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[var(--cm-fg-tertiary)]"
-            style={{ fontFamily: "var(--cm-font-mono)" }}
-          >
-            <span className="rounded-full bg-[var(--cm-border)] px-1.5">3</span>
-            launch with push messaging
-          </div>
-          <div className="flex items-center gap-2">
-            <code
-              className="flex-1 overflow-x-auto rounded-[var(--cm-radius-xs)] bg-[var(--cm-bg)] p-3 text-sm text-[var(--cm-fg)]"
-              style={{ fontFamily: "var(--cm-font-mono)" }}
-            >
-              claudemesh launch --name YourName
-            </code>
-          </div>
           <p
             className="mt-2 text-xs text-[var(--cm-fg-tertiary)]"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Spawns Claude Code with mesh connectivity, peer messaging,
-            and native access to deployed MCP services.
+            Joins the mesh and launches Claude Code in one step.
           </p>
         </li>
       </ol>
