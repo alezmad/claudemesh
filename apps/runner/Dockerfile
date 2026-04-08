@@ -10,16 +10,14 @@ FROM node:22-slim AS base
 # Install Python 3.12 + uv (fast pip replacement) + git
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
-    curl ca-certificates git \
+    curl ca-certificates git unzip \
     && curl -LsSf https://astral.sh/uv/install.sh | sh \
     && ln -sf /root/.local/bin/uv /usr/local/bin/uv \
     && ln -sf /root/.local/bin/uvx /usr/local/bin/uvx \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Bun (for bun-based MCP servers)
-RUN curl -fsSL https://bun.sh/install | bash \
+    && curl -fsSL https://bun.sh/install | bash \
     && ln -sf /root/.bun/bin/bun /usr/local/bin/bun \
-    && ln -sf /root/.bun/bin/bunx /usr/local/bin/bunx
+    && ln -sf /root/.bun/bin/bunx /usr/local/bin/bunx \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
