@@ -259,27 +259,27 @@ const server = createServer(async (req, res) => {
           return json(res, 500, { error: `uvx install failed: ${e.message}` });
         }
         // Find the MCP binary in the venv
+        let uvxBinPath = null;
         const venvBin = join(svcSourcePath, ".venv/bin");
         if (existsSync(venvBin)) {
           const bins = readdirSync(venvBin).filter(b => !["python", "python3", "pip", "pip3", "activate", "Activate.ps1", "activate.csh", "activate.fish", "deactivate"].includes(b) && !b.startsWith("python3."));
           const pkgShort = body.uvxPackage.split("/").pop().replace(/^@/, "");
           const match = bins.find(b => b.includes(pkgShort.replace(/-/g, ""))) || bins.find(b => b.includes("mcp")) || bins[0];
-          if (match) svc._npxBin = join(venvBin, match);
+          if (match) uvxBinPath = join(venvBin, match);
         }
         svcRuntime = "python";
         // Skip normal installDeps — already installed via uv
-        const svc2 = { name, sourcePath: svcSourcePath, runtime: svcRuntime, env: svcEnv || {}, process: null, pid: null, tools: [], status: "running", pending: new Map(), logs: [], restarts: 0, healthFailures: 0, _npxBin: svc?._npxBin };
-        Object.assign(svc, svc2);
-        services.set(name, svc);
-        spawnService(svc);
+        const svc2 = { name, sourcePath: svcSourcePath, runtime: svcRuntime, env: svcEnv || {}, process: null, pid: null, tools: [], status: "running", pending: new Map(), logs: [], restarts: 0, healthFailures: 0, _npxBin: uvxBinPath };
+        services.set(name, svc2);
+        spawnService(svc2);
         await new Promise(r => setTimeout(r, 1500));
         try {
-          svc.tools = await initMcp(svc);
-          console.log(`[runner] ${name} ready (uvx), ${svc.tools.length} tools`);
-          return json(res, 200, { status: "running", tools: svc.tools });
+          svc2.tools = await initMcp(svc2);
+          console.log(`[runner] ${name} ready (uvx), ${svc2.tools.length} tools`);
+          return json(res, 200, { status: "running", tools: svc2.tools });
         } catch (e) {
-          svc.status = "failed"; svc.logs.push(`MCP init failed: ${e.message}`);
-          return json(res, 500, { error: e.message, logs: svc.logs.slice(-10) });
+          svc2.status = "failed"; svc2.logs.push(`MCP init failed: ${e.message}`);
+          return json(res, 500, { error: e.message, logs: svc2.logs.slice(-10) });
         }
       } else if (!svcSourcePath) {
         return json(res, 400, { error: "one of sourcePath, gitUrl, or npxPackage required" });
