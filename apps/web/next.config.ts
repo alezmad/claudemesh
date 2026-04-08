@@ -89,6 +89,8 @@ const config: NextConfig = {
     "@payloadcms/db-sqlite",
     "@payloadcms/richtext-lexical",
     "@payloadcms/next",
+    "@payloadcms/ui",
+    "react-image-crop",
     "sharp",
   ],
   turbopack: {
