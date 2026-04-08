@@ -1345,6 +1345,139 @@ Your message mode is "${messageMode}".
         return text(ok ? `Webhook "${delName}" deactivated.` : `Failed to deactivate webhook "${delName}".`, !ok);
       }
 
+      // --- Vault tools ---
+      case "vault_set": {
+        const { key, value, type: vType, mount_path, description } = (args ?? {}) as {
+          key?: string; value?: string; type?: "env" | "file"; mount_path?: string; description?: string;
+        };
+        if (!key || !value) return text("vault_set: `key` and `value` required", true);
+        const client = allClients()[0];
+        if (!client) return text("vault_set: not connected", true);
+        const entryType = vType ?? "env";
+        let plaintext = value;
+        if (entryType === "file") {
+          const { existsSync, readFileSync } = await import("node:fs");
+          if (!existsSync(value)) return text(`vault_set: file not found: ${value}`, true);
+          plaintext = readFileSync(value, "base64");
+        }
+        const encoded = Buffer.from(plaintext).toString("base64");
+        const ok = await client.vaultSet(key, encoded, "placeholder-nonce", "placeholder-sealed", entryType, mount_path, description);
+        if (!ok) return text("vault_set: broker did not acknowledge", true);
+        return text(`Vault entry "${key}" stored (${entryType}).`);
+      }
+      case "vault_list": {
+        const client = allClients()[0];
+        if (!client) return text("vault_list: not connected", true);
+        const entries = await client.vaultList();
+        if (entries.length === 0) return text("Vault is empty.");
+        const lines = entries.map((e: any) =>
+          `- **${e.key}** (${e.entry_type}${e.mount_path ? ` → ${e.mount_path}` : ""})${e.description ? ` — ${e.description}` : ""} (${e.updated_at})`
+        );
+        return text(`${entries.length} vault entry(s):\n${lines.join("\n")}`);
+      }
+      case "vault_delete": {
+        const { key } = (args ?? {}) as { key?: string };
+        if (!key) return text("vault_delete: `key` required", true);
+        const client = allClients()[0];
+        if (!client) return text("vault_delete: not connected", true);
+        const ok = await client.vaultDelete(key);
+        return text(ok ? `Vault entry "${key}" deleted.` : `Vault entry "${key}" not found.`);
+      }
+
+      // --- Service deployment tools ---
+      case "mesh_mcp_deploy": {
+        const { server_name, file_id, git_url, git_branch, env: deployEnv, runtime, memory_mb, network_allow, scope } = (args ?? {}) as {
+          server_name?: string; file_id?: string; git_url?: string; git_branch?: string;
+          env?: Record<string, string>; runtime?: string; memory_mb?: number;
+          network_allow?: string[]; scope?: unknown;
+        };
+        if (!server_name) return text("mesh_mcp_deploy: `server_name` required", true);
+        if (!file_id && !git_url) return text("mesh_mcp_deploy: either `file_id` or `git_url` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_deploy: not connected", true);
+        const source = file_id
+          ? { type: "zip" as const, file_id }
+          : { type: "git" as const, url: git_url!, branch: git_branch };
+        const config: Record<string, unknown> = {};
+        if (deployEnv) config.env = deployEnv;
+        if (runtime) config.runtime = runtime;
+        if (memory_mb) config.memory_mb = memory_mb;
+        if (network_allow) config.network_allow = network_allow;
+        const result = await client.mcpDeploy(server_name, source, Object.keys(config).length > 0 ? config : undefined, scope);
+        const toolList = result.tools?.map((t: any) => `  - ${t.name}: ${t.description}`).join("\n") ?? "  (pending)";
+        return text(`Deployed "${server_name}" (status: ${result.status}).\n\nTools:\n${toolList}\n\nDefault scope: peer (private). Use mesh_mcp_scope to share.`);
+      }
+      case "mesh_mcp_undeploy": {
+        const { server_name } = (args ?? {}) as { server_name?: string };
+        if (!server_name) return text("mesh_mcp_undeploy: `server_name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_undeploy: not connected", true);
+        const ok = await client.mcpUndeploy(server_name);
+        return text(ok ? `Service "${server_name}" undeployed.` : `Failed to undeploy "${server_name}".`);
+      }
+      case "mesh_mcp_update": {
+        const { server_name } = (args ?? {}) as { server_name?: string };
+        if (!server_name) return text("mesh_mcp_update: `server_name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_update: not connected", true);
+        const result = await client.mcpUpdate(server_name);
+        return text(`Updated "${server_name}" (status: ${result.status}).`);
+      }
+      case "mesh_mcp_logs": {
+        const { server_name, lines: logLines } = (args ?? {}) as { server_name?: string; lines?: number };
+        if (!server_name) return text("mesh_mcp_logs: `server_name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_logs: not connected", true);
+        const logs = await client.mcpLogs(server_name, logLines);
+        if (logs.length === 0) return text(`No logs for "${server_name}".`);
+        return text(`Logs for "${server_name}" (${logs.length} lines):\n\`\`\`\n${logs.join("\n")}\n\`\`\``);
+      }
+      case "mesh_mcp_scope": {
+        const { server_name, scope } = (args ?? {}) as { server_name?: string; scope?: unknown };
+        if (!server_name) return text("mesh_mcp_scope: `server_name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_scope: not connected", true);
+        const result = await client.mcpScope(server_name, scope);
+        if (scope !== undefined) {
+          return text(`Scope for "${server_name}" updated to: ${JSON.stringify(result.scope)}`);
+        }
+        return text(`**${server_name}** scope: ${JSON.stringify(result.scope)}\nDeployed by: ${result.deployed_by}`);
+      }
+      case "mesh_mcp_schema": {
+        const { server_name, tool_name } = (args ?? {}) as { server_name?: string; tool_name?: string };
+        if (!server_name) return text("mesh_mcp_schema: `server_name` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_schema: not connected", true);
+        const tools = await client.mcpServiceSchema(server_name, tool_name);
+        if (tools.length === 0) return text(`No tools found for "${server_name}"${tool_name ? ` (tool: ${tool_name})` : ""}.`);
+        const lines = tools.map((t: any) =>
+          `### ${t.name}\n${t.description}\n\`\`\`json\n${JSON.stringify(t.inputSchema, null, 2)}\n\`\`\``
+        );
+        return text(`Tools for "${server_name}":\n\n${lines.join("\n\n")}`);
+      }
+      case "mesh_mcp_catalog": {
+        const client = allClients()[0];
+        if (!client) return text("mesh_mcp_catalog: not connected", true);
+        const services = await client.mcpCatalog();
+        if (services.length === 0) return text("No services deployed in the mesh.");
+        const lines = services.map((s: any) => {
+          const scopeStr = typeof s.scope === "string" ? s.scope : JSON.stringify(s.scope);
+          return `- **${s.name}** (${s.type}, ${s.status}) — ${s.description}\n  ${s.tool_count} tools | scope: ${scopeStr} | by ${s.deployed_by} | ${s.source_type}${s.runtime ? ` (${s.runtime})` : ""}`;
+        });
+        return text(`${services.length} service(s) in mesh:\n\n${lines.join("\n")}`);
+      }
+      case "mesh_skill_deploy": {
+        const { file_id, git_url, git_branch } = (args ?? {}) as { file_id?: string; git_url?: string; git_branch?: string };
+        if (!file_id && !git_url) return text("mesh_skill_deploy: either `file_id` or `git_url` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_skill_deploy: not connected", true);
+        const source = file_id
+          ? { type: "zip" as const, file_id }
+          : { type: "git" as const, url: git_url!, branch: git_branch };
+        const result = await client.skillDeploy(source);
+        return text(`Skill "${result.name}" deployed.\nFiles: ${result.files.join(", ")}`);
+      }
+
       default:
         return text(`Unknown tool: ${name}`, true);
     }
