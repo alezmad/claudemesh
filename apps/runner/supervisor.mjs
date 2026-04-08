@@ -234,7 +234,7 @@ const server = createServer(async (req, res) => {
         try {
           // Clean existing clone
           execSync(`rm -rf ${svcSourcePath}/*`, { timeout: 10_000 });
-          execSync(`git clone --depth 1 ${gitBranch ? `--branch ${gitBranch}` : ""} ${gitUrl} .`, { cwd: svcSourcePath, timeout: 120_000, stdio: "pipe" });
+          execSync(`git clone --depth 1 ${gitBranch ? `--branch ${gitBranch}` : ""} ${gitUrl} .`, { cwd: svcSourcePath, timeout: 120_000, stdio: "pipe", env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
           console.log(`[runner] git clone complete: ${gitUrl} -> ${svcSourcePath}`);
         } catch (e) {
           return json(res, 500, { error: `git clone failed: ${e.message}` });
