@@ -2806,6 +2806,34 @@ function handleConnection(ws: WebSocket): void {
         case "mcp_call": {
           const mc = msg as Extract<WSClientMessage, { type: "mcp_call" }>;
           const callKey = `${conn.meshId}:${mc.serverName}`;
+
+          // Check managed services first (runner-hosted)
+          const managedSvc = await getService(conn.meshId, mc.serverName);
+          if (managedSvc && managedSvc.status === "running") {
+            try {
+              const runnerRes = await fetch(`${env.RUNNER_URL}/call`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: mc.serverName, tool: mc.toolName, args: mc.args ?? {} }),
+              });
+              const result = await runnerRes.json() as { result?: unknown; error?: string };
+              sendToPeer(presenceId, {
+                type: "mcp_call_result",
+                ...(result.result !== undefined ? { result: result.result } : {}),
+                ...(result.error ? { error: result.error } : {}),
+                ...(_reqId ? { _reqId } : {}),
+              } as any);
+            } catch (e) {
+              sendToPeer(presenceId, {
+                type: "mcp_call_result",
+                error: `runner call failed: ${e instanceof Error ? e.message : String(e)}`,
+                ...(_reqId ? { _reqId } : {}),
+              } as any);
+            }
+            break;
+          }
+
+          // Fall back to live-proxy (peer-hosted) MCP registry
           const server = mcpRegistry.get(callKey);
           if (!server) {
             sendToPeer(presenceId, {
@@ -3195,13 +3223,86 @@ function handleConnection(ws: WebSocket): void {
               scope: md.scope ?? "peer", deployedBy: conn.memberId, deployedByName: conn.displayName,
             });
             sendToPeer(presenceId, { type: "mcp_deploy_status", server_name: md.server_name, status: "building", _reqId: md._reqId } as any);
-            broadcastToMesh(conn.meshId, {
-              type: "push", subtype: "system" as const, event: "mcp_deployed",
-              eventData: { name: md.server_name, description: `MCP server: ${md.server_name}`, tool_count: 0, deployed_by: conn.displayName, scope: md.scope ?? "peer" },
-              messageId: crypto.randomUUID(), meshId: conn.meshId, senderPubkey: "system",
-              priority: "low", nonce: "", ciphertext: "", createdAt: new Date().toISOString(),
-            });
-            log.info("ws mcp_deploy", { presence_id: presenceId, name: md.server_name });
+            log.info("ws mcp_deploy", { presence_id: presenceId, name: md.server_name, source: md.source.type });
+
+            // --- Source extraction + runner spawn (async, non-blocking) ---
+            (async () => {
+              try {
+                const { mkdirSync, writeFileSync } = await import("node:fs");
+                const { join } = await import("node:path");
+                const sourcePath = join(env.CLAUDEMESH_SERVICES_DIR, conn.meshId, md.server_name, "source");
+                mkdirSync(sourcePath, { recursive: true });
+
+                // Extract source
+                if (md.source.type === "git") {
+                  const { execSync } = await import("node:child_process");
+                  const gitUrl = md.source.url;
+                  const branch = md.source.branch ?? "main";
+                  execSync(`git clone --depth 1 --branch ${branch} ${gitUrl} .`, { cwd: sourcePath, timeout: 60_000 });
+                  log.info("git clone complete", { name: md.server_name, url: gitUrl });
+                } else if (md.source.type === "zip" && md.source.file_id) {
+                  // Download from MinIO and extract
+                  const bucket = meshBucketName(conn.meshId);
+                  const fileRow = await getFile(conn.meshId, md.source.file_id);
+                  if (!fileRow) throw new Error(`file ${md.source.file_id} not found`);
+                  const stream = await minioClient.getObject(bucket, (fileRow as any).minioKey);
+                  const chunks: Buffer[] = [];
+                  for await (const chunk of stream) chunks.push(chunk as Buffer);
+                  const zipBuf = Buffer.concat(chunks);
+                  // Write zip and extract
+                  const zipPath = join(sourcePath, ".._upload.zip");
+                  writeFileSync(zipPath, zipBuf);
+                  const { execSync } = await import("node:child_process");
+                  execSync(`unzip -o "${zipPath}" -d .`, { cwd: sourcePath, timeout: 30_000 });
+                  execSync(`rm -f "${zipPath}"`, { cwd: sourcePath });
+                  log.info("zip extracted", { name: md.server_name, file_id: md.source.file_id });
+                } else if (md.source.type === "npx") {
+                  // npx-based: no source extraction needed, runner spawns via npx
+                  // Write a marker file so runner knows the spawn command
+                  writeFileSync(join(sourcePath, ".npx-package"), md.source.package ?? md.server_name);
+                }
+
+                // Resolve env vars (decrypted by CLI, sent as plaintext over TLS)
+                const resolvedEnv = md.config?.env ?? {};
+
+                // Call runner HTTP API to load the service
+                const runnerRes = await fetch(`${env.RUNNER_URL}/load`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    name: md.server_name,
+                    sourcePath,
+                    env: resolvedEnv,
+                    runtime: md.config?.runtime,
+                  }),
+                });
+                const runnerResult = await runnerRes.json() as { status?: string; tools?: any[]; error?: string };
+
+                if (!runnerRes.ok || runnerResult.error) {
+                  await updateServiceStatus(conn.meshId, md.server_name, "failed");
+                  sendToPeer(presenceId, { type: "mcp_deploy_status", server_name: md.server_name, status: "failed", error: runnerResult.error, _reqId: md._reqId } as any);
+                  log.error("runner load failed", { name: md.server_name, error: runnerResult.error });
+                  return;
+                }
+
+                // Update DB with tools and running status
+                await updateServiceStatus(conn.meshId, md.server_name, "running", {
+                  toolsSchema: runnerResult.tools,
+                });
+                sendToPeer(presenceId, { type: "mcp_deploy_status", server_name: md.server_name, status: "running", tools: runnerResult.tools, _reqId: md._reqId } as any);
+                broadcastToMesh(conn.meshId, {
+                  type: "push", subtype: "system" as const, event: "mcp_deployed",
+                  eventData: { name: md.server_name, description: `MCP server: ${md.server_name}`, tool_count: runnerResult.tools?.length ?? 0, deployed_by: conn.displayName, scope: md.scope ?? "peer", tools: runnerResult.tools },
+                  messageId: crypto.randomUUID(), meshId: conn.meshId, senderPubkey: "system",
+                  priority: "low", nonce: "", ciphertext: "", createdAt: new Date().toISOString(),
+                });
+                log.info("service deployed", { name: md.server_name, tools: runnerResult.tools?.length ?? 0 });
+              } catch (e) {
+                await updateServiceStatus(conn.meshId, md.server_name, "failed").catch(() => {});
+                sendToPeer(presenceId, { type: "mcp_deploy_status", server_name: md.server_name, status: "failed", error: e instanceof Error ? e.message : String(e), _reqId: md._reqId } as any);
+                log.error("deploy pipeline failed", { name: md.server_name, error: e instanceof Error ? e.message : String(e) });
+              }
+            })();
           } catch (e) { sendError(ws, "deploy_error", e instanceof Error ? e.message : String(e), undefined, md._reqId); }
           break;
         }

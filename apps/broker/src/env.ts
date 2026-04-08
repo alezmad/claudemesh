@@ -28,6 +28,7 @@ const envSchema = z.object({
   NEO4J_URL: z.string().default("bolt://neo4j:7687"),
   NEO4J_USER: z.string().default("neo4j"),
   NEO4J_PASSWORD: z.string().default("changeme"),
+  RUNNER_URL: z.string().default("http://runner:7901"),
   CLAUDEMESH_SERVICES_DIR: z.string().default("/var/claudemesh/services"),
   BROKER_ENCRYPTION_KEY: z.string().default(""),  // 64 hex chars (32 bytes). Auto-generated if empty.
   MAX_SERVICES_PER_MESH: z.coerce.number().int().positive().default(20),
