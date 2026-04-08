@@ -1261,6 +1261,15 @@ export class BrokerClient {
     });
   }
 
+  async vaultGet(keys: string[]): Promise<Array<{ key: string; ciphertext: string; nonce: string; sealed_key: string; entry_type: string; mount_path?: string }>> {
+    return new Promise(resolve => {
+      const reqId = `vget_${Date.now()}`;
+      const timer = setTimeout(() => { this.vaultListResolvers.delete(reqId); resolve([]); }, 10_000);
+      this.vaultListResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "vault_get", keys, _reqId: reqId } as any);
+    });
+  }
+
   // --- MCP Deploy ---
 
   async mcpDeploy(serverName: string, source: any, config?: any, scope?: any): Promise<any> {
@@ -1913,6 +1922,15 @@ export class BrokerClient {
       }
     }
     if (msg.type === "vault_list_result") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.vaultListResolvers.has(reqId)) {
+        const r = this.vaultListResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.vaultListResolvers.delete(reqId);
+        r.resolve((msg as any).entries ?? []);
+      }
+    }
+    if (msg.type === "vault_get_result") {
       const reqId = (msg as any)._reqId;
       if (reqId && this.vaultListResolvers.has(reqId)) {
         const r = this.vaultListResolvers.get(reqId)!;

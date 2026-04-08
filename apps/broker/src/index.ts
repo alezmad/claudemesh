@@ -72,6 +72,7 @@ import {
   vaultSet,
   vaultList,
   vaultDelete,
+  vaultGetEntries,
   upsertService,
   updateServiceStatus,
   updateServiceScope,
@@ -3150,6 +3151,15 @@ function handleConnection(ws: WebSocket): void {
             const ok = await vaultDelete(conn.meshId, conn.memberId, vd.key);
             sendToPeer(presenceId, { type: "vault_ack", key: vd.key, action: ok ? "deleted" : "not_found", _reqId: vd._reqId } as any);
           } catch (e) { sendError(ws, "vault_error", e instanceof Error ? e.message : String(e), undefined, vd._reqId); }
+          break;
+        }
+
+        case "vault_get": {
+          const vg = msg as any;
+          try {
+            const entries = await vaultGetEntries(conn.meshId, conn.memberId, vg.keys ?? []);
+            sendToPeer(presenceId, { type: "vault_get_result", entries: entries.map((e: any) => ({ key: e.key, ciphertext: e.ciphertext, nonce: e.nonce, sealed_key: e.sealedKey, entry_type: e.entryType, mount_path: e.mountPath })), _reqId: vg._reqId } as any);
+          } catch (e) { sendError(ws, "vault_error", e instanceof Error ? e.message : String(e), undefined, vg._reqId); }
           break;
         }
 

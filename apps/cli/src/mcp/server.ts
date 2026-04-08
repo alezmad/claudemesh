@@ -1412,14 +1412,73 @@ Your message mode is "${messageMode}".
         const source = file_id
           ? { type: "zip" as const, file_id }
           : { type: "git" as const, url: git_url!, branch: git_branch };
+
+        // Resolve $vault: references in env vars — decrypt client-side
+        const resolvedEnv: Record<string, string> = {};
+        const vaultResolved: string[] = [];
+        if (deployEnv) {
+          // Collect vault keys needed
+          const vaultRefs: Array<{ envKey: string; vaultKey: string; isFile: boolean; mountPath?: string }> = [];
+          for (const [envKey, envVal] of Object.entries(deployEnv)) {
+            if (typeof envVal === "string" && envVal.startsWith("$vault:")) {
+              const parts = envVal.slice(7).split(":");
+              const vaultKey = parts[0]!;
+              const isFile = parts[1] === "file";
+              const mountPath = isFile ? parts.slice(2).join(":") : undefined;
+              vaultRefs.push({ envKey, vaultKey, isFile, mountPath });
+            } else {
+              resolvedEnv[envKey] = envVal;
+            }
+          }
+
+          // Fetch + decrypt vault entries client-side
+          if (vaultRefs.length > 0) {
+            const { openSealedKey, decryptFile } = await import("../crypto/file-crypto");
+            const { ensureSodium } = await import("../crypto/keypair");
+            const sodium = await ensureSodium();
+
+            const keys = vaultRefs.map(r => r.vaultKey);
+            const encryptedEntries = await client.vaultGet(keys);
+
+            for (const ref of vaultRefs) {
+              const entry = encryptedEntries.find((e: any) => e.key === ref.vaultKey);
+              if (!entry) return text(`mesh_mcp_deploy: vault key "${ref.vaultKey}" not found. Use vault_set first.`, true);
+
+              // Decrypt: open sealed key with mesh keypair, then decrypt ciphertext
+              const kf = await openSealedKey(entry.sealed_key, client.getMeshPubkey(), client.getMeshSecretKey());
+              if (!kf) return text(`mesh_mcp_deploy: failed to decrypt vault key "${ref.vaultKey}" — wrong keypair?`, true);
+
+              const ciphertextBytes = sodium.from_base64(entry.ciphertext, sodium.base64_variants.ORIGINAL);
+              const plainBytes = await decryptFile(ciphertextBytes, entry.nonce, kf);
+              if (!plainBytes) return text(`mesh_mcp_deploy: failed to decrypt vault entry "${ref.vaultKey}" — corrupted?`, true);
+
+              if (ref.isFile && ref.mountPath) {
+                // For file-type entries: the plaintext is the file content (raw bytes).
+                // Encode as base64 for transport, runner writes it to mountPath.
+                resolvedEnv[ref.envKey] = `__vault_file__:${ref.mountPath}:${sodium.to_base64(plainBytes, sodium.base64_variants.ORIGINAL)}`;
+              } else {
+                // For env-type entries: plaintext is the secret string
+                resolvedEnv[ref.envKey] = new TextDecoder().decode(plainBytes);
+              }
+              vaultResolved.push(ref.vaultKey);
+            }
+          }
+        }
+
         const config: Record<string, unknown> = {};
-        if (deployEnv) config.env = deployEnv;
+        if (Object.keys(resolvedEnv).length > 0 || (deployEnv && Object.keys(deployEnv).length > 0)) {
+          config.env = Object.keys(resolvedEnv).length > 0 ? resolvedEnv : deployEnv;
+        }
         if (runtime) config.runtime = runtime;
         if (memory_mb) config.memory_mb = memory_mb;
         if (network_allow) config.network_allow = network_allow;
         const result = await client.mcpDeploy(server_name, source, Object.keys(config).length > 0 ? config : undefined, scope);
         const toolList = result.tools?.map((t: any) => `  - ${t.name}: ${t.description}`).join("\n") ?? "  (pending)";
-        return text(`Deployed "${server_name}" (status: ${result.status}).\n\nTools:\n${toolList}\n\nDefault scope: peer (private). Use mesh_mcp_scope to share.`);
+        let vaultNote = "";
+        if (vaultResolved.length > 0) {
+          vaultNote = `\n\nVault keys resolved: ${vaultResolved.join(", ")} (decrypted client-side, sent over TLS)`;
+        }
+        return text(`Deployed "${server_name}" (status: ${result.status}).\n\nTools:\n${toolList}\n\nDefault scope: peer (private). Use mesh_mcp_scope to share.${vaultNote}`);
       }
       case "mesh_mcp_undeploy": {
         const { server_name } = (args ?? {}) as { server_name?: string };

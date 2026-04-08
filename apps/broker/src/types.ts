@@ -1101,6 +1101,8 @@ export interface WSVaultSetMessage { type: "vault_set"; key: string; ciphertext:
 export interface WSVaultListMessage { type: "vault_list"; _reqId?: string; }
 /** Client → broker: delete vault entry. */
 export interface WSVaultDeleteMessage { type: "vault_delete"; key: string; _reqId?: string; }
+/** Client → broker: fetch encrypted vault entries for local decryption. */
+export interface WSVaultGetMessage { type: "vault_get"; keys: string[]; _reqId?: string; }
 
 export type WSClientMessage =
   | WSHelloMessage
@@ -1182,7 +1184,8 @@ export type WSClientMessage =
   | WSSkillDeployMessage
   | WSVaultSetMessage
   | WSVaultListMessage
-  | WSVaultDeleteMessage;
+  | WSVaultDeleteMessage
+  | WSVaultGetMessage;
 
 // --- Skill messages ---
 
@@ -1268,6 +1271,8 @@ export interface WSSkillDeployAckMessage { type: "skill_deploy_ack"; name: strin
 export interface WSVaultAckMessage { type: "vault_ack"; key: string; action: "stored" | "deleted" | "not_found"; _reqId?: string; }
 /** Broker → client: vault entry listing. */
 export interface WSVaultListResultMessage { type: "vault_list_result"; entries: Array<{ key: string; entry_type: "env" | "file"; mount_path?: string; description?: string; updated_at: string }>; _reqId?: string; }
+/** Broker → client: encrypted vault entries for local decryption. */
+export interface WSVaultGetResultMessage { type: "vault_get_result"; entries: Array<{ key: string; ciphertext: string; nonce: string; sealed_key: string; entry_type: string; mount_path?: string }>; _reqId?: string; }
 
 export type WSServerMessage =
   | WSHelloAckMessage
@@ -1327,4 +1332,5 @@ export type WSServerMessage =
   | WSSkillDeployAckMessage
   | WSVaultAckMessage
   | WSVaultListResultMessage
+  | WSVaultGetResultMessage
   | WSErrorMessage;
