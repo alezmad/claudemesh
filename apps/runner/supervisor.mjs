@@ -117,17 +117,15 @@ async function initMcp(svc) {
 // --- Spawn ---
 
 function spawnService(svc) {
-  // npx/uvx packages have a pre-resolved binary
+  // npx/uvx packages have pre-resolved entry points
   let cmd, args;
-  if (svc._npxBin) {
-    // Python venv binaries are scripts with shebangs — run directly
-    if (svc.runtime === "python") {
-      cmd = svc._npxBin;
-      args = [];
-    } else {
-      cmd = "node";
-      args = [svc._npxBin];
-    }
+  if (svc._pythonModule) {
+    // Python MCPs: run via venv python -m <module>
+    cmd = svc._venvPython;
+    args = ["-m", svc._pythonModule];
+  } else if (svc._npxBin) {
+    cmd = "node";
+    args = [svc._npxBin];
   } else {
     ({ cmd, args } = detectEntry(svc.sourcePath, svc.runtime));
   }
@@ -264,18 +262,13 @@ const server = createServer(async (req, res) => {
         } catch (e) {
           return json(res, 500, { error: `uvx install failed: ${e.message}` });
         }
-        // Find the MCP binary in the venv
-        let uvxBinPath = null;
-        const venvBin = join(svcSourcePath, ".venv/bin");
-        if (existsSync(venvBin)) {
-          const bins = readdirSync(venvBin).filter(b => !["python", "python3", "pip", "pip3", "activate", "Activate.ps1", "activate.csh", "activate.fish", "deactivate"].includes(b) && !b.startsWith("python3."));
-          const pkgShort = body.uvxPackage.split("/").pop().replace(/^@/, "");
-          const match = bins.find(b => b.includes(pkgShort.replace(/-/g, ""))) || bins.find(b => b.includes("mcp")) || bins[0];
-          if (match) uvxBinPath = join(venvBin, match);
-        }
+        // For Python MCPs: run via `python -m <module>` using the venv python.
+        // The module name is derived from the package name: mcp-server-time → mcp_server_time
+        const venvPython = join(svcSourcePath, ".venv/bin/python");
+        const moduleName = body.uvxPackage.replace(/-/g, "_");
         svcRuntime = "python";
-        // Skip normal installDeps — already installed via uv
-        const svc2 = { name, sourcePath: svcSourcePath, runtime: svcRuntime, env: svcEnv || {}, process: null, pid: null, tools: [], status: "running", pending: new Map(), logs: [], restarts: 0, healthFailures: 0, _npxBin: uvxBinPath };
+        // _pythonModule signals spawnService to use `python -m <module>` instead of binary
+        const svc2 = { name, sourcePath: svcSourcePath, runtime: svcRuntime, env: svcEnv || {}, process: null, pid: null, tools: [], status: "running", pending: new Map(), logs: [], restarts: 0, healthFailures: 0, _venvPython: venvPython, _pythonModule: moduleName };
         services.set(name, svc2);
         spawnService(svc2);
         // Python MCPs take longer to start — retry init with backoff
