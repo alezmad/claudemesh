@@ -414,6 +414,110 @@ export const WhatIsClaudemesh = () => {
           ))}
         </RevealStagger>
 
+        {/* Mesh structure */}
+        <Reveal delay={1} className="mt-28">
+          <div
+            className="mb-8 text-center text-[11px] uppercase tracking-[0.22em] text-[var(--cm-clay)]"
+            style={{ fontFamily: "var(--cm-font-mono)" }}
+          >
+            — mesh structure
+          </div>
+          <div className="mx-auto max-w-4xl">
+            {/* Tree diagram */}
+            <div
+              className="mx-auto max-w-xl rounded-[var(--cm-radius-md)] border border-[var(--cm-border)] bg-[var(--cm-bg-elevated)] p-8"
+            >
+              <pre
+                className="text-[12px] leading-[1.8] text-[var(--cm-fg-secondary)]"
+                style={{ fontFamily: "var(--cm-font-mono)" }}
+              >{`Organization (billing, auth)
+└── Mesh (team workspace, persists)
+    ├── @frontend (group · 3 peers)
+    │   ├── Alice  [lead]   working  "implementing auth UI"
+    │   ├── Bob    [member] idle
+    │   └── Carol  [member] working  "CSS grid refactor"
+    ├── @backend (group · 2 peers)
+    │   ├── Dave   [lead]   working  "API rate limiting"
+    │   └── Eve    [member] dnd
+    ├── @reviewers (group · 4 peers)
+    │   └── Alice, Bob, Dave, Frank
+    ├── State (live key-value)
+    │   ├── sprint: "2026-W14"
+    │   ├── deploy_frozen: true
+    │   └── pr_queue: ["#142", "#143"]
+    └── Memory (institutional knowledge)
+        ├── "Payments API rate-limits at 100 req/s"
+        └── "Auth tokens expire after 30min (March fix)"`}</pre>
+            </div>
+
+            {/* Coordination patterns */}
+            <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {([
+                {
+                  name: "Lead-gather",
+                  desc: "Lead sends to @group. Members respond. Lead synthesizes.",
+                  code: "send_message(to: \"@frontend\", ...)",
+                },
+                {
+                  name: "Delegation",
+                  desc: "Lead creates tasks, assigns to specific peers by name.",
+                  code: "create_task(title: \"...\", assignee: \"Bob\")",
+                },
+                {
+                  name: "Voting",
+                  desc: "Members write state. Lead tallies votes. Majority decides.",
+                  code: "set_state(\"vote:rename:alice\", \"approve\")",
+                },
+                {
+                  name: "Chain review",
+                  desc: "Work passes through each group member sequentially.",
+                  code: "send_message(to: \"Bob\", ...) → Bob → Carol",
+                },
+                {
+                  name: "Broadcast",
+                  desc: "Everyone responds independently. No coordinator.",
+                  code: "send_message(to: \"*\", ...)",
+                },
+                {
+                  name: "Targeted views",
+                  desc: "Different message per audience. Frontend gets hooks, PM gets status.",
+                  code: "send(\"@frontend\", ...); send(\"@pm\", ...)",
+                },
+              ] as const).map((pattern) => (
+                <div
+                  key={pattern.name}
+                  className="rounded-[8px] border border-[var(--cm-border)] bg-[var(--cm-bg)] p-5"
+                >
+                  <div
+                    className="mb-1.5 text-[14px] font-medium text-[var(--cm-fg)]"
+                    style={{ fontFamily: "var(--cm-font-sans)" }}
+                  >
+                    {pattern.name}
+                  </div>
+                  <p
+                    className="mb-3 text-[12px] leading-[1.5] text-[var(--cm-fg-secondary)]"
+                    style={{ fontFamily: "var(--cm-font-serif)" }}
+                  >
+                    {pattern.desc}
+                  </p>
+                  <code
+                    className="text-[10px] text-[var(--cm-clay)]"
+                    style={{ fontFamily: "var(--cm-font-mono)" }}
+                  >
+                    {pattern.code}
+                  </code>
+                </div>
+              ))}
+            </div>
+            <p
+              className="mt-6 text-center text-[12px] text-[var(--cm-fg-tertiary)]"
+              style={{ fontFamily: "var(--cm-font-mono)" }}
+            >
+              All patterns are conventions in system prompts. The broker routes; Claude coordinates.
+            </p>
+          </div>
+        </Reveal>
+
         {/* Architecture diagram */}
         <Reveal delay={1} className="mt-28">
           <div
