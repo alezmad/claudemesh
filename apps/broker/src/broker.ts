@@ -39,8 +39,10 @@ import {
   meshMember as memberTable,
   meshMemory,
   meshState,
+  meshService,
   meshSkill,
   meshStream,
+  meshVaultEntry,
   meshTask,
   messageQueue,
   pendingStatus,
@@ -1950,4 +1952,92 @@ export async function meshSchema(
     });
   }
   return [...tables.entries()].map(([name, columns]) => ({ name, columns }));
+}
+
+// ---------------------------------------------------------------------------
+// Vault operations
+// ---------------------------------------------------------------------------
+
+export async function vaultSet(meshId: string, memberId: string, key: string, ciphertext: string, nonce: string, sealedKey: string, entryType: "env" | "file", mountPath?: string, description?: string): Promise<string> {
+  const existing = await db.select({ id: meshVaultEntry.id }).from(meshVaultEntry).where(and(eq(meshVaultEntry.meshId, meshId), eq(meshVaultEntry.memberId, memberId), eq(meshVaultEntry.key, key))).limit(1);
+  if (existing.length > 0) {
+    await db.update(meshVaultEntry).set({ ciphertext, nonce, sealedKey, entryType, mountPath: mountPath ?? null, description: description ?? null, updatedAt: new Date() }).where(eq(meshVaultEntry.id, existing[0]!.id));
+    return existing[0]!.id;
+  }
+  const [row] = await db.insert(meshVaultEntry).values({ meshId, memberId, key, ciphertext, nonce, sealedKey, entryType, mountPath: mountPath ?? null, description: description ?? null }).returning({ id: meshVaultEntry.id });
+  return row!.id;
+}
+
+export async function vaultList(meshId: string, memberId: string) {
+  return db.select({ key: meshVaultEntry.key, entryType: meshVaultEntry.entryType, mountPath: meshVaultEntry.mountPath, description: meshVaultEntry.description, updatedAt: meshVaultEntry.updatedAt }).from(meshVaultEntry).where(and(eq(meshVaultEntry.meshId, meshId), eq(meshVaultEntry.memberId, memberId)));
+}
+
+export async function vaultDelete(meshId: string, memberId: string, key: string): Promise<boolean> {
+  const deleted = await db.delete(meshVaultEntry).where(and(eq(meshVaultEntry.meshId, meshId), eq(meshVaultEntry.memberId, memberId), eq(meshVaultEntry.key, key))).returning({ id: meshVaultEntry.id });
+  return deleted.length > 0;
+}
+
+export async function vaultGetEntries(meshId: string, memberId: string, keys: string[]) {
+  if (keys.length === 0) return [];
+  return db.select({ key: meshVaultEntry.key, ciphertext: meshVaultEntry.ciphertext, nonce: meshVaultEntry.nonce, sealedKey: meshVaultEntry.sealedKey, entryType: meshVaultEntry.entryType, mountPath: meshVaultEntry.mountPath }).from(meshVaultEntry).where(and(eq(meshVaultEntry.meshId, meshId), eq(meshVaultEntry.memberId, memberId), inArray(meshVaultEntry.key, keys)));
+}
+
+// ---------------------------------------------------------------------------
+// Service catalog operations
+// ---------------------------------------------------------------------------
+
+export async function upsertService(meshId: string, name: string, data: { type: "mcp" | "skill"; sourceType: string; description: string; sourceFileId?: string; sourceGitUrl?: string; sourceGitBranch?: string; sourceGitSha?: string; instructions?: string; toolsSchema?: unknown; manifest?: unknown; runtime?: string; status?: string; config?: unknown; scope?: unknown; deployedBy?: string; deployedByName?: string }): Promise<string> {
+  // Whitelist allowed fields — prevent mass-assignment of id, meshId, createdAt, etc.
+  const fields: Record<string, unknown> = {
+    type: data.type,
+    sourceType: data.sourceType,
+    description: data.description,
+    ...(data.sourceFileId !== undefined && { sourceFileId: data.sourceFileId }),
+    ...(data.sourceGitUrl !== undefined && { sourceGitUrl: data.sourceGitUrl }),
+    ...(data.sourceGitBranch !== undefined && { sourceGitBranch: data.sourceGitBranch }),
+    ...(data.sourceGitSha !== undefined && { sourceGitSha: data.sourceGitSha }),
+    ...(data.instructions !== undefined && { instructions: data.instructions }),
+    ...(data.toolsSchema !== undefined && { toolsSchema: data.toolsSchema }),
+    ...(data.manifest !== undefined && { manifest: data.manifest }),
+    ...(data.runtime !== undefined && { runtime: data.runtime }),
+    ...(data.status !== undefined && { status: data.status }),
+    ...(data.config !== undefined && { config: data.config }),
+    ...(data.scope !== undefined && { scope: data.scope }),
+    ...(data.deployedBy !== undefined && { deployedBy: data.deployedBy }),
+    ...(data.deployedByName !== undefined && { deployedByName: data.deployedByName }),
+  };
+
+  const existing = await db.select({ id: meshService.id }).from(meshService).where(and(eq(meshService.meshId, meshId), eq(meshService.name, name))).limit(1);
+  if (existing.length > 0) {
+    await db.update(meshService).set({ ...fields, updatedAt: new Date() } as any).where(eq(meshService.id, existing[0]!.id));
+    return existing[0]!.id;
+  }
+  const [row] = await db.insert(meshService).values({ meshId, name, ...fields } as any).returning({ id: meshService.id });
+  return row!.id;
+}
+
+export async function updateServiceStatus(meshId: string, name: string, status: string, extra?: { toolsSchema?: unknown; restartCount?: number; lastHealth?: Date }) {
+  await db.update(meshService).set({ status, ...(extra ?? {}), updatedAt: new Date() } as any).where(and(eq(meshService.meshId, meshId), eq(meshService.name, name)));
+}
+
+export async function updateServiceScope(meshId: string, name: string, scope: unknown) {
+  await db.update(meshService).set({ scope, updatedAt: new Date() } as any).where(and(eq(meshService.meshId, meshId), eq(meshService.name, name)));
+}
+
+export async function getService(meshId: string, name: string) {
+  const rows = await db.select().from(meshService).where(and(eq(meshService.meshId, meshId), eq(meshService.name, name))).limit(1);
+  return rows[0] ?? null;
+}
+
+export async function listDbMeshServices(meshId: string) {
+  return db.select().from(meshService).where(eq(meshService.meshId, meshId));
+}
+
+export async function deleteService(meshId: string, name: string): Promise<boolean> {
+  const deleted = await db.delete(meshService).where(and(eq(meshService.meshId, meshId), eq(meshService.name, name))).returning({ id: meshService.id });
+  return deleted.length > 0;
+}
+
+export async function getRunningServices(meshId: string) {
+  return db.select().from(meshService).where(and(eq(meshService.meshId, meshId), eq(meshService.status, "running")));
 }

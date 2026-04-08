@@ -14,12 +14,13 @@
  */
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync, readdirSync, statSync } from "node:fs";
-import { tmpdir, hostname } from "node:os";
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, statSync, existsSync, readFileSync } from "node:fs";
+import { tmpdir, hostname, homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { loadConfig, getConfigPath } from "../state/config";
 import type { Config, JoinedMesh, GroupEntry } from "../state/config";
+import { BrokerClient } from "../ws/client";
 
 // Flags as parsed by citty (index.ts is the source of truth for definitions).
 export interface LaunchFlags {
@@ -277,6 +278,56 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     }
   } catch { /* best effort */ }
 
+  // Clean up stale mesh MCP entries from crashed sessions
+  try {
+    const claudeConfigPath = join(homedir(), ".claude.json");
+    if (existsSync(claudeConfigPath)) {
+      const claudeConfig = JSON.parse(readFileSync(claudeConfigPath, "utf-8"));
+      const mcpServers = claudeConfig.mcpServers ?? {};
+      let cleaned = 0;
+      for (const key of Object.keys(mcpServers)) {
+        if (!key.startsWith("mesh:")) continue;
+        const meta = mcpServers[key]?._meshSession;
+        if (!meta?.pid) continue;
+        // Check if the PID is still alive
+        try {
+          process.kill(meta.pid, 0); // signal 0 = check existence
+        } catch {
+          // PID is dead — remove stale entry
+          delete mcpServers[key];
+          cleaned++;
+        }
+      }
+      if (cleaned > 0) {
+        claudeConfig.mcpServers = mcpServers;
+        writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2) + "\n", "utf-8");
+      }
+    }
+  } catch { /* best effort */ }
+
+  // --- Fetch deployed services for native MCP entries ---
+  let serviceCatalog: Array<{
+    name: string;
+    description: string;
+    status: string;
+    tools: Array<{ name: string; description: string; inputSchema: object }>;
+    deployed_by: string;
+  }> = [];
+
+  try {
+    const tmpClient = new BrokerClient(mesh, { displayName });
+    await tmpClient.connect();
+    // Wait briefly for hello_ack with service catalog
+    await new Promise(r => setTimeout(r, 2000));
+    serviceCatalog = tmpClient.serviceCatalog;
+    tmpClient.close();
+  } catch {
+    // Non-fatal — launch without native service entries
+    if (!args.quiet) {
+      console.log("  (Could not fetch service catalog — mesh services won't be natively available)");
+    }
+  }
+
   // 4. Write session config to tmpdir (isolates mesh selection).
   const tmpDir = mkdtempSync(join(tmpdir(), "claudemesh-"));
   const sessionConfig: Config = {
@@ -299,6 +350,59 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     // Auto-permissions confirmation — needed for autonomous peer messaging.
     if (!args.skipPermConfirm) {
       await confirmPermissions();
+    }
+  }
+
+  // --- Install native MCP entries for deployed mesh services ---
+  const meshMcpEntries: Array<{ key: string; entry: unknown }> = [];
+
+  if (serviceCatalog.length > 0) {
+    const claudeConfigPath = join(homedir(), ".claude.json");
+
+    // Read-modify-write: only touch mesh:* entries in mcpServers
+    let claudeConfig: Record<string, unknown> = {};
+    try {
+      claudeConfig = JSON.parse(readFileSync(claudeConfigPath, "utf-8"));
+    } catch {
+      claudeConfig = {};
+    }
+
+    const mcpServers = (claudeConfig.mcpServers ?? {}) as Record<string, unknown>;
+
+    // Session-scoped key: mesh:<service>:<sessionId>
+    const sessionTag = `${process.pid}`;
+
+    for (const svc of serviceCatalog) {
+      if (svc.status !== "running") continue;
+      const entryKey = `mesh:${svc.name}:${sessionTag}`;
+      const entry = {
+        command: "claudemesh",
+        args: ["mcp", "--service", svc.name],
+        env: {
+          CLAUDEMESH_CONFIG_DIR: tmpDir,
+        },
+        _meshSession: {
+          pid: process.pid,
+          meshSlug: mesh.slug,
+          serviceName: svc.name,
+          createdAt: new Date().toISOString(),
+        },
+      };
+      mcpServers[entryKey] = entry;
+      meshMcpEntries.push({ key: entryKey, entry });
+    }
+
+    claudeConfig.mcpServers = mcpServers;
+    writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2) + "\n", "utf-8");
+
+    if (!args.quiet && meshMcpEntries.length > 0) {
+      console.log(`  ${meshMcpEntries.length} mesh service(s) registered as native MCPs:`);
+      for (const { key } of meshMcpEntries) {
+        const svcName = key.split(":")[1];
+        const svc = serviceCatalog.find(s => s.name === svcName);
+        console.log(`    ${svcName} (${svc?.tools.length ?? 0} tools)`);
+      }
+      console.log("");
     }
   }
 
@@ -333,12 +437,28 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
       ...process.env,
       CLAUDEMESH_CONFIG_DIR: tmpDir,
       CLAUDEMESH_DISPLAY_NAME: displayName,
+      MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? "30000",
+      MAX_MCP_OUTPUT_TOKENS: process.env.MAX_MCP_OUTPUT_TOKENS ?? "50000",
       ...(role ? { CLAUDEMESH_ROLE: role } : {}),
     },
   });
 
   // 7. Cleanup on exit.
   const cleanup = (): void => {
+    // Remove mesh MCP entries from ~/.claude.json
+    if (meshMcpEntries.length > 0) {
+      try {
+        const claudeConfigPath = join(homedir(), ".claude.json");
+        const claudeConfig = JSON.parse(readFileSync(claudeConfigPath, "utf-8"));
+        const mcpServers = claudeConfig.mcpServers ?? {};
+        for (const { key } of meshMcpEntries) {
+          delete mcpServers[key];
+        }
+        claudeConfig.mcpServers = mcpServers;
+        writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2) + "\n", "utf-8");
+      } catch { /* best effort */ }
+    }
+    // Existing tmpdir cleanup
     try {
       rmSync(tmpDir, { recursive: true, force: true });
     } catch {

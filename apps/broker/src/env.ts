@@ -28,6 +28,9 @@ const envSchema = z.object({
   NEO4J_URL: z.string().default("bolt://neo4j:7687"),
   NEO4J_USER: z.string().default("neo4j"),
   NEO4J_PASSWORD: z.string().default("changeme"),
+  CLAUDEMESH_SERVICES_DIR: z.string().default("/var/claudemesh/services"),
+  MAX_SERVICES_PER_MESH: z.coerce.number().int().positive().default(20),
+  MAX_SERVICE_ZIP_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
   NODE_ENV: z
     .enum(["development", "production", "test"])
     .default("development"),

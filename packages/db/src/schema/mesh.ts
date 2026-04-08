@@ -454,6 +454,12 @@ export const meshSkill = meshSchema.table(
     tags: text().array().default([]),
     authorMemberId: text().references(() => meshMember.id),
     authorName: text(),
+    sourceType: text().default("inline"),
+    bundleFileId: text().references(() => meshFile.id),
+    gitUrl: text(),
+    gitBranch: text().default("main"),
+    gitSha: text(),
+    manifest: jsonb(),
     createdAt: timestamp().defaultNow().notNull(),
     updatedAt: timestamp().defaultNow().notNull(),
   },
@@ -485,6 +491,63 @@ export const meshWebhook = meshSchema.table(
     createdAt: timestamp().defaultNow().notNull(),
   },
   (table) => [uniqueIndex("webhook_mesh_name_idx").on(table.meshId, table.name)],
+);
+
+export const meshService = meshSchema.table(
+  "service",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    name: text().notNull(),
+    type: text().notNull(),
+    sourceType: text().notNull(),
+    sourceFileId: text().references(() => meshFile.id),
+    sourceGitUrl: text(),
+    sourceGitBranch: text().default("main"),
+    sourceGitSha: text(),
+    prevGitSha: text(),
+    description: text().notNull(),
+    instructions: text(),
+    toolsSchema: jsonb(),
+    manifest: jsonb(),
+    runtime: text(),
+    status: text().default("stopped"),
+    config: jsonb().default({}),
+    lastHealth: timestamp(),
+    restartCount: integer().default(0),
+    version: integer().default(1),
+    scope: jsonb().default({ type: "peer" }),
+    deployedBy: text().references(() => meshMember.id),
+    deployedByName: text(),
+    createdAt: timestamp().defaultNow().notNull(),
+    updatedAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("service_mesh_name_idx").on(table.meshId, table.name)],
+);
+
+export const meshVaultEntry = meshSchema.table(
+  "vault_entry",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    memberId: text()
+      .references(() => meshMember.id)
+      .notNull(),
+    key: text().notNull(),
+    ciphertext: text().notNull(),
+    nonce: text().notNull(),
+    sealedKey: text().notNull(),
+    entryType: text().default("env"),
+    mountPath: text(),
+    description: text(),
+    createdAt: timestamp().defaultNow().notNull(),
+    updatedAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [uniqueIndex("vault_entry_mesh_member_key_idx").on(table.meshId, table.memberId, table.key)],
 );
 
 export const meshWebhookRelations = relations(meshWebhook, ({ one }) => ({
@@ -787,9 +850,34 @@ export const meshSkillRelations = relations(meshSkill, ({ one }) => ({
     fields: [meshSkill.authorMemberId],
     references: [meshMember.id],
   }),
+  bundleFile: one(meshFile, {
+    fields: [meshSkill.bundleFileId],
+    references: [meshFile.id],
+  }),
 }));
 
 export const selectMeshSkillSchema = createSelectSchema(meshSkill);
 export const insertMeshSkillSchema = createInsertSchema(meshSkill);
 export type SelectMeshSkill = typeof meshSkill.$inferSelect;
 export type InsertMeshSkill = typeof meshSkill.$inferInsert;
+
+export const meshServiceRelations = relations(meshService, ({ one }) => ({
+  mesh: one(mesh, { fields: [meshService.meshId], references: [mesh.id] }),
+  sourceFile: one(meshFile, { fields: [meshService.sourceFileId], references: [meshFile.id] }),
+  deployer: one(meshMember, { fields: [meshService.deployedBy], references: [meshMember.id] }),
+}));
+
+export const selectMeshServiceSchema = createSelectSchema(meshService);
+export const insertMeshServiceSchema = createInsertSchema(meshService);
+export type SelectMeshService = typeof meshService.$inferSelect;
+export type InsertMeshService = typeof meshService.$inferInsert;
+
+export const meshVaultEntryRelations = relations(meshVaultEntry, ({ one }) => ({
+  mesh: one(mesh, { fields: [meshVaultEntry.meshId], references: [mesh.id] }),
+  member: one(meshMember, { fields: [meshVaultEntry.memberId], references: [meshMember.id] }),
+}));
+
+export const selectMeshVaultEntrySchema = createSelectSchema(meshVaultEntry);
+export const insertMeshVaultEntrySchema = createInsertSchema(meshVaultEntry);
+export type SelectMeshVaultEntry = typeof meshVaultEntry.$inferSelect;
+export type InsertMeshVaultEntry = typeof meshVaultEntry.$inferInsert;

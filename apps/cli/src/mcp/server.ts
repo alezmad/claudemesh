@@ -22,7 +22,8 @@ import type {
   SetSummaryArgs,
   ListPeersArgs,
 } from "./types";
-import type { BrokerClient, InboundPush } from "../ws/client";
+import { BrokerClient } from "../ws/client";
+import type { InboundPush } from "../ws/client";
 
 /** Compute a human-readable relative time string from an ISO timestamp. */
 function relativeTime(isoStr: string): string {
@@ -144,6 +145,12 @@ function formatPush(p: InboundPush, meshSlug: string): string {
 }
 
 export async function startMcpServer(): Promise<void> {
+  // Check for --service mode (native mesh MCP proxy)
+  const serviceIdx = process.argv.indexOf("--service");
+  if (serviceIdx !== -1 && process.argv[serviceIdx + 1]) {
+    return startServiceProxy(process.argv[serviceIdx + 1]!);
+  }
+
   const config = loadConfig();
 
   const myName = config.displayName ?? "unnamed";
@@ -1528,6 +1535,185 @@ Your message mode is "${messageMode}".
   const shutdown = (): void => {
     clearInterval(keepalive);
     stopAll();
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
+}
+
+/**
+ * Mesh service proxy — a thin MCP server that proxies ONE deployed service.
+ *
+ * Spawned by Claude Code as a native MCP entry. Connects to the broker,
+ * fetches tool schemas for the named service, and routes tool calls.
+ *
+ * If the broker WS drops, the proxy waits for reconnection (up to 10s)
+ * before failing tool calls. If the proxy process itself crashes, Claude
+ * Code will not auto-restart it.
+ */
+async function startServiceProxy(serviceName: string): Promise<void> {
+  const config = loadConfig();
+  if (config.meshes.length === 0) {
+    process.stderr.write(`[mesh:${serviceName}] no meshes joined\n`);
+    process.exit(1);
+  }
+
+  const mesh = config.meshes[0]!;
+  const client = new BrokerClient(mesh, {
+    displayName: config.displayName ?? `proxy:${serviceName}`,
+  });
+
+  try {
+    await client.connect();
+  } catch (e) {
+    process.stderr.write(
+      `[mesh:${serviceName}] broker connect failed: ${e instanceof Error ? e.message : String(e)}\n`,
+    );
+    process.exit(1);
+  }
+
+  // Wait for hello_ack and service catalog
+  await new Promise((r) => setTimeout(r, 1500));
+
+  // Fetch tool schemas for this service
+  let tools: Array<{
+    name: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+  }> = [];
+  try {
+    const fetched = await client.getServiceTools(serviceName);
+    tools = fetched as typeof tools;
+  } catch {
+    // Try from catalog cache
+    const cached = client.serviceCatalog.find((s) => s.name === serviceName);
+    if (cached) {
+      tools = cached.tools as typeof tools;
+    }
+  }
+
+  if (tools.length === 0) {
+    process.stderr.write(
+      `[mesh:${serviceName}] no tools found — service may not be running\n`,
+    );
+  }
+
+  // Build MCP server
+  const server = new Server(
+    { name: `mesh:${serviceName}`, version: "0.1.0" },
+    { capabilities: { tools: {} } },
+  );
+
+  server.setRequestHandler(ListToolsRequestSchema, () => ({
+    tools: tools.map((t) => ({
+      name: t.name,
+      description: `[mesh:${serviceName}] ${t.description}`,
+      inputSchema: t.inputSchema as any,
+    })),
+  }));
+
+  server.setRequestHandler(CallToolRequestSchema, async (req) => {
+    const toolName = req.params.name;
+    const args = req.params.arguments ?? {};
+
+    // Wait for broker reconnection if needed
+    if (client.status !== "open") {
+      let waited = 0;
+      while (client.status !== "open" && waited < 10_000) {
+        await new Promise((r) => setTimeout(r, 500));
+        waited += 500;
+      }
+      if (client.status !== "open") {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Service temporarily unavailable — broker reconnecting. Retry in a few seconds.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    try {
+      const result = await client.mcpCall(
+        serviceName,
+        toolName,
+        args as Record<string, unknown>,
+      );
+      if (result.error) {
+        return {
+          content: [{ type: "text" as const, text: `Error: ${result.error}` }],
+          isError: true,
+        };
+      }
+      const resultText =
+        typeof result.result === "string"
+          ? result.result
+          : JSON.stringify(result.result, null, 2);
+      return {
+        content: [{ type: "text" as const, text: resultText }],
+      };
+    } catch (e) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Call failed: ${e instanceof Error ? e.message : String(e)}`,
+          },
+        ],
+        isError: true,
+      };
+    }
+  });
+
+  // Listen for service events (undeploy, update)
+  client.onPush((push) => {
+    if (
+      push.event === "mcp_undeployed" &&
+      (push.eventData as any)?.name === serviceName
+    ) {
+      process.stderr.write(
+        `[mesh:${serviceName}] service undeployed — exiting\n`,
+      );
+      client.close();
+      process.exit(0);
+    }
+    if (
+      push.event === "mcp_updated" &&
+      (push.eventData as any)?.name === serviceName
+    ) {
+      // Refresh tools
+      const newTools = (push.eventData as any)?.tools;
+      if (Array.isArray(newTools)) {
+        tools = newTools;
+        // Notify Claude Code that tools changed
+        server
+          .notification({
+            method: "notifications/tools/list_changed",
+          })
+          .catch(() => {
+            /* ignore notification errors */
+          });
+      }
+    }
+  });
+
+  // Start stdio transport
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+
+  // Keep event loop alive
+  const keepalive = setInterval(() => {
+    // Intentionally empty — prevents event loop from settling.
+  }, 1_000);
+  void keepalive;
+
+  // Graceful shutdown
+  const shutdown = (): void => {
+    clearInterval(keepalive);
+    client.close();
     process.exit(0);
   };
   process.on("SIGTERM", shutdown);

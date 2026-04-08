@@ -114,6 +114,8 @@ export class BrokerClient {
   private peerDirResponseResolvers = new Map<string, { resolve: (result: { entries?: string[]; error?: string }) => void; timer: NodeJS.Timeout }>();
   /** Directories from which this peer serves files. Default: [process.cwd()]. */
   private sharedDirs: string[] = [process.cwd()];
+  private _serviceCatalog: Array<{ name: string; description: string; status: string; tools: Array<{ name: string; description: string; inputSchema: object }>; deployed_by: string }> = [];
+  get serviceCatalog() { return this._serviceCatalog; }
   private closed = false;
   private reconnectAttempt = 0;
   private helloTimer: NodeJS.Timeout | null = null;
@@ -248,6 +250,9 @@ export class BrokerClient {
               this._statsCounters.toolCalls = rs.toolCalls ?? 0;
               this._statsCounters.errors = rs.errors ?? 0;
             }
+          }
+          if ((msg as any).services) {
+            this._serviceCatalog = (msg as any).services;
           }
           resolve();
           return;
@@ -588,6 +593,14 @@ export class BrokerClient {
   private mcpCallResolvers = new Map<string, { resolve: (result: { result?: unknown; error?: string }) => void; timer: NodeJS.Timeout }>();
   /** Handler for inbound mcp_call_forward messages. Set by the MCP server. */
   private mcpCallForwardHandler: ((forward: { callId: string; serverName: string; toolName: string; args: Record<string, unknown>; callerName: string }) => Promise<{ result?: unknown; error?: string }>) | null = null;
+  private vaultAckResolvers = new Map<string, { resolve: (ok: boolean) => void; timer: NodeJS.Timeout }>();
+  private vaultListResolvers = new Map<string, { resolve: (entries: any[]) => void; timer: NodeJS.Timeout }>();
+  private mcpDeployResolvers = new Map<string, { resolve: (result: any) => void; timer: NodeJS.Timeout }>();
+  private mcpLogsResolvers = new Map<string, { resolve: (lines: string[]) => void; timer: NodeJS.Timeout }>();
+  private mcpSchemaServiceResolvers = new Map<string, { resolve: (tools: any[]) => void; timer: NodeJS.Timeout }>();
+  private mcpCatalogResolvers = new Map<string, { resolve: (services: any[]) => void; timer: NodeJS.Timeout }>();
+  private mcpScopeResolvers = new Map<string, { resolve: (result: any) => void; timer: NodeJS.Timeout }>();
+  private skillDeployResolvers = new Map<string, { resolve: (result: any) => void; timer: NodeJS.Timeout }>();
 
   async messageStatus(messageId: string): Promise<{ messageId: string; targetSpec: string; delivered: boolean; deliveredAt: string | null; recipients: Array<{ name: string; pubkey: string; status: string }> } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
@@ -1178,6 +1191,125 @@ export class BrokerClient {
     });
   }
 
+  // --- Vault ---
+
+  async vaultSet(key: string, ciphertext: string, nonce: string, sealedKey: string, entryType: "env" | "file", mountPath?: string, description?: string): Promise<boolean> {
+    return new Promise(resolve => {
+      const reqId = `vset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const timer = setTimeout(() => { this.vaultAckResolvers.delete(reqId); resolve(false); }, 10_000);
+      this.vaultAckResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "vault_set", key, ciphertext, nonce, sealed_key: sealedKey, entry_type: entryType, mount_path: mountPath, description, _reqId: reqId } as any);
+    });
+  }
+
+  async vaultList(): Promise<any[]> {
+    return new Promise(resolve => {
+      const reqId = `vlist_${Date.now()}`;
+      const timer = setTimeout(() => { this.vaultListResolvers.delete(reqId); resolve([]); }, 10_000);
+      this.vaultListResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "vault_list", _reqId: reqId } as any);
+    });
+  }
+
+  async vaultDelete(key: string): Promise<boolean> {
+    return new Promise(resolve => {
+      const reqId = `vdel_${Date.now()}`;
+      const timer = setTimeout(() => { this.vaultAckResolvers.delete(reqId); resolve(false); }, 10_000);
+      this.vaultAckResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "vault_delete", key, _reqId: reqId } as any);
+    });
+  }
+
+  // --- MCP Deploy ---
+
+  async mcpDeploy(serverName: string, source: any, config?: any, scope?: any): Promise<any> {
+    return new Promise(resolve => {
+      const reqId = `deploy_${Date.now()}`;
+      const timer = setTimeout(() => { this.mcpDeployResolvers.delete(reqId); resolve({ status: "timeout" }); }, 60_000);
+      this.mcpDeployResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "mcp_deploy", server_name: serverName, source, config, scope, _reqId: reqId } as any);
+    });
+  }
+
+  async mcpUndeploy(serverName: string): Promise<boolean> {
+    return new Promise(resolve => {
+      const reqId = `undeploy_${Date.now()}`;
+      const timer = setTimeout(() => { this.mcpDeployResolvers.delete(reqId); resolve(false); }, 10_000);
+      this.mcpDeployResolvers.set(reqId, { resolve: (r: any) => resolve(r.status === "stopped"), timer });
+      this.sendRaw({ type: "mcp_undeploy", server_name: serverName, _reqId: reqId } as any);
+    });
+  }
+
+  async mcpUpdate(serverName: string): Promise<any> {
+    return new Promise(resolve => {
+      const reqId = `update_${Date.now()}`;
+      const timer = setTimeout(() => { this.mcpDeployResolvers.delete(reqId); resolve({ status: "timeout" }); }, 60_000);
+      this.mcpDeployResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "mcp_update", server_name: serverName, _reqId: reqId } as any);
+    });
+  }
+
+  async mcpLogs(serverName: string, lines?: number): Promise<string[]> {
+    return new Promise(resolve => {
+      const reqId = `logs_${Date.now()}`;
+      const timer = setTimeout(() => { this.mcpLogsResolvers.delete(reqId); resolve([]); }, 10_000);
+      this.mcpLogsResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "mcp_logs", server_name: serverName, lines, _reqId: reqId } as any);
+    });
+  }
+
+  async mcpScope(serverName: string, scope?: any): Promise<any> {
+    return new Promise(resolve => {
+      const reqId = `scope_${Date.now()}`;
+      const timer = setTimeout(() => { this.mcpScopeResolvers.delete(reqId); resolve({ scope: { type: "peer" }, deployed_by: "unknown" }); }, 10_000);
+      this.mcpScopeResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "mcp_scope", server_name: serverName, scope, _reqId: reqId } as any);
+    });
+  }
+
+  async mcpServiceSchema(serverName: string, toolName?: string): Promise<any[]> {
+    return new Promise(resolve => {
+      const reqId = `schema_${Date.now()}`;
+      const timer = setTimeout(() => { this.mcpSchemaServiceResolvers.delete(reqId); resolve([]); }, 10_000);
+      this.mcpSchemaServiceResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "mcp_schema", server_name: serverName, tool_name: toolName, _reqId: reqId } as any);
+    });
+  }
+
+  async mcpCatalog(): Promise<any[]> {
+    return new Promise(resolve => {
+      const reqId = `catalog_${Date.now()}`;
+      const timer = setTimeout(() => { this.mcpCatalogResolvers.delete(reqId); resolve([]); }, 10_000);
+      this.mcpCatalogResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "mcp_catalog", _reqId: reqId } as any);
+    });
+  }
+
+  // --- Skill Deploy ---
+
+  async skillDeploy(source: any): Promise<any> {
+    return new Promise(resolve => {
+      const reqId = `skilldeploy_${Date.now()}`;
+      const timer = setTimeout(() => { this.skillDeployResolvers.delete(reqId); resolve({ name: "unknown", files: [] }); }, 30_000);
+      this.skillDeployResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "skill_deploy", source, _reqId: reqId } as any);
+    });
+  }
+
+  async getServiceTools(serviceName: string): Promise<any[]> {
+    // Check cached catalog first
+    const cached = this._serviceCatalog.find(s => s.name === serviceName);
+    if (cached?.tools?.length) return cached.tools;
+    // Fall back to schema query
+    return this.mcpServiceSchema(serviceName);
+  }
+
+  /** Send a raw JSON frame to the broker (fire-and-forget). */
+  private sendRaw(payload: Record<string, unknown>): void {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify(payload));
+  }
+
   close(): void {
     this.closed = true;
     this.stopStatsReporting();
@@ -1730,6 +1862,78 @@ export class BrokerClient {
       this.resolveFromMap(this.webhookListResolvers, msgReqId, webhooks);
       return;
     }
+    if (msg.type === "vault_ack") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.vaultAckResolvers.has(reqId)) {
+        const r = this.vaultAckResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.vaultAckResolvers.delete(reqId);
+        r.resolve(msg.action !== "not_found");
+      }
+    }
+    if (msg.type === "vault_list_result") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.vaultListResolvers.has(reqId)) {
+        const r = this.vaultListResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.vaultListResolvers.delete(reqId);
+        r.resolve((msg as any).entries ?? []);
+      }
+    }
+    if (msg.type === "mcp_deploy_status") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.mcpDeployResolvers.has(reqId)) {
+        const r = this.mcpDeployResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.mcpDeployResolvers.delete(reqId);
+        r.resolve({ status: (msg as any).status, tools: (msg as any).tools, error: (msg as any).error });
+      }
+    }
+    if (msg.type === "mcp_logs_result") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.mcpLogsResolvers.has(reqId)) {
+        const r = this.mcpLogsResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.mcpLogsResolvers.delete(reqId);
+        r.resolve((msg as any).lines ?? []);
+      }
+    }
+    if (msg.type === "mcp_schema_result") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.mcpSchemaServiceResolvers.has(reqId)) {
+        const r = this.mcpSchemaServiceResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.mcpSchemaServiceResolvers.delete(reqId);
+        r.resolve((msg as any).tools ?? []);
+      }
+    }
+    if (msg.type === "mcp_catalog_result") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.mcpCatalogResolvers.has(reqId)) {
+        const r = this.mcpCatalogResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.mcpCatalogResolvers.delete(reqId);
+        r.resolve((msg as any).services ?? []);
+      }
+    }
+    if (msg.type === "mcp_scope_result") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.mcpScopeResolvers.has(reqId)) {
+        const r = this.mcpScopeResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.mcpScopeResolvers.delete(reqId);
+        r.resolve({ scope: (msg as any).scope, deployed_by: (msg as any).deployed_by });
+      }
+    }
+    if (msg.type === "skill_deploy_ack") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.skillDeployResolvers.has(reqId)) {
+        const r = this.skillDeployResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.skillDeployResolvers.delete(reqId);
+        r.resolve({ name: (msg as any).name, files: (msg as any).files ?? [] });
+      }
+    }
     if (msg.type === "error") {
       this.debug(`broker error: ${msg.code} ${msg.message}`);
       const id = msg.id ? String(msg.id) : null;
@@ -1787,6 +1991,14 @@ export class BrokerClient {
           [this.peerDirResponseResolvers, { error: "broker error" }],
           [this.webhookAckResolvers, null],
           [this.webhookListResolvers, []],
+          [this.vaultAckResolvers, false],
+          [this.vaultListResolvers, []],
+          [this.mcpDeployResolvers, { status: "error" }],
+          [this.mcpLogsResolvers, []],
+          [this.mcpSchemaServiceResolvers, []],
+          [this.mcpCatalogResolvers, []],
+          [this.mcpScopeResolvers, { scope: { type: "peer" }, deployed_by: "unknown" }],
+          [this.skillDeployResolvers, { name: "unknown", files: [] }],
         ];
         for (const [map, defaultVal] of allMaps) {
           const first = (map as Map<string, any>).entries().next().value as [string, { resolve: (v: unknown) => void; timer: NodeJS.Timeout }] | undefined;

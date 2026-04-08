@@ -69,7 +69,17 @@ import {
   getSkill,
   listSkills,
   removeSkill,
+  vaultSet,
+  vaultList,
+  vaultDelete,
+  upsertService,
+  updateServiceStatus,
+  updateServiceScope,
+  getService,
+  listDbMeshServices,
+  deleteService,
 } from "./broker";
+import * as serviceManager from "./service-manager";
 import { ensureBucket, meshBucketName, minioClient } from "./minio";
 import { qdrant, meshCollectionName, ensureCollection } from "./qdrant";
 import { neo4jDriver, meshDbName, ensureDatabase } from "./neo4j-client";
@@ -1210,6 +1220,36 @@ function handleConnection(ws: WebSocket): void {
             if (result.restoredGroups) ackPayload.restoredGroups = result.restoredGroups;
             if (result.restoredStats) ackPayload.restoredStats = result.restoredStats;
           }
+          // Attach scope-filtered service catalog
+          try {
+            const helloConn = connections.get(presenceId);
+            if (helloConn) {
+              const allSvcs = await listDbMeshServices(helloConn.meshId);
+              const myGroups = helloConn.groups ?? [];
+              ackPayload.services = allSvcs
+                .filter(svc => {
+                  if (svc.status !== "running") return false;
+                  const scope = svc.scope as any;
+                  if (!scope) return false;
+                  const t = typeof scope === "string" ? scope : scope.type;
+                  if (t === "mesh") return true;
+                  if (t === "peer") return svc.deployedBy === helloConn.memberId;
+                  if (scope.peers) return scope.peers.includes(helloConn.displayName) || scope.peers.includes(helloConn.memberId);
+                  if (scope.group) return myGroups.some((g: any) => g.name === scope.group);
+                  if (scope.groups) return myGroups.some((g: any) => scope.groups.includes(g.name));
+                  if (scope.role) return myGroups.some((g: any) => g.role === scope.role);
+                  return false;
+                })
+                .map(s => ({
+                  name: s.name,
+                  description: s.description,
+                  status: s.status ?? "stopped",
+                  tools: (s.toolsSchema as any[]) ?? [],
+                  deployed_by: s.deployedByName ?? "unknown",
+                }));
+            }
+          } catch { /* non-fatal */ }
+
           ws.send(JSON.stringify(ackPayload));
         } catch {
           /* ws closed during hello */
@@ -3087,6 +3127,146 @@ function handleConnection(ws: WebSocket): void {
           log.info("ws delete_webhook", { presence_id: presenceId, name: dw.name });
           break;
         }
+
+        // --- Vault ---
+        case "vault_set": {
+          const vs = msg as any;
+          try {
+            await vaultSet(conn.meshId, conn.memberId, vs.key, vs.ciphertext, vs.nonce, vs.sealed_key, vs.entry_type, vs.mount_path, vs.description);
+            sendToPeer(presenceId, { type: "vault_ack", key: vs.key, action: "stored", _reqId: vs._reqId } as any);
+          } catch (e) { sendError(ws, "vault_error", e instanceof Error ? e.message : String(e), undefined, vs._reqId); }
+          break;
+        }
+        case "vault_list": {
+          try {
+            const entries = await vaultList(conn.meshId, conn.memberId);
+            sendToPeer(presenceId, { type: "vault_list_result", entries: entries.map((e: any) => ({ key: e.key, entry_type: e.entryType, mount_path: e.mountPath, description: e.description, updated_at: e.updatedAt?.toISOString() })), _reqId: (msg as any)._reqId } as any);
+          } catch (e) { sendError(ws, "vault_error", e instanceof Error ? e.message : String(e), undefined, (msg as any)._reqId); }
+          break;
+        }
+        case "vault_delete": {
+          const vd = msg as any;
+          try {
+            const ok = await vaultDelete(conn.meshId, conn.memberId, vd.key);
+            sendToPeer(presenceId, { type: "vault_ack", key: vd.key, action: ok ? "deleted" : "not_found", _reqId: vd._reqId } as any);
+          } catch (e) { sendError(ws, "vault_error", e instanceof Error ? e.message : String(e), undefined, vd._reqId); }
+          break;
+        }
+
+        // --- MCP Deploy/Undeploy ---
+        case "mcp_deploy": {
+          const md = msg as any;
+          try {
+            // Validate service name (path traversal protection)
+            const nameError = serviceManager.validateServiceName(md.server_name ?? "");
+            if (nameError) {
+              sendError(ws, "invalid_name", nameError, undefined, md._reqId);
+              break;
+            }
+            const existing = await listDbMeshServices(conn.meshId);
+            if (existing.length >= env.MAX_SERVICES_PER_MESH) {
+              sendError(ws, "limit", `max ${env.MAX_SERVICES_PER_MESH} services per mesh`, undefined, md._reqId);
+              break;
+            }
+            await upsertService(conn.meshId, md.server_name, {
+              type: "mcp", sourceType: md.source.type, description: `MCP server: ${md.server_name}`,
+              sourceFileId: md.source.type === "zip" ? md.source.file_id : undefined,
+              sourceGitUrl: md.source.type === "git" ? md.source.url : undefined,
+              sourceGitBranch: md.source.type === "git" ? md.source.branch : undefined,
+              runtime: md.config?.runtime, status: "building", config: md.config ?? {},
+              scope: md.scope ?? "peer", deployedBy: conn.memberId, deployedByName: conn.displayName,
+            });
+            sendToPeer(presenceId, { type: "mcp_deploy_status", server_name: md.server_name, status: "building", _reqId: md._reqId } as any);
+            broadcastToMesh(conn.meshId, {
+              type: "push", subtype: "system" as const, event: "mcp_deployed",
+              eventData: { name: md.server_name, description: `MCP server: ${md.server_name}`, tool_count: 0, deployed_by: conn.displayName, scope: md.scope ?? "peer" },
+              messageId: crypto.randomUUID(), meshId: conn.meshId, senderPubkey: "system",
+              priority: "low", nonce: "", ciphertext: "", createdAt: new Date().toISOString(),
+            });
+            log.info("ws mcp_deploy", { presence_id: presenceId, name: md.server_name });
+          } catch (e) { sendError(ws, "deploy_error", e instanceof Error ? e.message : String(e), undefined, md._reqId); }
+          break;
+        }
+        case "mcp_undeploy": {
+          const mu = msg as any;
+          try {
+            await serviceManager.undeploy(conn.meshId, mu.server_name);
+            await deleteService(conn.meshId, mu.server_name);
+            sendToPeer(presenceId, { type: "mcp_deploy_status", server_name: mu.server_name, status: "stopped", _reqId: mu._reqId } as any);
+            broadcastToMesh(conn.meshId, {
+              type: "push", subtype: "system" as const, event: "mcp_undeployed",
+              eventData: { name: mu.server_name, by: conn.displayName },
+              messageId: crypto.randomUUID(), meshId: conn.meshId, senderPubkey: "system",
+              priority: "low", nonce: "", ciphertext: "", createdAt: new Date().toISOString(),
+            });
+            log.info("ws mcp_undeploy", { presence_id: presenceId, name: mu.server_name });
+          } catch (e) { sendError(ws, "undeploy_error", e instanceof Error ? e.message : String(e), undefined, mu._reqId); }
+          break;
+        }
+        case "mcp_update": {
+          const mup = msg as any;
+          sendToPeer(presenceId, { type: "mcp_deploy_status", server_name: mup.server_name, status: "building", _reqId: mup._reqId } as any);
+          log.info("ws mcp_update", { presence_id: presenceId, name: mup.server_name });
+          break;
+        }
+        case "mcp_logs": {
+          const ml = msg as any;
+          const lines = serviceManager.getLogs(conn.meshId, ml.server_name, ml.lines);
+          sendToPeer(presenceId, { type: "mcp_logs_result", server_name: ml.server_name, lines, _reqId: ml._reqId } as any);
+          break;
+        }
+        case "mcp_scope": {
+          const ms = msg as any;
+          try {
+            if (ms.scope !== undefined) {
+              await updateServiceScope(conn.meshId, ms.server_name, ms.scope);
+              broadcastToMesh(conn.meshId, {
+                type: "push", subtype: "system" as const, event: "mcp_scope_changed",
+                eventData: { name: ms.server_name, scope: ms.scope, by: conn.displayName },
+                messageId: crypto.randomUUID(), meshId: conn.meshId, senderPubkey: "system",
+                priority: "low", nonce: "", ciphertext: "", createdAt: new Date().toISOString(),
+              });
+            }
+            const svc = await getService(conn.meshId, ms.server_name);
+            sendToPeer(presenceId, { type: "mcp_scope_result", server_name: ms.server_name, scope: svc?.scope ?? { type: "peer" }, deployed_by: svc?.deployedByName ?? "unknown", _reqId: ms._reqId } as any);
+          } catch (e) { sendError(ws, "scope_error", e instanceof Error ? e.message : String(e), undefined, ms._reqId); }
+          break;
+        }
+        case "mcp_schema": {
+          const msch = msg as any;
+          try {
+            let tools = serviceManager.getTools(conn.meshId, msch.server_name);
+            if (tools.length === 0) {
+              const svc = await getService(conn.meshId, msch.server_name);
+              tools = (svc?.toolsSchema as any[]) ?? [];
+            }
+            if (msch.tool_name) tools = tools.filter((t: any) => t.name === msch.tool_name);
+            sendToPeer(presenceId, { type: "mcp_schema_result", server_name: msch.server_name, tools, _reqId: msch._reqId } as any);
+          } catch (e) { sendError(ws, "schema_error", e instanceof Error ? e.message : String(e), undefined, msch._reqId); }
+          break;
+        }
+        case "mcp_catalog": {
+          try {
+            const allSvcs = await listDbMeshServices(conn.meshId);
+            sendToPeer(presenceId, {
+              type: "mcp_catalog_result",
+              services: allSvcs.map((s: any) => ({
+                name: s.name, type: s.type, description: s.description, status: s.status ?? "stopped",
+                tool_count: Array.isArray(s.toolsSchema) ? s.toolsSchema.length : 0,
+                deployed_by: s.deployedByName ?? "unknown", scope: s.scope ?? { type: "peer" },
+                source_type: s.sourceType, runtime: s.runtime, created_at: s.createdAt.toISOString(),
+              })),
+              _reqId: (msg as any)._reqId,
+            } as any);
+          } catch (e) { sendError(ws, "catalog_error", e instanceof Error ? e.message : String(e), undefined, (msg as any)._reqId); }
+          break;
+        }
+        case "skill_deploy": {
+          const sd = msg as any;
+          sendToPeer(presenceId, { type: "skill_deploy_ack", name: "TODO", files: [], _reqId: sd._reqId } as any);
+          log.info("ws skill_deploy", { presence_id: presenceId, source: sd.source?.type });
+          break;
+        }
       }
     } catch (e) {
       metrics.messagesRejectedTotal.inc({ reason: "parse_or_handler" });
@@ -3372,6 +3552,7 @@ function main(): void {
 
   startSweepers();
   startDbHealth();
+  serviceManager.startHealthChecks();
 
   // Ensure audit log table exists and load hash chain state
   ensureAuditLogTable()
@@ -3418,6 +3599,7 @@ function main(): void {
     clearInterval(rlSweep);
     clearInterval(queueDepthTimer);
     stopDbHealth();
+    await serviceManager.shutdownAll();
     await stopSweepers();
     for (const { ws } of connections.values()) {
       try {

@@ -893,4 +893,82 @@ export const TOOLS: Tool[] = [
       required: ["name"],
     },
   },
+
+  // --- Service deployment tools ---
+
+  {
+    name: "mesh_mcp_deploy",
+    description: "Deploy an MCP server to the mesh from a zip file or git repo. Runs on the broker VPS, persists across peer sessions. Default scope: private (only you).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        server_name: { type: "string", description: "Unique name for the server in this mesh" },
+        file_id: { type: "string", description: "File ID of uploaded zip (from share_file)" },
+        git_url: { type: "string", description: "Git repo URL" },
+        git_branch: { type: "string", description: "Branch to clone (default: main)" },
+        env: { type: "object", description: "Environment variables. Use $vault:<key> for vault secrets." },
+        runtime: { type: "string", enum: ["node", "python", "bun"], description: "Runtime (auto-detected if omitted)" },
+        memory_mb: { type: "number", description: "Memory limit in MB (default: 256)" },
+        network_allow: { type: "array", items: { type: "string" }, description: "Allowed outbound hosts (default: none)" },
+        scope: { description: "Visibility: 'peer' (default), 'mesh', or {group/groups/role/peers}" },
+      },
+      required: ["server_name"],
+    },
+  },
+  {
+    name: "mesh_mcp_undeploy",
+    description: "Stop and remove a managed MCP server from the mesh.",
+    inputSchema: { type: "object", properties: { server_name: { type: "string" } }, required: ["server_name"] },
+  },
+  {
+    name: "mesh_mcp_update",
+    description: "Pull latest code and restart a git-sourced MCP server.",
+    inputSchema: { type: "object", properties: { server_name: { type: "string" } }, required: ["server_name"] },
+  },
+  {
+    name: "mesh_mcp_logs",
+    description: "View recent logs from a managed MCP server.",
+    inputSchema: { type: "object", properties: { server_name: { type: "string" }, lines: { type: "number", description: "Lines (default: 50, max: 1000)" } }, required: ["server_name"] },
+  },
+  {
+    name: "mesh_mcp_scope",
+    description: "Get or set the visibility scope of a deployed MCP server.",
+    inputSchema: { type: "object", properties: { server_name: { type: "string" }, scope: { description: "New scope to set. Omit to read current." } }, required: ["server_name"] },
+  },
+  {
+    name: "mesh_mcp_schema",
+    description: "Inspect tool schemas for a deployed MCP server.",
+    inputSchema: { type: "object", properties: { server_name: { type: "string" }, tool_name: { type: "string", description: "Specific tool (omit for all)" } }, required: ["server_name"] },
+  },
+  {
+    name: "mesh_mcp_catalog",
+    description: "List all deployed services in the mesh with status, scope, and tool count.",
+    inputSchema: { type: "object", properties: {} },
+  },
+
+  // --- Skill deployment tools ---
+
+  {
+    name: "mesh_skill_deploy",
+    description: "Deploy a multi-file skill bundle from a zip or git repo.",
+    inputSchema: { type: "object", properties: { file_id: { type: "string" }, git_url: { type: "string" }, git_branch: { type: "string" } } },
+  },
+
+  // --- Vault tools ---
+
+  {
+    name: "vault_set",
+    description: "Store an encrypted credential in your vault. Reference in mesh_mcp_deploy with $vault:<key>.",
+    inputSchema: { type: "object", properties: { key: { type: "string" }, value: { type: "string", description: "Secret value or local file path (for type=file)" }, type: { type: "string", enum: ["env", "file"] }, mount_path: { type: "string" }, description: { type: "string" } }, required: ["key", "value"] },
+  },
+  {
+    name: "vault_list",
+    description: "List your vault entries (keys and metadata only, no secret values).",
+    inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "vault_delete",
+    description: "Remove a credential from your vault.",
+    inputSchema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
+  },
 ];

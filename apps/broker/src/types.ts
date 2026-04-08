@@ -224,6 +224,7 @@ export interface WSHelloAckMessage {
   restoredGroups?: Array<{ name: string; role?: string }>;
   /** Restored cumulative stats (only when restored). */
   restoredStats?: { messagesIn: number; messagesOut: number; toolCalls: number; errors: number };
+  services?: Array<{ name: string; description: string; status: string; tools: Array<{ name: string; description: string; inputSchema: object }>; deployed_by: string }>;
 }
 
 /** Broker → client: list of connected peers in the same mesh. */
@@ -1078,6 +1079,29 @@ export interface WSCancelScheduledAckMessage {
   _reqId?: string;
 }
 
+/** Client → broker: deploy an MCP server from zip or git. */
+export interface WSMcpDeployMessage { type: "mcp_deploy"; server_name: string; source: { type: "zip"; file_id: string } | { type: "git"; url: string; branch?: string; auth?: string }; config?: { env?: Record<string, string>; memory_mb?: number; cpus?: number; network_allow?: string[]; runtime?: "node" | "python" | "bun" }; scope?: "peer" | "mesh" | { peers: string[] } | { group: string } | { groups: string[] } | { role: string }; _reqId?: string; }
+/** Client → broker: stop and remove a managed MCP server. */
+export interface WSMcpUndeployMessage { type: "mcp_undeploy"; server_name: string; _reqId?: string; }
+/** Client → broker: pull + rebuild + restart a git-sourced MCP. */
+export interface WSMcpUpdateMessage { type: "mcp_update"; server_name: string; _reqId?: string; }
+/** Client → broker: get logs from a managed MCP. */
+export interface WSMcpLogsMessage { type: "mcp_logs"; server_name: string; lines?: number; _reqId?: string; }
+/** Client → broker: get or set visibility scope. */
+export interface WSMcpScopeMessage { type: "mcp_scope"; server_name: string; scope?: "peer" | "mesh" | { peers: string[] } | { group: string } | { groups: string[] } | { role: string }; _reqId?: string; }
+/** Client → broker: inspect tool schemas for a deployed service. */
+export interface WSMcpSchemaMessage { type: "mcp_schema"; server_name: string; tool_name?: string; _reqId?: string; }
+/** Client → broker: list all deployed services. */
+export interface WSMcpCatalogMessage { type: "mcp_catalog"; _reqId?: string; }
+/** Client → broker: deploy a skill bundle from zip or git. */
+export interface WSSkillDeployMessage { type: "skill_deploy"; source: { type: "zip"; file_id: string } | { type: "git"; url: string; branch?: string; auth?: string }; _reqId?: string; }
+/** Client → broker: store encrypted credential. */
+export interface WSVaultSetMessage { type: "vault_set"; key: string; ciphertext: string; nonce: string; sealed_key: string; entry_type: "env" | "file"; mount_path?: string; description?: string; _reqId?: string; }
+/** Client → broker: list vault entries. */
+export interface WSVaultListMessage { type: "vault_list"; _reqId?: string; }
+/** Client → broker: delete vault entry. */
+export interface WSVaultDeleteMessage { type: "vault_delete"; key: string; _reqId?: string; }
+
 export type WSClientMessage =
   | WSHelloMessage
   | WSSendMessage
@@ -1147,7 +1171,18 @@ export type WSClientMessage =
   | WSPeerDirRequestMessage
   | WSPeerDirResponseMessage
   | WSAuditQueryMessage
-  | WSAuditVerifyMessage;
+  | WSAuditVerifyMessage
+  | WSMcpDeployMessage
+  | WSMcpUndeployMessage
+  | WSMcpUpdateMessage
+  | WSMcpLogsMessage
+  | WSMcpScopeMessage
+  | WSMcpSchemaMessage
+  | WSMcpCatalogMessage
+  | WSSkillDeployMessage
+  | WSVaultSetMessage
+  | WSVaultListMessage
+  | WSVaultDeleteMessage;
 
 // --- Skill messages ---
 
@@ -1217,6 +1252,23 @@ export interface WSSkillListMessage {
   _reqId?: string;
 }
 
+/** Broker → client: deployment progress/result. */
+export interface WSMcpDeployStatusMessage { type: "mcp_deploy_status"; server_name: string; status: "building" | "installing" | "running" | "failed"; tools?: Array<{ name: string; description: string; inputSchema: object }>; error?: string; _reqId?: string; }
+/** Broker → client: service log output. */
+export interface WSMcpLogsResultMessage { type: "mcp_logs_result"; server_name: string; lines: string[]; _reqId?: string; }
+/** Broker → client: tool schema introspection result. */
+export interface WSMcpSchemaResultMessage { type: "mcp_schema_result"; server_name: string; tools: Array<{ name: string; description: string; inputSchema: object }>; _reqId?: string; }
+/** Broker → client: full service catalog. */
+export interface WSMcpCatalogResultMessage { type: "mcp_catalog_result"; services: Array<{ name: string; type: "mcp" | "skill"; description: string; status: string; tool_count: number; deployed_by: string; scope: { type: string; [key: string]: unknown }; source_type: string; runtime?: string; created_at: string }>; _reqId?: string; }
+/** Broker → client: scope query/set result. */
+export interface WSMcpScopeResultMessage { type: "mcp_scope_result"; server_name: string; scope: { type: string; [key: string]: unknown }; deployed_by: string; _reqId?: string; }
+/** Broker → client: skill deploy acknowledgement. */
+export interface WSSkillDeployAckMessage { type: "skill_deploy_ack"; name: string; files: string[]; _reqId?: string; }
+/** Broker → client: vault operation acknowledgement. */
+export interface WSVaultAckMessage { type: "vault_ack"; key: string; action: "stored" | "deleted" | "not_found"; _reqId?: string; }
+/** Broker → client: vault entry listing. */
+export interface WSVaultListResultMessage { type: "vault_list_result"; entries: Array<{ key: string; entry_type: "env" | "file"; mount_path?: string; description?: string; updated_at: string }>; _reqId?: string; }
+
 export type WSServerMessage =
   | WSHelloAckMessage
   | WSPushMessage
@@ -1267,4 +1319,12 @@ export type WSServerMessage =
   | WSPeerDirResponseForwardMessage
   | WSAuditResultMessage
   | WSAuditVerifyResultMessage
+  | WSMcpDeployStatusMessage
+  | WSMcpLogsResultMessage
+  | WSMcpSchemaResultMessage
+  | WSMcpCatalogResultMessage
+  | WSMcpScopeResultMessage
+  | WSSkillDeployAckMessage
+  | WSVaultAckMessage
+  | WSVaultListResultMessage
   | WSErrorMessage;
