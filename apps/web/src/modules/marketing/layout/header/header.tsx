@@ -1,10 +1,10 @@
 import Link from "next/link";
 
 const NAV = [
-  { label: "Getting Started", href: "/getting-started" },
-  { label: "Docs", href: "#docs" },
-  { label: "Pricing", href: "#pricing" },
-  { label: "Changelog", href: "#changelog" },
+  { label: "Docs", href: "https://github.com/alezmad/claudemesh-cli#readme" },
+  { label: "Blog", href: "/blog" },
+  { label: "About", href: "/about" },
+  { label: "Changelog", href: "/changelog" },
 ] as const;
 
 const OSS_REPO_URL = "https://github.com/alezmad/claudemesh-cli";
