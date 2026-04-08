@@ -1103,11 +1103,11 @@ export class BrokerClient {
 
   // --- Skills ---
   private skillAckResolvers = new Map<string, { resolve: (result: { name: string; action: string } | null) => void; timer: NodeJS.Timeout }>();
-  private skillDataResolvers = new Map<string, { resolve: (skill: { name: string; description: string; instructions: string; tags: string[]; author: string; createdAt: string } | null) => void; timer: NodeJS.Timeout }>();
+  private skillDataResolvers = new Map<string, { resolve: (skill: { name: string; description: string; instructions: string; tags: string[]; author: string; manifest?: unknown; createdAt: string } | null) => void; timer: NodeJS.Timeout }>();
   private skillListResolvers = new Map<string, { resolve: (skills: Array<{ name: string; description: string; tags: string[]; author: string; createdAt: string }>) => void; timer: NodeJS.Timeout }>();
 
   /** Publish a reusable skill to the mesh. */
-  async shareSkill(name: string, description: string, instructions: string, tags?: string[]): Promise<{ ok: boolean; action?: string } | null> {
+  async shareSkill(name: string, description: string, instructions: string, tags?: string[], manifest?: Record<string, unknown>): Promise<{ ok: boolean; action?: string } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
     return new Promise((resolve) => {
       const reqId = this.makeReqId();
@@ -1116,12 +1116,12 @@ export class BrokerClient {
       }, timer: setTimeout(() => {
         if (this.skillAckResolvers.delete(reqId)) resolve(null);
       }, 5_000) });
-      this.ws!.send(JSON.stringify({ type: "share_skill", name, description, instructions, tags, _reqId: reqId }));
+      this.ws!.send(JSON.stringify({ type: "share_skill", name, description, instructions, tags, manifest, _reqId: reqId }));
     });
   }
 
   /** Load a skill's full instructions by name. */
-  async getSkill(name: string): Promise<{ name: string; description: string; instructions: string; tags: string[]; author: string; createdAt: string } | null> {
+  async getSkill(name: string): Promise<{ name: string; description: string; instructions: string; tags: string[]; author: string; manifest?: unknown; createdAt: string } | null> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
     return new Promise((resolve) => {
       const reqId = this.makeReqId();

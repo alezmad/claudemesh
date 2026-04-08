@@ -763,18 +763,29 @@ export const TOOLS: Tool[] = [
   {
     name: "share_skill",
     description:
-      "Publish a reusable skill to the mesh. Other peers can discover and load it. If a skill with the same name exists, it is updated.",
+      "Publish a reusable skill to the mesh. Other peers can discover and load it as a slash command. If a skill with the same name exists, it is updated. Skills are automatically exposed as MCP prompts and skill:// resources for native Claude Code integration.",
     inputSchema: {
       type: "object",
       properties: {
-        name: { type: "string", description: "Unique skill name (e.g. 'code-review', 'deploy-checklist')" },
+        name: { type: "string", description: "Unique skill name (e.g. 'code-review', 'deploy-checklist'). Becomes the slash command name." },
         description: { type: "string", description: "Short description of what the skill does" },
-        instructions: { type: "string", description: "Full instructions/prompt that a peer loads to acquire this capability" },
+        instructions: { type: "string", description: "Full instructions/prompt markdown. Can include frontmatter (---) block." },
         tags: {
           type: "array",
           items: { type: "string" },
           description: "Tags for discoverability",
         },
+        when_to_use: { type: "string", description: "Detailed description of when Claude should auto-invoke this skill" },
+        allowed_tools: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tool names this skill is allowed to use (e.g. ['Bash', 'Read', 'Edit'])",
+        },
+        model: { type: "string", description: "Model override (e.g. 'sonnet', 'opus', 'haiku')" },
+        context: { type: "string", enum: ["inline", "fork"], description: "Execution context: 'inline' (default) or 'fork' (sub-agent)" },
+        agent: { type: "string", description: "Agent type when forked (e.g. 'general-purpose')" },
+        user_invocable: { type: "boolean", description: "Whether users can invoke via /skill-name (default: true)" },
+        argument_hint: { type: "string", description: "Hint text for arguments (e.g. '<file-path>')" },
       },
       required: ["name", "description", "instructions"],
     },

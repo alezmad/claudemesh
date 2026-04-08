@@ -10,6 +10,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import { TOOLS } from "./tools";
 import { loadConfig } from "../state/config";
@@ -164,6 +168,8 @@ export async function startMcpServer(): Promise<void> {
       capabilities: {
         experimental: { "claude/channel": {} },
         tools: {},
+        prompts: {},
+        resources: {},
       },
       instructions: `## Identity
 You are "${myName}"${myRole ? ` (${myRole})` : ""} — a peer in the claudemesh network. Your groups: ${myGroups}. You are one of several Claude Code sessions connected to the same mesh. No orchestrator exists — peers are equals. Your identity comes from your name and group roles, not from a central authority.
@@ -293,6 +299,111 @@ Your message mode is "${messageMode}".
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: TOOLS,
   }));
+
+  // --- MCP Prompts: expose mesh skills as slash commands ---
+  server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    const client = allClients()[0];
+    if (!client) return { prompts: [] };
+    const skills = await client.listSkills();
+    return {
+      prompts: skills.map((s) => ({
+        name: s.name,
+        description: s.description,
+        arguments: [],
+      })),
+    };
+  });
+
+  server.setRequestHandler(GetPromptRequestSchema, async (req) => {
+    const { name, arguments: promptArgs } = req.params;
+    const client = allClients()[0];
+    if (!client) throw new Error("Not connected to any mesh");
+    const skill = await client.getSkill(name);
+    if (!skill) throw new Error(`Skill "${name}" not found in the mesh`);
+
+    // Build the prompt content — include frontmatter if manifest has metadata
+    let content = skill.instructions;
+    const manifest = (skill as any).manifest;
+    if (manifest && typeof manifest === "object") {
+      const fm: string[] = ["---"];
+      if (manifest.description) fm.push(`description: "${manifest.description}"`);
+      if (manifest.when_to_use) fm.push(`when_to_use: "${manifest.when_to_use}"`);
+      if (manifest.allowed_tools?.length) fm.push(`allowed-tools:\n${manifest.allowed_tools.map((t: string) => `  - ${t}`).join("\n")}`);
+      if (manifest.model) fm.push(`model: ${manifest.model}`);
+      if (manifest.context) fm.push(`context: ${manifest.context}`);
+      if (manifest.agent) fm.push(`agent: ${manifest.agent}`);
+      if (manifest.user_invocable === false) fm.push(`user-invocable: false`);
+      if (manifest.argument_hint) fm.push(`argument-hint: "${manifest.argument_hint}"`);
+      fm.push("---\n");
+      if (fm.length > 3) content = fm.join("\n") + content;
+    }
+
+    return {
+      description: skill.description,
+      messages: [
+        {
+          role: "user" as const,
+          content: { type: "text" as const, text: content },
+        },
+      ],
+    };
+  });
+
+  // --- MCP Resources: expose mesh skills as skill:// resources ---
+  server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    const client = allClients()[0];
+    if (!client) return { resources: [] };
+    const skills = await client.listSkills();
+    return {
+      resources: skills.map((s) => ({
+        uri: `skill://claudemesh/${encodeURIComponent(s.name)}`,
+        name: s.name,
+        description: s.description,
+        mimeType: "text/markdown",
+      })),
+    };
+  });
+
+  server.setRequestHandler(ReadResourceRequestSchema, async (req) => {
+    const { uri } = req.params;
+    // Parse skill://claudemesh/{name}
+    const match = uri.match(/^skill:\/\/claudemesh\/(.+)$/);
+    if (!match) throw new Error(`Unknown resource URI: ${uri}`);
+    const name = decodeURIComponent(match[1]!);
+    const client = allClients()[0];
+    if (!client) throw new Error("Not connected to any mesh");
+    const skill = await client.getSkill(name);
+    if (!skill) throw new Error(`Skill "${name}" not found`);
+
+    // Build full markdown with frontmatter for Claude Code's parseSkillFrontmatterFields
+    const manifest = (skill as any).manifest;
+    const fmLines: string[] = ["---"];
+    fmLines.push(`name: ${skill.name}`);
+    fmLines.push(`description: "${skill.description}"`);
+    if (skill.tags.length) fmLines.push(`tags: [${skill.tags.join(", ")}]`);
+    if (manifest && typeof manifest === "object") {
+      if (manifest.when_to_use) fmLines.push(`when_to_use: "${manifest.when_to_use}"`);
+      if (manifest.allowed_tools?.length) fmLines.push(`allowed-tools:\n${manifest.allowed_tools.map((t: string) => `  - ${t}`).join("\n")}`);
+      if (manifest.model) fmLines.push(`model: ${manifest.model}`);
+      if (manifest.context) fmLines.push(`context: ${manifest.context}`);
+      if (manifest.agent) fmLines.push(`agent: ${manifest.agent}`);
+      if (manifest.user_invocable === false) fmLines.push(`user-invocable: false`);
+      if (manifest.argument_hint) fmLines.push(`argument-hint: "${manifest.argument_hint}"`);
+    }
+    fmLines.push("---\n");
+
+    const fullContent = fmLines.join("\n") + skill.instructions;
+
+    return {
+      contents: [
+        {
+          uri,
+          mimeType: "text/markdown",
+          text: fullContent,
+        },
+      ],
+    };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const { name, arguments: args } = req.params;
@@ -1054,13 +1165,32 @@ Your message mode is "${messageMode}".
 
       // --- Skills ---
       case "share_skill": {
-        const { name: skillName, description: skillDesc, instructions: skillInstr, tags: skillTags } = (args ?? {}) as { name?: string; description?: string; instructions?: string; tags?: string[] };
+        const {
+          name: skillName, description: skillDesc, instructions: skillInstr, tags: skillTags,
+          when_to_use, allowed_tools, model, context: skillContext, agent, user_invocable, argument_hint,
+        } = (args ?? {}) as {
+          name?: string; description?: string; instructions?: string; tags?: string[];
+          when_to_use?: string; allowed_tools?: string[]; model?: string; context?: string;
+          agent?: string; user_invocable?: boolean; argument_hint?: string;
+        };
         if (!skillName || !skillDesc || !skillInstr) return text("share_skill: `name`, `description`, and `instructions` required", true);
         const client = allClients()[0];
         if (!client) return text("share_skill: not connected", true);
-        const result = await client.shareSkill(skillName, skillDesc, skillInstr, skillTags);
+        // Build manifest from optional metadata fields
+        const manifest: Record<string, unknown> = {};
+        if (when_to_use) manifest.when_to_use = when_to_use;
+        if (allowed_tools?.length) manifest.allowed_tools = allowed_tools;
+        if (model) manifest.model = model;
+        if (skillContext) manifest.context = skillContext;
+        if (agent) manifest.agent = agent;
+        if (user_invocable === false) manifest.user_invocable = false;
+        if (argument_hint) manifest.argument_hint = argument_hint;
+        const result = await client.shareSkill(skillName, skillDesc, skillInstr, skillTags, Object.keys(manifest).length > 0 ? manifest : undefined);
         if (!result) return text("share_skill: broker did not acknowledge", true);
-        return text(`Skill "${skillName}" published to the mesh.`);
+        // Notify prompts changed so Claude Code refreshes slash commands
+        server.notification({ method: "notifications/prompts/list_changed" });
+        server.notification({ method: "notifications/resources/list_changed" });
+        return text(`Skill "${skillName}" published to the mesh. It will appear as /claudemesh:${skillName} in Claude Code.`);
       }
       case "get_skill": {
         const { name: gsName } = (args ?? {}) as { name?: string };
@@ -1069,13 +1199,24 @@ Your message mode is "${messageMode}".
         if (!client) return text("get_skill: not connected", true);
         const skill = await client.getSkill(gsName);
         if (!skill) return text(`Skill "${gsName}" not found in the mesh.`);
+        const manifest = skill.manifest as Record<string, unknown> | null | undefined;
+        const metaLines: string[] = [];
+        if (manifest) {
+          if (manifest.when_to_use) metaLines.push(`**When to use:** ${manifest.when_to_use}`);
+          if (manifest.allowed_tools) metaLines.push(`**Allowed tools:** ${(manifest.allowed_tools as string[]).join(", ")}`);
+          if (manifest.model) metaLines.push(`**Model:** ${manifest.model}`);
+          if (manifest.context) metaLines.push(`**Context:** ${manifest.context}`);
+          if (manifest.agent) metaLines.push(`**Agent:** ${manifest.agent}`);
+        }
         return text(
           `# Skill: ${skill.name}\n\n` +
           `**Description:** ${skill.description}\n` +
           `**Author:** ${skill.author}\n` +
           `**Tags:** ${skill.tags.length ? skill.tags.join(", ") : "none"}\n` +
-          `**Created:** ${skill.createdAt}\n\n` +
-          `---\n\n` +
+          `**Created:** ${skill.createdAt}\n` +
+          `**Slash command:** /claudemesh:${skill.name}\n` +
+          (metaLines.length ? metaLines.join("\n") + "\n" : "") +
+          `\n---\n\n` +
           `## Instructions\n\n${skill.instructions}`,
         );
       }
@@ -1096,6 +1237,10 @@ Your message mode is "${messageMode}".
         const client = allClients()[0];
         if (!client) return text("remove_skill: not connected", true);
         const removed = await client.removeSkill(rsName);
+        if (removed) {
+          server.notification({ method: "notifications/prompts/list_changed" });
+          server.notification({ method: "notifications/resources/list_changed" });
+        }
         return text(removed ? `Skill "${rsName}" removed.` : `Skill "${rsName}" not found.`, !removed);
       }
 

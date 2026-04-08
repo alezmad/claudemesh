@@ -19,6 +19,8 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { env } from "./env";
 import { db } from "./db";
 import { mesh, messageQueue, scheduledMessage as scheduledMessageTable, meshWebhook, peerState } from "@turbostarter/db/schema/mesh";
+import { handleCliSync, type CliSyncRequest } from "./cli-sync";
+import { updateMemberProfile, listMeshMembers, updateMeshSettings } from "./member-api";
 import {
   claimTask,
   completeTask,
@@ -585,6 +587,31 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // CLI sync: browser OAuth → broker creates members
+  if (req.method === "POST" && req.url === "/cli-sync") {
+    handleCliSyncPost(req, res, started);
+    return;
+  }
+
+  // Member profile API
+  const memberPatchMatch = req.method === "PATCH" && req.url?.match(/^\/mesh\/([^/]+)\/member\/([^/]+)$/);
+  if (memberPatchMatch) {
+    handleMemberPatchPost(req, res, memberPatchMatch[1]!, memberPatchMatch[2]!, started);
+    return;
+  }
+
+  const membersListMatch = req.method === "GET" && req.url?.match(/^\/mesh\/([^/]+)\/members$/);
+  if (membersListMatch) {
+    handleMembersListGet(res, membersListMatch[1]!, started);
+    return;
+  }
+
+  const meshSettingsMatch = req.method === "PATCH" && req.url?.match(/^\/mesh\/([^/]+)\/settings$/);
+  if (meshSettingsMatch) {
+    handleMeshSettingsPatch(req, res, meshSettingsMatch[1]!, started);
+    return;
+  }
+
   // Inbound webhook: POST /hook/:meshId/:secret
   const webhookMatch = req.method === "POST" && req.url?.match(/^\/hook\/([^/]+)\/([^/]+)$/);
   if (webhookMatch) {
@@ -912,6 +939,100 @@ function broadcastToMesh(meshId: string, msg: WSPushMessage): number {
   return count;
 }
 
+// --- CLI sync + member profile route handlers ---
+
+function handleCliSyncPost(req: IncomingMessage, res: ServerResponse, started: number): void {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let aborted = false;
+  req.on("data", (chunk: Buffer) => {
+    if (aborted) return;
+    total += chunk.length;
+    if (total > env.MAX_MESSAGE_BYTES) { aborted = true; writeJson(res, 413, { ok: false, error: "payload too large" }); req.destroy(); return; }
+    chunks.push(chunk);
+  });
+  req.on("end", async () => {
+    if (aborted) return;
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as CliSyncRequest;
+      const result = await handleCliSync(body);
+      writeJson(res, result.ok ? 200 : 400, result);
+      log.info("cli-sync", { route: "POST /cli-sync", ok: result.ok, latency_ms: Date.now() - started });
+    } catch (e) {
+      writeJson(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) });
+      log.error("cli-sync error", { error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
+function handleMemberPatchPost(req: IncomingMessage, res: ServerResponse, meshId: string, memberId: string, started: number): void {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let aborted = false;
+  req.on("data", (chunk: Buffer) => {
+    if (aborted) return;
+    total += chunk.length;
+    if (total > env.MAX_MESSAGE_BYTES) { aborted = true; writeJson(res, 413, { ok: false, error: "payload too large" }); req.destroy(); return; }
+    chunks.push(chunk);
+  });
+  req.on("end", async () => {
+    if (aborted) return;
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      // Auth: callerMemberId from X-Member-Id header (dashboard or CLI provides this)
+      const callerMemberId = req.headers["x-member-id"] as string | undefined;
+      if (!callerMemberId) { writeJson(res, 401, { ok: false, error: "X-Member-Id header required" }); return; }
+      const result = await updateMemberProfile(meshId, memberId, callerMemberId, body);
+      writeJson(res, result.ok ? 200 : 400, result);
+      // Push profile_updated to active WS connections for this member
+      if (result.ok && result.changes) {
+        for (const [pid, conn] of connections) {
+          if (conn.meshId === meshId && conn.memberId === memberId) {
+            sendToPeer(pid, { type: "push", subtype: "system", event: "profile_updated", eventData: result.changes, messageId: crypto.randomUUID(), meshId, senderPubkey: "system", priority: "low", nonce: "", ciphertext: "", createdAt: new Date().toISOString() } as any);
+          }
+        }
+      }
+      log.info("member-patch", { route: `PATCH /mesh/${meshId}/member/${memberId}`, ok: result.ok, latency_ms: Date.now() - started });
+    } catch (e) {
+      writeJson(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
+function handleMembersListGet(res: ServerResponse, meshId: string, started: number): void {
+  listMeshMembers(meshId).then((result) => {
+    writeJson(res, result.ok ? 200 : 400, result);
+    log.info("members-list", { route: `GET /mesh/${meshId}/members`, ok: result.ok, count: result.ok ? result.members.length : 0, latency_ms: Date.now() - started });
+  }).catch((e) => {
+    writeJson(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) });
+  });
+}
+
+function handleMeshSettingsPatch(req: IncomingMessage, res: ServerResponse, meshId: string, started: number): void {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let aborted = false;
+  req.on("data", (chunk: Buffer) => {
+    if (aborted) return;
+    total += chunk.length;
+    if (total > env.MAX_MESSAGE_BYTES) { aborted = true; writeJson(res, 413, { ok: false, error: "payload too large" }); req.destroy(); return; }
+    chunks.push(chunk);
+  });
+  req.on("end", async () => {
+    if (aborted) return;
+    try {
+      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const callerMemberId = req.headers["x-member-id"] as string | undefined;
+      if (!callerMemberId) { writeJson(res, 401, { ok: false, error: "X-Member-Id header required" }); return; }
+      const result = await updateMeshSettings(meshId, callerMemberId, body);
+      writeJson(res, result.ok ? 200 : 400, result);
+      log.info("mesh-settings", { route: `PATCH /mesh/${meshId}/settings`, ok: result.ok, latency_ms: Date.now() - started });
+    } catch (e) {
+      writeJson(res, 500, { ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  });
+}
+
 function handleWebhookPost(
   req: IncomingMessage,
   res: ServerResponse,
@@ -1159,13 +1280,23 @@ async function handleHello(
     return null;
   }
 
+  // Load mesh for selfEditable policy (non-fatal if fails).
+  let meshPolicy: Record<string, unknown> | undefined;
+  try {
+    const [m] = await db
+      .select({ selfEditable: mesh.selfEditable })
+      .from(mesh)
+      .where(eq(mesh.id, hello.meshId));
+    if (m?.selfEditable) meshPolicy = { selfEditable: m.selfEditable };
+  } catch { /* non-fatal */ }
+
   // Attempt to restore persisted state from a previous session.
   const saved = await restorePeerState(hello.meshId, member.id);
   const helloHasGroups = hello.groups && hello.groups.length > 0;
-  // Hello groups take precedence; fall back to restored groups.
+  // Priority: hello groups > restored groups > member default groups.
   const initialGroups = helloHasGroups
     ? hello.groups!
-    : (saved?.groups ?? []);
+    : (saved?.groups?.length ? saved.groups : (member.defaultGroups ?? []));
   const presenceId = await connectPresence({
     memberId: member.id,
     sessionId: hello.sessionId,
@@ -1213,6 +1344,12 @@ async function handleHello(
   return {
     presenceId,
     memberDisplayName: effectiveDisplayName,
+    memberProfile: {
+      roleTag: member.roleTag,
+      groups: member.defaultGroups ?? [],
+      messageMode: member.messageMode ?? "push",
+    },
+    meshPolicy,
     restored: saved ? true : undefined,
     lastSummary: saved?.lastSummary,
     lastSeenAt: saved?.lastSeenAt?.toISOString(),
@@ -1333,6 +1470,8 @@ function handleConnection(ws: WebSocket): void {
             type: "hello_ack",
             presenceId: result.presenceId,
             memberDisplayName: result.memberDisplayName,
+            memberProfile: result.memberProfile,
+            ...(result.meshPolicy ? { meshPolicy: result.meshPolicy } : {}),
           };
           if (result.restored) {
             ackPayload.restored = true;
@@ -3053,6 +3192,7 @@ function handleConnection(ws: WebSocket): void {
             sk.tags ?? [],
             memberInfo?.id,
             memberInfo?.displayName,
+            (sk as any).manifest,
           );
           sendToPeer(presenceId, {
             type: "skill_ack",
@@ -3075,6 +3215,7 @@ function handleConnection(ws: WebSocket): void {
                   instructions: skill.instructions,
                   tags: skill.tags,
                   author: skill.author,
+                  manifest: skill.manifest,
                   createdAt: skill.createdAt.toISOString(),
                 }
               : null,

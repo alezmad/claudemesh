@@ -720,6 +720,7 @@ export async function shareSkill(
   tags: string[],
   memberId?: string,
   memberName?: string,
+  manifest?: unknown,
 ): Promise<string> {
   const existing = await db
     .select({ id: meshSkill.id })
@@ -734,6 +735,7 @@ export async function shareSkill(
         description,
         instructions,
         tags,
+        manifest: manifest ?? null,
         authorMemberId: memberId ?? null,
         authorName: memberName ?? null,
         updatedAt: new Date(),
@@ -750,6 +752,7 @@ export async function shareSkill(
       description,
       instructions,
       tags,
+      manifest: manifest ?? null,
       authorMemberId: memberId ?? null,
       authorName: memberName ?? null,
     })
@@ -770,6 +773,7 @@ export async function getSkill(
   instructions: string;
   tags: string[];
   author: string;
+  manifest: unknown;
   createdAt: Date;
 } | null> {
   const rows = await db
@@ -779,6 +783,7 @@ export async function getSkill(
       instructions: meshSkill.instructions,
       tags: meshSkill.tags,
       authorName: meshSkill.authorName,
+      manifest: meshSkill.manifest,
       createdAt: meshSkill.createdAt,
     })
     .from(meshSkill)
@@ -793,6 +798,7 @@ export async function getSkill(
     instructions: r.instructions,
     tags: r.tags ?? [],
     author: r.authorName ?? "unknown",
+    manifest: r.manifest,
     createdAt: r.createdAt,
   };
 }
@@ -1800,13 +1806,18 @@ export async function joinMesh(args: {
   if (!claimed) return { ok: false, error: "invite_exhausted" };
 
   // 6. Insert the member with the role from the payload.
+  //    Apply invite preset overrides (displayName, roleTag, groups, messageMode).
+  const preset = (inv.preset as any) ?? {};
   const [row] = await db
     .insert(memberTable)
     .values({
       meshId: invitePayload.mesh_id,
       peerPubkey,
-      displayName,
+      displayName: preset.displayName ?? displayName,
       role: invitePayload.role,
+      roleTag: preset.roleTag ?? null,
+      defaultGroups: preset.groups ?? [],
+      messageMode: preset.messageMode ?? "push",
     })
     .returning({ id: memberTable.id });
   if (!row) return { ok: false, error: "member_insert_failed" };
@@ -1820,12 +1831,24 @@ export async function joinMesh(args: {
 export async function findMemberByPubkey(
   meshId: string,
   pubkey: string,
-): Promise<{ id: string; displayName: string; role: string } | null> {
+): Promise<{
+  id: string;
+  displayName: string;
+  role: string;
+  roleTag: string | null;
+  defaultGroups: Array<{ name: string; role?: string }>;
+  messageMode: string | null;
+  dashboardUserId: string | null;
+} | null> {
   const [row] = await db
     .select({
       id: memberTable.id,
       displayName: memberTable.displayName,
       role: memberTable.role,
+      roleTag: memberTable.roleTag,
+      defaultGroups: memberTable.defaultGroups,
+      messageMode: memberTable.messageMode,
+      dashboardUserId: memberTable.dashboardUserId,
     })
     .from(memberTable)
     .where(
