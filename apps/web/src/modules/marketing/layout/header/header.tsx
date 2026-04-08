@@ -7,7 +7,7 @@ const NAV = [
   { label: "Changelog", href: "#changelog" },
 ] as const;
 
-const OSS_REPO_URL = "https://github.com/alezmad/claude-intercom";
+const OSS_REPO_URL = "https://github.com/alezmad/claudemesh-cli";
 
 export const Header = () => {
   return (
@@ -67,8 +67,8 @@ export const Header = () => {
             href={OSS_REPO_URL}
             target="_blank"
             rel="noopener noreferrer"
-            aria-label="claude-intercom (MIT open source) on GitHub"
-            title="Built on claude-intercom · MIT open source"
+            aria-label="claudemesh-cli on GitHub"
+            title="claudemesh-cli · MIT open source"
             className="hidden rounded-[var(--cm-radius-xs)] p-2 text-[var(--cm-fg-secondary)] transition-colors hover:bg-[var(--cm-bg-elevated)] hover:text-[var(--cm-fg)] md:inline-flex"
           >
             <svg
