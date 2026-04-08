@@ -1635,6 +1635,14 @@ Your message mode is "${messageMode}".
           content = `[system] MCP server "${data.serverName}" removed (was hosted by ${data.hostedBy})`;
         } else if (eventName === "mcp_restored") {
           content = `[system] MCP server "${data.serverName}" is back online (hosted by ${data.hostedBy})`;
+        } else if (eventName === "watch_triggered") {
+          content = `[WATCH] ${data.label ?? data.url}: ${data.oldValue} → ${data.newValue}`;
+        } else if (eventName === "mcp_deployed") {
+          content = `[SERVICE] "${data.name}" deployed (${data.tool_count} tools) by ${data.deployed_by}`;
+        } else if (eventName === "mcp_undeployed") {
+          content = `[SERVICE] "${data.name}" undeployed by ${data.by}`;
+        } else if (eventName === "mcp_scope_changed") {
+          content = `[SERVICE] "${data.name}" scope changed to ${JSON.stringify(data.scope)} by ${data.by}`;
         } else {
           content = `[system] ${eventName}: ${JSON.stringify(data)}`;
         }
