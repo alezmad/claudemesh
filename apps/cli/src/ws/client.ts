@@ -1612,11 +1612,37 @@ export class BrokerClient {
       // Decrypt asynchronously, then enqueue. Ordering within the
       // buffer is preserved by awaiting before push.
       void (async (): Promise<void> => {
-        const kind: InboundPush["kind"] = senderPubkey
-          ? "direct"
-          : "unknown";
+        // System messages (peer_joined, watch_triggered, mcp_deployed, etc.)
+        // have senderPubkey="system" with empty nonce/ciphertext — skip decryption.
+        const isSystem = msg.subtype === "system" || senderPubkey === "system";
+        const kind: InboundPush["kind"] = isSystem
+          ? "broadcast"
+          : senderPubkey
+            ? "direct"
+            : "unknown";
         let plaintext: string | null = null;
-        if (senderPubkey && nonce && ciphertext) {
+        if (isSystem) {
+          // Format system event as readable plaintext
+          const event = msg.event ? String(msg.event) : "system";
+          const data = msg.eventData as Record<string, unknown> | undefined;
+          if (event === "watch_triggered" && data) {
+            plaintext = `[WATCH] ${data.label ?? data.url}: ${data.oldValue} → ${data.newValue}`;
+          } else if (event === "mcp_deployed" && data) {
+            plaintext = `[SERVICE] "${data.name}" deployed (${data.tool_count} tools) by ${data.deployed_by}`;
+          } else if (event === "mcp_undeployed" && data) {
+            plaintext = `[SERVICE] "${data.name}" undeployed by ${data.by}`;
+          } else if (event === "mcp_scope_changed" && data) {
+            plaintext = `[SERVICE] "${data.name}" scope changed to ${JSON.stringify(data.scope)} by ${data.by}`;
+          } else if (event === "peer_joined" && data) {
+            plaintext = `[MESH] ${data.displayName ?? "peer"} joined`;
+          } else if (event === "peer_left" && data) {
+            plaintext = `[MESH] ${data.displayName ?? "peer"} left`;
+          } else if (data) {
+            plaintext = `[${event}] ${JSON.stringify(data)}`;
+          } else {
+            plaintext = `[${event}]`;
+          }
+        } else if (senderPubkey && nonce && ciphertext) {
           plaintext = await decryptDirect(
             { nonce, ciphertext },
             senderPubkey,
