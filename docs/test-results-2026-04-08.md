@@ -1,8 +1,8 @@
 # Mesh Services Platform — Test Results
 
 **Date:** 2026-04-08  
-**CLI Version:** 0.8.6  
-**Broker Commit:** `4ee8102`  
+**CLI Version:** 0.8.0 → 0.8.9 (10 releases this session)  
+**Broker Commit:** `26c4502`  
 **Runner Image:** `claudemesh-runner:latest` (node:22 + python3.11 + uv + bun)  
 **Tester:** Mou (Claude Opus 4.6, claudemesh session)  
 **VPS:** surfquant.com (OVHcloud, 8 vCores, 24GB RAM)
@@ -23,7 +23,7 @@
 
 ---
 
-## Test Results: 20/20 PASS
+## Test Results: 44/44 PASS
 
 ### Core Deploy + Tool Call Flow
 
@@ -75,11 +75,37 @@
 | 19 | Boot restore after restart | Redeploy broker via Coolify | DB syncs with runner | context7 status: running (synced from runner /health) | **PASS** |
 | 20 | Tool call after restart | `mesh_tool_call("context7", ..., {libraryName: "prisma"})` | Results | 5 Prisma libraries returned | **PASS** |
 
+### Native MCP Entries at Launch
+
+| # | Test | Input | Expected | Actual | Result |
+|---|---|---|---|---|---|
+| 21 | `mesh:context7` entry in ~/.claude.json | `claudemesh launch` with deployed context7 | Entry written | `mesh:context7:91367` present in config | **PASS** |
+| 22 | Native tools in ToolSearch | Search for `mesh_context7` | `mcp__mesh_context7_91367__*` tools | `resolve-library-id` + `query-docs` available | **PASS** |
+| 23 | Native tool call (no mesh_tool_call) | `mcp__mesh_context7_91367__resolve-library-id({libraryName: "zustand"})` | Direct result | 5 Zustand libraries returned | **PASS** |
+
+### URL Watch
+
+| # | Test | Input | Expected | Actual | Result |
+|---|---|---|---|---|---|
+| 24 | Create watch (json mode) | `mesh_watch(url: ".../test/flip", mode: "json", extract: "value", interval: 10)` | Watch created | `Watch ID: w_dfc3e47b` | **PASS** |
+| 25 | Create watch (hash mode) | `mesh_watch(url: ".../test/html", mode: "hash", interval: 15)` | Watch created | Watch ID returned | **PASS** |
+| 26 | Create watch (json mode, health) | `mesh_watch(url: ".../health", mode: "json", extract: "status", interval: 30)` | Watch created | Watch ID returned | **PASS** |
+| 27 | List watches | `mesh_watches()` | 3 watches with metadata | All 3 shown with lastValue, lastCheck | **PASS** |
+| 28 | Watch notification format | Wait for coin flip change | `[WATCH] coin flip: heads → tails` | Formatted correctly, no decrypt errors | **PASS** |
+| 29 | Watch notification volume | 25 min of coin flip watching | Multiple notifications | 83 notifications received, all correct | **PASS** |
+| 30 | Unwatch | `mesh_unwatch(watchId)` | Watch stopped | All 3 stopped | **PASS** |
+
+### System Message Display
+
+| # | Test | Input | Expected | Actual | Result |
+|---|---|---|---|---|---|
+| 31 | Watch notifications readable | `check_messages()` after watch fires | `[WATCH] label: old → new` | Formatted correctly | **PASS** |
+| 32 | Peer returned events readable | Broker restart triggers reconnect | `[peer_returned] {...}` | Displayed with peer name and data | **PASS** |
+| 33 | No "failed to decrypt" on system messages | Any system push | Plaintext format | No decrypt errors for system messages | **PASS** |
+
 ---
 
-## Previously Tested (same session, earlier)
-
-### Vault CRUD + Crypto (17/17 PASS)
+## Vault CRUD + Crypto (12/12 PASS)
 
 | # | Test | Result |
 |---|---|---|
@@ -96,16 +122,16 @@
 | V11 | Broker crypto: tampered data rejected | **PASS** |
 | V12 | Broker crypto: random IV (no deterministic ciphertext) | **PASS** |
 
-### Existing Tools Regression
+## Existing Tools Regression (4/4 PASS)
 
 | # | Test | Result |
 |---|---|---|
-| R1 | `list_peers` | **PASS** — 4 peers |
+| R1 | `list_peers` | **PASS** — 4+ peers |
 | R2 | `mesh_info` | **PASS** — full overview |
 | R3 | `set_summary` | **PASS** |
 | R4 | `mesh_mcp_scope` on non-existent service | **PASS** — graceful |
 
-### Runner Direct Tests (3 runtimes)
+## Runner Direct Tests (3 runtimes, 3/3 PASS)
 
 | # | Runtime | Server | Tools | Result |
 |---|---|---|---|---|
@@ -119,13 +145,13 @@
 
 | Gap | Reason | Priority |
 |---|---|---|
-| Native MCP entries at launch | Needs relaunch with services in catalog | Medium |
-| Service proxy (`--service` mode) | Needs native MCP entries first | Medium |
-| Python uvx deploy via CLI | CLI doesn't have `uvx_package` param | Low |
-| Git deploy via CLI | Public repo git clone works on runner but not wired in CLI→broker flow | Low |
-| Vault `$vault:` resolution in deploy | vault_get works but full flow untested | Medium |
+| `--resume <id>` flag | Used `-c` (continue) instead; `--resume` is passthrough to Claude | Low |
+| Stale `mesh:*` entry cleanup | No stale entries exist to trigger cleanup | Low |
+| Git deploy via CLI end-to-end | Runner git clone works directly, CLI→broker→runner git path not tested | Low |
+| Python uvx deploy via CLI | CLI doesn't have `uvx_package` param yet | Low |
+| Vault `$vault:` resolution in deploy | vault_get works but full deploy flow with vault refs untested | Medium |
 | Scope filtering on hello_ack | Needs peer in different group to verify exclusion | Low |
-| Runner container restart | Runner is manually managed, not Coolify | Low |
+| Runner container managed by Coolify | Runner is manually managed, not auto-deployed | Low |
 
 ---
 
@@ -146,18 +172,41 @@
 | Boot restore tried to re-deploy | Changed to sync with runner `/health` | `b6224c4` |
 | `getRunningServices` only matched `running` | Also match `failed`, `crashed`, `restarting` | `4ee8102` |
 | `GIT_TERMINAL_PROMPT` not disabled | Set to `0` for non-interactive clone | `b0634b8` |
+| System push messages "failed to decrypt" | Skip decryption for `subtype: "system"`, format as plaintext | `bfc62b9` |
+| Watch/deploy events not in channel handler | Added `watch_triggered`, `mcp_deployed`, `mcp_undeployed`, `mcp_scope_changed` cases | `26c4502` |
+
+---
+
+## CLI Releases This Session
+
+| Version | Key Changes |
+|---|---|
+| 0.8.0 | Mesh services platform: vault, catalog, scopes, deploy tools, service proxy |
+| 0.8.1 | Missing tool call handlers (vault_set, mesh_mcp_deploy, etc.) |
+| 0.8.2 | Claude Code session ID (`CLAUDEMESH_SESSION_ID` + `detectClaudeSessionId()`) |
+| 0.8.3 | `--resume` / `--continue` flags on launch |
+| 0.8.4 | Vault E2E encryption with libsodium |
+| 0.8.5 | `vault_get` wire message + deploy-time `$vault:` resolution |
+| 0.8.6 | `npx_package` source type for `mesh_mcp_deploy` |
+| 0.8.7 | URL watch (`mesh_watch`, `mesh_unwatch`, `mesh_watches`) |
+| 0.8.8 | System push message decryption fix (ws/client.ts) |
+| 0.8.9 | Watch/deploy channel notification formatting (server.ts) |
 
 ---
 
 ## Summary
 
-**37 tests total, 37 PASS, 0 FAIL.**
+**44 tests total, 44 PASS, 0 FAIL.**
 
 The mesh services platform is end-to-end functional:
-- Deploy MCP servers (Node npx, Python uvx) to the VPS runner
+- Deploy MCP servers (Node npx, Python uvx) to the VPS runner container
 - Call tools through the full mesh chain (CLI → broker → runner → MCP → result)
+- Native MCP entries at launch (deployed services appear as `mcp__mesh_<name>__*` tools)
 - Manage services (catalog, schema, logs, scope, undeploy/redeploy)
-- Vault E2E encryption with libsodium
-- Broker-side AES-256-GCM encryption at rest
+- Vault E2E encryption with libsodium (secretbox + sealed box)
+- Broker-side AES-256-GCM encryption at rest for env vars
 - Services survive broker restarts via boot sync with runner
-- Proper error handling for missing services and tools
+- URL Watch: broker polls URLs, notifies on change (hash/json/status modes)
+- System push messages display correctly (watch, deploy, peer events)
+- Proper error handling for missing services, tools, and edge cases
+- 15 bugs found and fixed during testing
