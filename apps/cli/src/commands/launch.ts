@@ -32,6 +32,8 @@ export interface LaunchFlags {
   mesh?: string;
   "message-mode"?: string;
   "system-prompt"?: string;
+  resume?: string;
+  continue?: boolean;
   yes?: boolean;
   quiet?: boolean;
 }
@@ -171,6 +173,8 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
       ? flags["message-mode"] as "push" | "inbox" | "off"
       : null),
     systemPrompt: flags["system-prompt"] ?? null,
+    resume: flags.resume ?? null,
+    continueSession: flags.continue ?? false,
     quiet: flags.quiet ?? false,
     skipPermConfirm: flags.yes ?? false,
     claudeArgs: claudePassthrough,
@@ -422,16 +426,17 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   // passes -y / --yes. Without it, claudemesh tools still work because
   // `claudemesh install` pre-approves them via allowedTools in settings.json.
   // This keeps permissions tight for multi-person meshes.
-  // Generate a stable session ID for this launch. Used by the broker to:
-  // - detect reconnections (same session ID = restore state)
-  // - disambiguate multiple peers in the same project
-  // - persist identity across --resume (Claude reuses the session ID)
-  const claudeSessionId = randomUUID();
+  // Session identity: --resume reuses existing session, otherwise generate new.
+  // When resuming, Claude Code reuses the session ID so the mesh peer identity persists.
+  const isResume = args.resume !== null || args.continueSession;
+  const claudeSessionId = isResume ? undefined : randomUUID();
 
   const claudeArgs = [
     "--dangerously-load-development-channels",
     "server:claudemesh",
-    "--session-id", claudeSessionId,
+    ...(claudeSessionId ? ["--session-id", claudeSessionId] : []),
+    ...(args.resume ? ["--resume", args.resume] : []),
+    ...(args.continueSession ? ["--continue"] : []),
     ...(args.skipPermConfirm ? ["--dangerously-skip-permissions"] : []),
     ...(args.systemPrompt ? ["--system-prompt", args.systemPrompt] : []),
     ...filtered,
@@ -445,7 +450,7 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
       ...process.env,
       CLAUDEMESH_CONFIG_DIR: tmpDir,
       CLAUDEMESH_DISPLAY_NAME: displayName,
-      CLAUDEMESH_SESSION_ID: claudeSessionId,
+      ...(claudeSessionId ? { CLAUDEMESH_SESSION_ID: claudeSessionId } : {}),
       MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? "30000",
       MAX_MCP_OUTPUT_TOKENS: process.env.MAX_MCP_OUTPUT_TOKENS ?? "50000",
       ...(role ? { CLAUDEMESH_ROLE: role } : {}),

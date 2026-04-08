@@ -71,6 +71,17 @@ const launch = defineCommand({
       description: "Skip the --dangerously-skip-permissions confirmation",
       default: false,
     },
+    resume: {
+      type: "string",
+      alias: "r",
+      description: "Resume a previous Claude Code session by ID, or pass `true` for interactive picker",
+    },
+    continue: {
+      type: "boolean",
+      alias: "c",
+      description: "Continue the most recent conversation in this directory",
+      default: false,
+    },
     quiet: {
       type: "boolean",
       description: "Suppress banner and interactive prompts",
