@@ -117,11 +117,17 @@ async function initMcp(svc) {
 // --- Spawn ---
 
 function spawnService(svc) {
-  // npx packages have a pre-resolved binary
+  // npx/uvx packages have a pre-resolved binary
   let cmd, args;
   if (svc._npxBin) {
-    cmd = "node";
-    args = [svc._npxBin];
+    // Python venv binaries are scripts with shebangs — run directly
+    if (svc.runtime === "python") {
+      cmd = svc._npxBin;
+      args = [];
+    } else {
+      cmd = "node";
+      args = [svc._npxBin];
+    }
   } else {
     ({ cmd, args } = detectEntry(svc.sourcePath, svc.runtime));
   }
