@@ -194,6 +194,10 @@ export class BrokerClient {
   getSessionPubkey(): string | null { return this.sessionPubkey; }
   /** Session secret key hex (null before first connection). */
   getSessionSecretKey(): string | null { return this.sessionSecretKey; }
+  /** Mesh member public key hex (stable across sessions). */
+  getMeshPubkey(): string { return this.mesh.pubkey; }
+  /** Mesh member secret key hex (stable across sessions). */
+  getMeshSecretKey(): string { return this.mesh.secretKey; }
 
   private makeReqId(): string {
     return Math.random().toString(36).slice(2) + Date.now().toString(36);

@@ -1354,16 +1354,30 @@ Your message mode is "${messageMode}".
         const client = allClients()[0];
         if (!client) return text("vault_set: not connected", true);
         const entryType = vType ?? "env";
-        let plaintext = value;
+
+        // Read plaintext
+        let plaintextBytes: Uint8Array;
         if (entryType === "file") {
           const { existsSync, readFileSync } = await import("node:fs");
           if (!existsSync(value)) return text(`vault_set: file not found: ${value}`, true);
-          plaintext = readFileSync(value, "base64");
+          plaintextBytes = new Uint8Array(readFileSync(value));
+        } else {
+          plaintextBytes = new TextEncoder().encode(value);
         }
-        const encoded = Buffer.from(plaintext).toString("base64");
-        const ok = await client.vaultSet(key, encoded, "placeholder-nonce", "placeholder-sealed", entryType, mount_path, description);
+
+        // E2E encrypt: crypto_secretbox with random Kf, then seal Kf with mesh pubkey
+        const { encryptFile, sealKeyForPeer } = await import("../crypto/file-crypto");
+        const { ciphertext, nonce, key: kf } = await encryptFile(plaintextBytes);
+        const sealedKey = await sealKeyForPeer(kf, client.getMeshPubkey());
+
+        // Convert ciphertext to base64 for storage
+        const { ensureSodium } = await import("../crypto/keypair");
+        const sodium = await ensureSodium();
+        const ciphertextB64 = sodium.to_base64(ciphertext, sodium.base64_variants.ORIGINAL);
+
+        const ok = await client.vaultSet(key, ciphertextB64, nonce, sealedKey, entryType, mount_path, description);
         if (!ok) return text("vault_set: broker did not acknowledge", true);
-        return text(`Vault entry "${key}" stored (${entryType}).`);
+        return text(`Vault entry "${key}" stored (${entryType}, E2E encrypted).`);
       }
       case "vault_list": {
         const client = allClients()[0];
