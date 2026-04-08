@@ -252,7 +252,7 @@ const server = createServer(async (req, res) => {
         mkdirSync(svcSourcePath, { recursive: true });
         const { execSync } = await import("node:child_process");
         try {
-          execSync(`uv venv ${join(svcSourcePath, ".venv")}`, { timeout: 30_000, stdio: "pipe" });
+          execSync(`uv venv --clear ${join(svcSourcePath, ".venv")}`, { timeout: 30_000, stdio: "pipe" });
           execSync(`uv pip install --python ${join(svcSourcePath, ".venv/bin/python")} ${body.uvxPackage}`, { timeout: 120_000, stdio: "pipe" });
           console.log(`[runner] uvx package installed: ${body.uvxPackage}`);
         } catch (e) {
