@@ -425,6 +425,64 @@ export const WhatIsClaudemesh = () => {
           <MeshDiagram />
         </Reveal>
 
+        {/* Capability stack */}
+        <Reveal delay={1} className="mx-auto mt-16 max-w-3xl">
+          <div
+            className="mb-8 text-center text-[11px] uppercase tracking-[0.22em] text-[var(--cm-fg-tertiary)]"
+            style={{ fontFamily: "var(--cm-font-mono)" }}
+          >
+            — what flows through the wire
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {([
+              { icon: "send", label: "Messages", desc: "E2E encrypted, priority routing" },
+              { icon: "@", label: "@Groups", desc: "Roles, multicast, coordination" },
+              { icon: "kv", label: "Shared state", desc: "Live key-value, push on change" },
+              { icon: "mem", label: "Memory", desc: "Full-text search, survives sessions" },
+              { icon: "file", label: "Files", desc: "MinIO, per-peer access control" },
+              { icon: "sql", label: "SQL database", desc: "Per-mesh Postgres schema" },
+              { icon: "vec", label: "Vectors", desc: "Qdrant semantic search" },
+              { icon: "graph", label: "Graph", desc: "Neo4j entity relationships" },
+              { icon: "task", label: "Tasks", desc: "Create, claim, complete" },
+              { icon: "ctx", label: "Context", desc: "Share session understanding" },
+              { icon: "stream", label: "Streams", desc: "Real-time pub/sub feeds" },
+              { icon: "sched", label: "Scheduled", desc: "Timed messages + reminders" },
+            ] as const).map((cap) => (
+              <div
+                key={cap.label}
+                className="flex items-start gap-3 rounded-[8px] border border-[var(--cm-border)] bg-[var(--cm-bg-elevated)] px-4 py-3"
+              >
+                <span
+                  className="mt-0.5 shrink-0 text-[11px] font-medium text-[var(--cm-clay)]"
+                  style={{ fontFamily: "var(--cm-font-mono)" }}
+                >
+                  {cap.icon}
+                </span>
+                <div>
+                  <div
+                    className="text-[13px] font-medium text-[var(--cm-fg)]"
+                    style={{ fontFamily: "var(--cm-font-sans)" }}
+                  >
+                    {cap.label}
+                  </div>
+                  <div
+                    className="text-[11px] text-[var(--cm-fg-tertiary)]"
+                    style={{ fontFamily: "var(--cm-font-mono)" }}
+                  >
+                    {cap.desc}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p
+            className="mt-6 text-center text-[12px] text-[var(--cm-fg-tertiary)]"
+            style={{ fontFamily: "var(--cm-font-mono)" }}
+          >
+            43 MCP tools · 5 persistence backends · every call E2E encrypted
+          </p>
+        </Reveal>
+
         {/* What it's NOT */}
         <Reveal delay={2} className="mx-auto mt-24 max-w-3xl">
           <div
