@@ -278,15 +278,18 @@ const server = createServer(async (req, res) => {
         const svc2 = { name, sourcePath: svcSourcePath, runtime: svcRuntime, env: svcEnv || {}, process: null, pid: null, tools: [], status: "running", pending: new Map(), logs: [], restarts: 0, healthFailures: 0, _npxBin: uvxBinPath };
         services.set(name, svc2);
         spawnService(svc2);
-        await new Promise(r => setTimeout(r, 1500));
-        try {
-          svc2.tools = await initMcp(svc2);
-          console.log(`[runner] ${name} ready (uvx), ${svc2.tools.length} tools`);
-          return json(res, 200, { status: "running", tools: svc2.tools });
-        } catch (e) {
-          svc2.status = "failed"; svc2.logs.push(`MCP init failed: ${e.message}`);
-          return json(res, 500, { error: e.message, logs: svc2.logs.slice(-10) });
+        // Python MCPs take longer to start — retry init with backoff
+        let initErr = null;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          await new Promise(r => setTimeout(r, 1500 + attempt * 1000));
+          try {
+            svc2.tools = await initMcp(svc2);
+            console.log(`[runner] ${name} ready (uvx), ${svc2.tools.length} tools`);
+            return json(res, 200, { status: "running", tools: svc2.tools });
+          } catch (e) { initErr = e; }
         }
+        svc2.status = "failed"; svc2.logs.push(`MCP init failed after 3 attempts: ${initErr?.message}`);
+        return json(res, 500, { error: initErr?.message, logs: svc2.logs.slice(-10) });
       } else if (!svcSourcePath) {
         return json(res, 400, { error: "one of sourcePath, gitUrl, or npxPackage required" });
       }
