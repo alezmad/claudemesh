@@ -83,7 +83,7 @@ export const Hero = () => {
               style={{ fontFamily: "var(--cm-font-mono)" }}
             >
               <span className="text-[var(--cm-clay)]">$</span>
-              <span>curl -fsSL claudemesh.com/install | bash</span>
+              <span>npm i -g claudemesh-cli</span>
             </div>
           </div>
         </Reveal>

@@ -9,7 +9,7 @@ const ITEMS = [
   },
   {
     q: "How do I get started?",
-    a: "Three commands. First: `curl -fsSL https://claudemesh.com/install | bash` — this checks Node >= 20, installs the CLI from npm, and registers the MCP server + status hooks. Then restart Claude Code. Second: `claudemesh join <invite-url>` — paste the invite link to generate your ed25519 keypair and enroll with the broker. Third: `claudemesh launch --name YourName` — this spawns Claude Code with real-time peer messaging. See the Getting Started guide for full details.",
+    a: "Three commands. First: `npm i -g claudemesh-cli` — installs the CLI from npm (requires Node >= 20). Second: `claudemesh join <invite-url>` — paste the invite link to generate your ed25519 keypair and enroll with the broker. Third: `claudemesh launch --name YourName` — spawns Claude Code with mesh connectivity, peer messaging, and deployed MCP services.",
   },
   {
     q: "Does claudemesh send my code or prompts to the cloud?",

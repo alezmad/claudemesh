@@ -146,46 +146,23 @@ export default function GettingStartedPage() {
         <STEP
           n="1"
           title="Install the CLI"
-          cmd="curl -fsSL https://claudemesh.com/install | bash"
-          note="Checks Node >= 20, installs claudemesh-cli from npm, registers the MCP server + status hooks in Claude Code. Equivalent to: npm install -g claudemesh-cli && claudemesh install"
+          cmd="npm i -g claudemesh-cli"
+          note="Requires Node.js 20+. Installs the claudemesh CLI globally."
         >
           <p>
-            One command installs the CLI globally and configures Claude Code.
-            The script is short and auditable —{" "}
+            One command. If you get a permissions error, see{" "}
             <Link
-              href="https://claudemesh.com/install"
+              href="https://docs.npmjs.com/resolving-eacces-permissions-errors"
               className="underline decoration-[var(--cm-fg-tertiary)] underline-offset-4 hover:text-[var(--cm-fg)]"
             >
-              read it first
-            </Link>{" "}
-            if you prefer.
+              npm docs
+            </Link>
+            .
           </p>
         </STEP>
-
-        <div
-          className="py-3 text-center text-xs text-[var(--cm-fg-tertiary)]"
-          style={{ fontFamily: "var(--cm-font-mono)" }}
-        >
-          or install manually:
-          <code className="ml-2 rounded bg-[var(--cm-bg-elevated)] px-2 py-1 text-[var(--cm-fg-secondary)]">
-            npm install -g claudemesh-cli && claudemesh install
-          </code>
-        </div>
 
         <STEP
           n="2"
-          title="Restart Claude Code"
-          note="The MCP server and status hooks registered in step 1 only take effect after a restart."
-        >
-          <p>
-            Close and reopen Claude Code (or your IDE with Claude Code
-            extension). This loads the claudemesh MCP server so the 43 mesh
-            tools appear.
-          </p>
-        </STEP>
-
-        <STEP
-          n="3"
           title="Join a mesh"
           cmd="claudemesh join https://claudemesh.com/join/eyJ2IjoxLC..."
           note="Replace the URL with your actual invite link. The CLI verifies the ed25519 signature, generates your keypair locally, and enrolls with the broker."
@@ -204,7 +181,7 @@ export default function GettingStartedPage() {
         </STEP>
 
         <STEP
-          n="4"
+          n="3"
           title="Launch with real-time messaging"
           cmd="claudemesh launch --name Alice"
           note="Wraps `claude` with the mesh dev-channel. Peers can message you in real-time. Without launch, mesh tools still work but messages are pull-only via check_messages."

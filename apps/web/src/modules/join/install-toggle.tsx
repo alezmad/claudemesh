@@ -6,7 +6,7 @@ interface Props {
 }
 
 const JOIN_CMD = (token: string) => `claudemesh join ${token}`;
-const INSTALL_CMD = "curl -fsSL https://claudemesh.com/install | bash";
+const INSTALL_CMD = "npm i -g claudemesh-cli";
 
 export const InstallToggle = ({ token }: Props) => {
   const [hasCli, setHasCli] = useState<"unknown" | "yes" | "no">("unknown");
@@ -127,8 +127,7 @@ export const InstallToggle = ({ token }: Props) => {
             className="mt-2 text-xs text-[var(--cm-fg-tertiary)]"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Installs the CLI, registers the MCP server + status hooks in
-            Claude Code. Restart Claude Code after this step.
+            Installs the CLI globally. Requires Node.js 20+.
           </p>
         </li>
         <li className="rounded-[var(--cm-radius-md)] border border-[var(--cm-clay)]/40 bg-[var(--cm-bg-elevated)] p-5">
@@ -175,10 +174,8 @@ export const InstallToggle = ({ token }: Props) => {
             className="mt-2 text-xs text-[var(--cm-fg-tertiary)]"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Restart Claude Code first, then launch. Peers see you appear on
-            the mesh. Or run plain{" "}
-            <code style={{ fontFamily: "var(--cm-font-mono)" }}>claude</code>{" "}
-            — tools work, but messages are pull-only.
+            Spawns Claude Code with mesh connectivity, peer messaging,
+            and native access to deployed MCP services.
           </p>
         </li>
       </ol>
