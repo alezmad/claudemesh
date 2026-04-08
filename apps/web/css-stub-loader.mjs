@@ -13,15 +13,17 @@ import { register } from "node:module";
 register(
   "data:text/javascript," +
     encodeURIComponent(`
+const STYLE_RE = /\\.(css|scss|sass|less)$/;
+
 export function resolve(specifier, context, nextResolve) {
-  if (specifier.endsWith('.css')) {
+  if (STYLE_RE.test(specifier)) {
     return { url: 'data:text/javascript,export default {};', shortCircuit: true };
   }
   return nextResolve(specifier, context);
 }
 
 export function load(url, context, nextLoad) {
-  if (url.endsWith('.css')) {
+  if (STYLE_RE.test(url)) {
     return { format: 'module', source: 'export default {};', shortCircuit: true };
   }
   return nextLoad(url, context);
