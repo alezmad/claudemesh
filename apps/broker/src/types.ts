@@ -1104,6 +1104,19 @@ export interface WSVaultDeleteMessage { type: "vault_delete"; key: string; _reqI
 /** Client → broker: fetch encrypted vault entries for local decryption. */
 export interface WSVaultGetMessage { type: "vault_get"; keys: string[]; _reqId?: string; }
 
+/** Client → broker: start watching a URL for changes. */
+export interface WSWatchMessage { type: "watch"; url: string; mode?: "hash" | "json" | "status"; extract?: string; interval?: number; notify_on?: string; headers?: Record<string, string>; label?: string; _reqId?: string; }
+/** Client → broker: stop watching. */
+export interface WSUnwatchMessage { type: "unwatch"; watchId: string; _reqId?: string; }
+/** Client → broker: list active watches. */
+export interface WSWatchListMessage { type: "watch_list"; _reqId?: string; }
+/** Broker → client: watch created acknowledgement. */
+export interface WSWatchAckMessage { type: "watch_ack"; watchId: string; url: string; mode: string; interval: number; _reqId?: string; }
+/** Broker → client: watch list response. */
+export interface WSWatchListResultMessage { type: "watch_list_result"; watches: Array<{ id: string; url: string; mode: string; label?: string; interval: number; lastHash?: string; lastValue?: string; lastCheck?: string; createdAt: string }>; _reqId?: string; }
+/** Broker → client: URL change detected. */
+export interface WSWatchTriggeredMessage { type: "watch_triggered"; watchId: string; url: string; label?: string; mode: string; oldValue: string; newValue: string; timestamp: string; }
+
 export type WSClientMessage =
   | WSHelloMessage
   | WSSendMessage
@@ -1185,7 +1198,10 @@ export type WSClientMessage =
   | WSVaultSetMessage
   | WSVaultListMessage
   | WSVaultDeleteMessage
-  | WSVaultGetMessage;
+  | WSVaultGetMessage
+  | WSWatchMessage
+  | WSUnwatchMessage
+  | WSWatchListMessage;
 
 // --- Skill messages ---
 
@@ -1333,4 +1349,7 @@ export type WSServerMessage =
   | WSVaultAckMessage
   | WSVaultListResultMessage
   | WSVaultGetResultMessage
+  | WSWatchAckMessage
+  | WSWatchListResultMessage
+  | WSWatchTriggeredMessage
   | WSErrorMessage;

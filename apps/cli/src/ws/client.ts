@@ -1346,6 +1346,38 @@ export class BrokerClient {
     });
   }
 
+  // --- URL Watch ---
+
+  private watchAckResolvers = new Map<string, { resolve: (result: any) => void; timer: NodeJS.Timeout }>();
+  private watchListResolvers = new Map<string, { resolve: (watches: any[]) => void; timer: NodeJS.Timeout }>();
+
+  async watch(url: string, opts?: { mode?: string; extract?: string; interval?: number; notify_on?: string; headers?: Record<string, string>; label?: string }): Promise<any> {
+    return new Promise(resolve => {
+      const reqId = `watch_${Date.now()}`;
+      const timer = setTimeout(() => { this.watchAckResolvers.delete(reqId); resolve({ error: "timeout" }); }, 10_000);
+      this.watchAckResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "watch", url, ...opts, _reqId: reqId } as any);
+    });
+  }
+
+  async unwatch(watchId: string): Promise<boolean> {
+    return new Promise(resolve => {
+      const reqId = `unwatch_${Date.now()}`;
+      const timer = setTimeout(() => { this.watchAckResolvers.delete(reqId); resolve(false); }, 10_000);
+      this.watchAckResolvers.set(reqId, { resolve: () => resolve(true), timer });
+      this.sendRaw({ type: "unwatch", watchId, _reqId: reqId } as any);
+    });
+  }
+
+  async watchList(): Promise<any[]> {
+    return new Promise(resolve => {
+      const reqId = `watchlist_${Date.now()}`;
+      const timer = setTimeout(() => { this.watchListResolvers.delete(reqId); resolve([]); }, 10_000);
+      this.watchListResolvers.set(reqId, { resolve, timer });
+      this.sendRaw({ type: "watch_list", _reqId: reqId } as any);
+    });
+  }
+
   async getServiceTools(serviceName: string): Promise<any[]> {
     // Check cached catalog first
     const cached = this._serviceCatalog.find(s => s.name === serviceName);
@@ -1991,6 +2023,24 @@ export class BrokerClient {
         clearTimeout(r.timer);
         this.skillDeployResolvers.delete(reqId);
         r.resolve({ name: (msg as any).name, files: (msg as any).files ?? [] });
+      }
+    }
+    if (msg.type === "watch_ack") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.watchAckResolvers.has(reqId)) {
+        const r = this.watchAckResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.watchAckResolvers.delete(reqId);
+        r.resolve(msg);
+      }
+    }
+    if (msg.type === "watch_list_result") {
+      const reqId = (msg as any)._reqId;
+      if (reqId && this.watchListResolvers.has(reqId)) {
+        const r = this.watchListResolvers.get(reqId)!;
+        clearTimeout(r.timer);
+        this.watchListResolvers.delete(reqId);
+        r.resolve((msg as any).watches ?? []);
       }
     }
     if (msg.type === "error") {

@@ -972,4 +972,38 @@ export const TOOLS: Tool[] = [
     description: "Remove a credential from your vault.",
     inputSchema: { type: "object", properties: { key: { type: "string" } }, required: ["key"] },
   },
+
+  // --- URL Watch tools ---
+
+  {
+    name: "mesh_watch",
+    description: "Watch a URL for changes. The broker polls it at the given interval and notifies you when the response changes. Works with any URL — websites (hash mode), JSON APIs (json mode), or status codes (status mode).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "URL to watch" },
+        mode: { type: "string", enum: ["hash", "json", "status"], description: "Detection mode: hash (SHA-256 of body), json (extract jsonpath value), status (HTTP status code). Default: hash" },
+        extract: { type: "string", description: "For json mode: dot path to extract (e.g. 'status' or 'data.deployments[0].status')" },
+        interval: { type: "number", description: "Poll interval in seconds (min: 5, default: 30)" },
+        notify_on: { type: "string", description: "When to notify: 'change' (default), 'match:<value>', 'not_match:<value>'" },
+        headers: { type: "object", description: "Optional HTTP headers (e.g. for auth)" },
+        label: { type: "string", description: "Human-readable label for this watch" },
+      },
+      required: ["url"],
+    },
+  },
+  {
+    name: "mesh_unwatch",
+    description: "Stop watching a URL.",
+    inputSchema: {
+      type: "object",
+      properties: { watch_id: { type: "string" } },
+      required: ["watch_id"],
+    },
+  },
+  {
+    name: "mesh_watches",
+    description: "List your active URL watches.",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];

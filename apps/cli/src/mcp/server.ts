@@ -1554,6 +1554,35 @@ Your message mode is "${messageMode}".
         return text(`Skill "${result.name}" deployed.\nFiles: ${result.files.join(", ")}`);
       }
 
+      // --- URL Watch ---
+      case "mesh_watch": {
+        const { url, mode, extract, interval, notify_on, headers, label } = (args ?? {}) as any;
+        if (!url) return text("mesh_watch: `url` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_watch: not connected", true);
+        const result = await client.watch(url, { mode, extract, interval, notify_on, headers, label });
+        if (result.error) return text(`mesh_watch: ${result.error}`, true);
+        return text(`Watching "${label ?? url}" (${result.mode}, every ${result.interval}s)\nWatch ID: ${result.watchId}`);
+      }
+      case "mesh_unwatch": {
+        const { watch_id } = (args ?? {}) as { watch_id?: string };
+        if (!watch_id) return text("mesh_unwatch: `watch_id` required", true);
+        const client = allClients()[0];
+        if (!client) return text("mesh_unwatch: not connected", true);
+        await client.unwatch(watch_id);
+        return text(`Watch ${watch_id} stopped.`);
+      }
+      case "mesh_watches": {
+        const client = allClients()[0];
+        if (!client) return text("mesh_watches: not connected", true);
+        const watches = await client.watchList();
+        if (watches.length === 0) return text("No active watches.");
+        const lines = watches.map((w: any) =>
+          `- **${w.id}** ${w.label ? `(${w.label}) ` : ""}${w.url}\n  mode: ${w.mode} | interval: ${w.interval}s | last: ${w.lastValue?.slice(0, 30) ?? "pending"} | checked: ${w.lastCheck ?? "never"}`
+        );
+        return text(`${watches.length} active watch(es):\n\n${lines.join("\n")}`);
+      }
+
       default:
         return text(`Unknown tool: ${name}`, true);
     }
