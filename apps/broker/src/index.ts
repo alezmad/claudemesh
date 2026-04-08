@@ -3660,33 +3660,35 @@ function main(): void {
       for (const m of allMeshes) {
         const running = await getRunningServices(m.id);
         if (running.length === 0) continue;
-        log.info("restoring services for mesh", { mesh_id: m.id, count: running.length });
-        for (const svc of running) {
-          try {
-            const config = (svc.config as Record<string, unknown>) ?? {};
-            // Decrypt env vars if stored encrypted
-            let resolvedEnv: Record<string, string> | undefined;
-            if (config._encryptedEnv) {
-              const decrypted = decryptFromStorage(config._encryptedEnv as string);
-              if (decrypted) {
-                resolvedEnv = JSON.parse(decrypted);
-              } else {
-                log.warn("failed to decrypt env for service", { service: svc.name });
-              }
+        log.info("syncing services for mesh", { mesh_id: m.id, count: running.length });
+        // Sync DB status with runner reality instead of re-deploying
+        try {
+          const healthRes = await fetch(`${env.RUNNER_URL}/health`);
+          const health = await healthRes.json() as { ok: boolean; services: Array<{ name: string; status: string; tools: number }> };
+          const runnerServices = new Map((health.services ?? []).map((s: any) => [s.name, s]));
+
+          for (const svc of running) {
+            const runnerSvc = runnerServices.get(svc.name);
+            if (runnerSvc && runnerSvc.status === "running") {
+              // Runner has it running — update DB to match
+              log.info("service still running on runner", { service: svc.name, mesh_id: m.id });
+              // Refresh tools from runner
+              try {
+                const toolsRes = await fetch(`${env.RUNNER_URL}/list?name=${svc.name}`);
+                const toolsData = await toolsRes.json() as { tools?: any[] };
+                if (toolsData.tools) {
+                  await updateServiceStatus(m.id, svc.name, "running", { toolsSchema: toolsData.tools });
+                }
+              } catch { /* keep existing tools */ }
+            } else {
+              // Runner doesn't have it — mark as stopped
+              log.warn("service not found on runner, marking stopped", { service: svc.name });
+              await updateServiceStatus(m.id, svc.name, "stopped");
             }
-            const sourcePath = `${env.CLAUDEMESH_SERVICES_DIR}/${m.id}/${svc.name}/source`;
-            await serviceManager.deploy({
-              meshId: m.id,
-              name: svc.name,
-              sourcePath,
-              config: { runtime: svc.runtime as any, ...(config.memory_mb ? { memory_mb: config.memory_mb as number } : {}) },
-              resolvedEnv,
-            });
-            log.info("service restored", { service: svc.name, mesh_id: m.id });
-          } catch (e) {
-            log.error("service restore failed", { service: svc.name, error: e instanceof Error ? e.message : String(e) });
-            await updateServiceStatus(m.id, svc.name, "failed");
           }
+        } catch (e) {
+          log.warn("runner health check failed during restore", { error: e instanceof Error ? e.message : String(e) });
+          // Runner might not be up yet — don't mark services as failed
         }
       }
     } catch (e) {
