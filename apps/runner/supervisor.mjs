@@ -15,7 +15,7 @@
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const PORT = parseInt(process.env.RUNNER_PORT || "7901", 10);
@@ -264,8 +264,7 @@ const server = createServer(async (req, res) => {
       if (npxPackage) {
         const binDir = join(svcSourcePath, "node_modules", ".bin");
         if (existsSync(binDir)) {
-          // Override detectEntry for npx packages
-          const bins = await import("node:fs").then(fs => fs.readdirSync(binDir));
+          const bins = readdirSync(binDir);
           if (bins.length > 0) {
             svc._npxBin = join(binDir, bins[0]);
           }
