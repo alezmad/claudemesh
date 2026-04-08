@@ -592,6 +592,21 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // --- Test endpoints for URL watch validation ---
+  if (req.method === "GET" && req.url === "/test/clock") {
+    writeJson(res, 200, { time: new Date().toISOString(), epoch: Date.now() });
+    return;
+  }
+  if (req.method === "GET" && req.url === "/test/flip") {
+    writeJson(res, 200, { value: Math.random() > 0.5 ? "heads" : "tails", at: Date.now() });
+    return;
+  }
+  if (req.method === "GET" && req.url === "/test/html") {
+    res.writeHead(200, { "Content-Type": "text/html" });
+    res.end(`<html><body><h1>Updated at ${new Date().toISOString()}</h1><p>Counter: ${Date.now()}</p></body></html>`);
+    return;
+  }
+
   res.writeHead(404);
   res.end("not found");
   log.debug("http", { route, status: 404, latency_ms: Date.now() - started });
