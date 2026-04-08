@@ -27,7 +27,7 @@ ENV NEXT_PUBLIC_DEFAULT_LOCALE=$NEXT_PUBLIC_DEFAULT_LOCALE
 
 # Node ESM loader that stubs .css imports during route collection.
 # Payload CMS deps import .css files that Node can't handle outside webpack.
-ENV NODE_OPTIONS="--import ./apps/web/css-stub-loader.mjs"
+ENV NODE_OPTIONS="--import /app/apps/web/css-stub-loader.mjs"
 RUN npx turbo run build --filter=web...
 
 # Stage 2: runtime — standalone output only
