@@ -264,9 +264,13 @@ const server = createServer(async (req, res) => {
       if (npxPackage) {
         const binDir = join(svcSourcePath, "node_modules", ".bin");
         if (existsSync(binDir)) {
-          const bins = readdirSync(binDir);
-          if (bins.length > 0) {
-            svc._npxBin = join(binDir, bins[0]);
+          const bins = readdirSync(binDir).filter(b => !["node-which", "which", "semver", "resolve"].includes(b));
+          // Prefer binary matching the package name
+          const pkgShort = npxPackage.split("/").pop().replace(/^@/, "");
+          const match = bins.find(b => b === pkgShort || b.includes(pkgShort)) || bins[0];
+          if (match) {
+            svc._npxBin = join(binDir, match);
+            console.log(`[runner] npx binary resolved: ${match}`);
           }
         }
       }
