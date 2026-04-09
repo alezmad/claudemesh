@@ -4160,11 +4160,24 @@ function main(): void {
         if (users.length === 0) return [];
         const userId = users[0]!.id;
         const userName = users[0]!.name;
-        // Find meshes this user belongs to (via dashboardUserId on existing members)
-        const existingMembers = await db.select({
-          meshId: meshMember.meshId,
-        }).from(meshMember).where(and(eq(meshMember.dashboardUserId, userId), isNull(meshMember.revokedAt)));
-        if (existingMembers.length === 0) return [];
+        // Find meshes this user belongs to:
+        // 1. Via dashboardUserId on existing members
+        // 2. Via userId (auth FK) on existing members
+        const meshIds = new Set<string>();
+        const byDashboard = await db.select({ meshId: meshMember.meshId })
+          .from(meshMember).where(and(eq(meshMember.dashboardUserId, userId), isNull(meshMember.revokedAt)));
+        for (const m of byDashboard) meshIds.add(m.meshId);
+        const byUserId = await db.select({ meshId: meshMember.meshId })
+          .from(meshMember).where(and(eq(meshMember.userId, userId), isNull(meshMember.revokedAt)));
+        for (const m of byUserId) meshIds.add(m.meshId);
+        // Fallback: if user has no members, check all meshes (owner bootstraps)
+        if (meshIds.size === 0) {
+          const allMeshes = await db.select({ id: mesh.id }).from(mesh);
+          for (const m of allMeshes) meshIds.add(m.id);
+          log.info("tg-email-connect: no member found, trying all meshes", { email, userId, meshCount: meshIds.size });
+        }
+        if (meshIds.size === 0) return [];
+        const existingMembers = Array.from(meshIds).map(meshId => ({ meshId }));
 
         // For each mesh, create a new bridge member with a fresh keypair
         const sodium = await import("libsodium-wrappers");
