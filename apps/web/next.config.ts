@@ -92,6 +92,7 @@ const config: NextConfig = {
     "@payloadcms/ui",
     "react-image-crop",
     "sharp",
+    "libsodium-wrappers",
   ],
   turbopack: {
     rules: {
