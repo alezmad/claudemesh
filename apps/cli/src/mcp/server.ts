@@ -1733,16 +1733,25 @@ Your message mode is "${messageMode}".
     }
   });
 
-  // Start broker clients for every joined mesh BEFORE MCP connects.
-  await startClients(config);
-
+  // Start MCP transport IMMEDIATELY so Claude Code discovers tools/prompts/resources
+  // without waiting for WS connections. Tool handlers gracefully return errors when
+  // not connected. WS connects in background; push wiring happens once ready.
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  // Wire WSS pushes → MCP channel notifications. Each inbound push on
-  // any mesh's broker connection becomes a <channel source="claudemesh">
-  // system reminder injected into Claude Code's context.
-  for (const client of allClients()) {
+  // Connect to broker WS in background — don't block MCP startup.
+  startClients(config).then(() => {
+    wirePushHandlers();
+  }).catch(() => {
+    // Connect failed — clients are in reconnecting state, push wiring still needed
+    wirePushHandlers();
+  });
+
+  async function wirePushHandlers() {
+    // Wire WSS pushes → MCP channel notifications. Each inbound push on
+    // any mesh's broker connection becomes a <channel source="claudemesh">
+    // system reminder injected into Claude Code's context.
+    for (const client of allClients()) {
     // Event-driven push: WS onPush fires immediately when a message arrives.
     // Claude Code's setNotificationHandler → enqueue → React useEffect pipeline
     // processes notifications instantly (no polling needed on Claude's side).
@@ -1887,28 +1896,28 @@ Your message mode is "${messageMode}".
         });
       } catch { /* best effort */ }
     });
-  }
+    }
 
-  // Welcome notification: give Claude immediate context on connect.
-  // Triggers Claude to call mesh_info/list_peers without user input.
-  setTimeout(async () => {
-    const client = allClients()[0];
-    if (!client || client.status !== "open") return;
-    try {
-      const peers = await client.listPeers();
-      const peerNames = peers
-        .filter(p => p.displayName !== myName)
-        .map(p => p.displayName)
-        .join(", ") || "none";
-      await server.notification({
-        method: "notifications/claude/channel",
-        params: {
-          content: `[system] Connected as ${myName} to mesh ${client.meshSlug}. ${peers.length} peer(s) online: ${peerNames}. Call mesh_info for full details or set_summary to announce yourself.`,
-          meta: { kind: "welcome", mesh_slug: client.meshSlug },
-        },
-      });
-    } catch { /* best effort */ }
-  }, 3_000); // 3s delay: let WS connect + hello_ack complete first
+    // Welcome notification: give Claude immediate context on connect.
+    // No delay needed — WS is already connected at this point.
+    const welcomeClient = allClients()[0];
+    if (welcomeClient && welcomeClient.status === "open") {
+      try {
+        const peers = await welcomeClient.listPeers();
+        const peerNames = peers
+          .filter(p => p.displayName !== myName)
+          .map(p => p.displayName)
+          .join(", ") || "none";
+        await server.notification({
+          method: "notifications/claude/channel",
+          params: {
+            content: `[system] Connected as ${myName} to mesh ${welcomeClient.meshSlug}. ${peers.length} peer(s) online: ${peerNames}. Call mesh_info for full details or set_summary to announce yourself.`,
+            meta: { kind: "welcome", mesh_slug: welcomeClient.meshSlug },
+          },
+        });
+      } catch { /* best effort */ }
+    }
+  } // end wirePushHandlers
 
   // Event loop keepalive: Node.js stdout to a pipe is buffered. Without
   // periodic event loop activity, stdout.write() from WS callbacks may not
