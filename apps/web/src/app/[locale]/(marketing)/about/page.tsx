@@ -153,7 +153,7 @@ export default function AboutPage() {
             GitHub
           </Link>
           <Link
-            href="https://www.linkedin.com/in/alejandrogutierrezmourente/"
+            href="https://www.linkedin.com/in/alejandro-mourente/"
             className="inline-flex items-center gap-2 rounded-[var(--cm-radius-xs)] border border-[var(--cm-border)] px-4 py-2 text-[13px] font-medium text-[var(--cm-fg)] transition-colors hover:border-[var(--cm-fg)]"
             style={{ fontFamily: "var(--cm-font-sans)" }}
           >

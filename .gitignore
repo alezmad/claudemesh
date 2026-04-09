@@ -45,6 +45,9 @@ yarn-error.log*
 # local env files
 .env*.local
 
+# secrets
+.cli_sync_secret
+
 # vercel
 .vercel
 

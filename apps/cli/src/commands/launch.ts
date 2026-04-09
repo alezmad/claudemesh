@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { loadConfig, getConfigPath } from "../state/config";
 import type { Config, JoinedMesh, GroupEntry } from "../state/config";
+import { startCallbackListener, openBrowser, generatePairingCode } from "../auth";
 import { BrokerClient } from "../ws/client";
 
 // Flags as parsed by citty (index.ts is the source of truth for definitions).
@@ -216,10 +217,85 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
 
   // 2. Load config, pick mesh.
   const config = loadConfig();
+  let justSynced = false;
+
+  if (config.meshes.length === 0 && !args.joinLink) {
+    const useColor = !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
+    const bold = (s: string): string => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
+    const dim = (s: string): string => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
+    const green = (s: string): string => (useColor ? `\x1b[32m${s}\x1b[39m` : s);
+
+    const code = generatePairingCode();
+    const listener = await startCallbackListener();
+    const url = `https://claudemesh.com/cli-auth?port=${listener.port}&code=${code}&action=sync`;
+
+    console.log(`\n  ${bold("Welcome to claudemesh!")} No meshes found.`);
+    console.log(`  Opening browser to sign in...\n`);
+
+    const opened = await openBrowser(url);
+    if (!opened) {
+      console.log(`  Couldn't open browser automatically.`);
+    }
+    console.log(`  ${dim(`Visit: ${url}`)}`);
+    console.log(`  ${dim(`Or join with invite: claudemesh launch --join <url>`)}\n`);
+
+    // Race: localhost callback vs manual paste vs timeout
+    const manualPromise = new Promise<string>((resolve) => {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      rl.question("  Paste sync token (or wait for browser): ", (answer) => {
+        rl.close();
+        if (answer.trim()) resolve(answer.trim());
+      });
+    });
+
+    const timeoutPromise = new Promise<null>((resolve) => {
+      setTimeout(() => resolve(null), 15 * 60_000);
+    });
+
+    const syncToken = await Promise.race([
+      listener.token,
+      manualPromise,
+      timeoutPromise,
+    ]);
+
+    listener.close();
+
+    if (!syncToken) {
+      console.error("\n  Timed out waiting for sign-in.");
+      process.exit(1);
+    }
+
+    // Generate keypair and sync with broker
+    const { generateKeypair } = await import("../crypto/keypair");
+    const keypair = await generateKeypair();
+    const displayNameForSync = args.name ?? `${hostname()}-${process.pid}`;
+
+    const { syncWithBroker } = await import("../auth/sync-with-broker");
+    const result = await syncWithBroker(syncToken, keypair.publicKey, displayNameForSync);
+
+    // Write all meshes to config
+    const { saveConfig } = await import("../state/config");
+    for (const m of result.meshes) {
+      config.meshes.push({
+        meshId: m.mesh_id,
+        memberId: m.member_id,
+        slug: m.slug,
+        name: m.slug,
+        pubkey: keypair.publicKey,
+        secretKey: keypair.secretKey,
+        brokerUrl: m.broker_url,
+        joinedAt: new Date().toISOString(),
+      });
+    }
+    config.accountId = result.account_id;
+    saveConfig(config);
+    justSynced = true;
+
+    console.log(`\n  ${green("✓")} Synced ${result.meshes.length} mesh(es): ${result.meshes.map(m => m.slug).join(", ")}\n`);
+  }
+
   if (config.meshes.length === 0) {
-    console.error(
-      "No meshes joined. Run `claudemesh join <url>` or use --join <url>.",
-    );
+    console.error("No meshes joined. Run `claudemesh join <url>` or use --join <url>.");
     process.exit(1);
   }
 
@@ -248,7 +324,7 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
 
   let messageMode: "push" | "inbox" | "off" = args.messageMode ?? "push";
 
-  if (!args.quiet) {
+  if (!args.quiet && !justSynced) {
     if (role === null) {
       const answer = await askLine("  Role (optional): ");
       if (answer) role = answer;
