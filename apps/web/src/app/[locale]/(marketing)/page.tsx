@@ -8,6 +8,7 @@ import { MeetsYou } from "~/modules/marketing/home/meets-you";
 import { BeyondTerminal } from "~/modules/marketing/home/beyond-terminal";
 import { DemoDashboard } from "~/modules/marketing/home/demo-dashboard";
 import { WhatIsClaudemesh } from "~/modules/marketing/home/what-is-claudemesh";
+import { Timeline } from "~/modules/marketing/home/timeline";
 import { FAQ } from "~/modules/marketing/home/faq";
 import { CallToAction } from "~/modules/marketing/home/cta";
 import { MeshStats } from "~/modules/marketing/home/mesh-stats";
@@ -34,6 +35,7 @@ const HomePage = () => {
       <WhatIsClaudemesh />
       <DemoDashboard />
       <BeyondTerminal />
+      <Timeline />
       <FAQ />
       <CallToAction />
       <MeshStats />
