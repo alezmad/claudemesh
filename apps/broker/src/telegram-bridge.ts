@@ -713,10 +713,7 @@ async function startEmailVerification(
   conversationState.set(chatId, "awaiting_code");
 
   const masked = email.replace(/(.{2})(.*)(@.*)/, "$1***$3");
-  await ctx.reply(
-    `📬 Verification code sent to *${escapeMarkdown(masked)}*\n\nEnter the 6-digit code:`,
-    { parse_mode: "Markdown" },
-  );
+  await ctx.reply(`📬 Verification code sent to ${masked}\n\nEnter the 6-digit code:`);
 }
 
 /** Result from looking up a user's meshes by email */
