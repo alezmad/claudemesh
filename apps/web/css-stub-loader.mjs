@@ -1,9 +1,9 @@
 /**
- * Node.js ESM custom loader — stubs .css imports as empty modules.
+ * Node.js ESM custom loader — stubs static asset imports as empty modules.
  *
  * Next.js 16 does route collection in raw Node ESM (not webpack/turbopack).
- * Payload CMS dependencies import .css files which Node can't handle.
- * This loader intercepts .css resolutions and returns an empty module.
+ * Payload CMS deps import .css, .scss, .svg, and other assets that Node
+ * can't handle. This loader intercepts those and returns empty modules.
  *
  * Usage: NODE_OPTIONS="--import ./apps/web/css-stub-loader.mjs"
  */
@@ -13,7 +13,7 @@ import { register } from "node:module";
 register(
   "data:text/javascript," +
     encodeURIComponent(`
-const STYLE_RE = /\\.(css|scss|sass|less)$/;
+const STYLE_RE = /\\.(css|scss|sass|less|svg|png|jpg|jpeg|gif|webp|ico|woff|woff2|ttf|eot|otf)$/;
 
 export function resolve(specifier, context, nextResolve) {
   if (STYLE_RE.test(specifier)) {
