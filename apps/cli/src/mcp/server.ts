@@ -1899,9 +1899,11 @@ Your message mode is "${messageMode}".
     }
 
     // Welcome notification: give Claude immediate context on connect.
-    // No delay needed — WS is already connected at this point.
-    const welcomeClient = allClients()[0];
-    if (welcomeClient && welcomeClient.status === "open") {
+    // Delay slightly to ensure Claude Code has completed MCP initialization
+    // handshake (notifications/initialized) before we push channel messages.
+    setTimeout(async () => {
+      const welcomeClient = allClients()[0];
+      if (!welcomeClient || welcomeClient.status !== "open") return;
       try {
         const peers = await welcomeClient.listPeers();
         const peerNames = peers
@@ -1916,7 +1918,7 @@ Your message mode is "${messageMode}".
           },
         });
       } catch { /* best effort */ }
-    }
+    }, 2_000);
   } // end wirePushHandlers
 
   // Event loop keepalive: Node.js stdout to a pipe is buffered. Without
