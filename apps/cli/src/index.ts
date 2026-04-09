@@ -31,6 +31,8 @@ import { runRemind } from "./commands/remind";
 import { runCreate } from "./commands/create";
 import { runSync } from "./commands/sync";
 import { runProfile, type ProfileFlags } from "./commands/profile";
+import { connectTelegram } from "./commands/connect-telegram";
+import { disconnectTelegram } from "./commands/disconnect-telegram";
 import { VERSION } from "./version";
 
 const launch = defineCommand({
@@ -311,6 +313,22 @@ const main = defineCommand({
     hook: defineCommand({
       meta: { name: "hook", description: "Internal: handle Claude Code hook events" },
       async run({ rawArgs }) { await runHook(rawArgs); },
+    }),
+    connect: defineCommand({
+      meta: { name: "connect", description: "Connect an integration (e.g. telegram)" },
+      args: { target: { type: "positional", description: "Integration target (telegram)", required: true } },
+      async run({ args }) {
+        if (args.target === "telegram") await connectTelegram(process.argv.slice(process.argv.indexOf("telegram") + 1));
+        else { console.error(`Unknown target: ${args.target}`); process.exit(1); }
+      },
+    }),
+    disconnect: defineCommand({
+      meta: { name: "disconnect", description: "Disconnect an integration (e.g. telegram)" },
+      args: { target: { type: "positional", description: "Integration target (telegram)", required: true } },
+      async run({ args }) {
+        if (args.target === "telegram") await disconnectTelegram();
+        else { console.error(`Unknown target: ${args.target}`); process.exit(1); }
+      },
     }),
   },
   run() {
