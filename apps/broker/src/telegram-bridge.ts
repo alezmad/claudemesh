@@ -1404,13 +1404,15 @@ export async function bootTelegramBridge(
     pushHandler,
   );
 
-  // Start Grammy long-polling
+  // Start Grammy long-polling (fire-and-forget, must not crash broker)
   console.log("[tg-bridge] starting bot...");
   bot.start({
     onStart: () =>
       console.log(
         `[tg-bridge] bot running — ${meshConnections.size} mesh(es), ${chatMeshes.size} chat(s)`,
       ),
+  }).catch((err: unknown) => {
+    console.error("[tg-bridge] bot.start() error:", err instanceof Error ? err.message : String(err));
   });
 }
 

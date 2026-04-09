@@ -37,7 +37,7 @@ COPY --from=deps --chown=bun:bun /deploy /app
 
 EXPOSE 7900
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
   CMD bun -e "fetch('http://localhost:7900/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
 
 # Non-root user (oven/bun image ships with 'bun' uid 1000)
