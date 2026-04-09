@@ -29,6 +29,8 @@ import { runRemember, runRecall } from "./commands/memory";
 import { runInfo } from "./commands/info";
 import { runRemind } from "./commands/remind";
 import { runCreate } from "./commands/create";
+import { runSync } from "./commands/sync";
+import { runProfile, type ProfileFlags } from "./commands/profile";
 import { VERSION } from "./version";
 
 const launch = defineCommand({
@@ -269,6 +271,26 @@ const main = defineCommand({
         const positionals = rawArgs.filter((a) => !a.startsWith("-"));
         await runRemind(args, positionals);
       },
+    }),
+    sync: defineCommand({
+      meta: { name: "sync", description: "Sync meshes from your dashboard account" },
+      args: {
+        force: { type: "boolean", description: "Re-link account even if already linked", default: false },
+      },
+      async run({ args }) { await runSync(args); },
+    }),
+    profile: defineCommand({
+      meta: { name: "profile", description: "View or edit your member profile" },
+      args: {
+        mesh: { type: "string", description: "Mesh slug (auto-selected if only one joined)" },
+        "role-tag": { type: "string", description: "Set role tag (e.g. 'backend-dev', 'lead')" },
+        groups: { type: "string", description: "Set groups as 'group:role,...' (e.g. 'eng:lead,review')" },
+        "message-mode": { type: "string", description: "'push' | 'inbox' | 'off'" },
+        name: { type: "string", description: "Set display name" },
+        member: { type: "string", description: "Edit another member (admin only)" },
+        json: { type: "boolean", description: "Output as JSON", default: false },
+      },
+      async run({ args }) { await runProfile(args as ProfileFlags); },
     }),
     status: defineCommand({
       meta: { name: "status", description: "Check broker connectivity for each joined mesh" },

@@ -1,5 +1,6 @@
 import { relations } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -909,3 +910,51 @@ export const selectMeshVaultEntrySchema = createSelectSchema(meshVaultEntry);
 export const insertMeshVaultEntrySchema = createInsertSchema(meshVaultEntry);
 export type SelectMeshVaultEntry = typeof meshVaultEntry.$inferSelect;
 export type InsertMeshVaultEntry = typeof meshVaultEntry.$inferInsert;
+
+/**
+ * Telegram bridge connections. Each row represents a Telegram chat linked
+ * to a mesh via a bot-managed keypair. The bot authenticates to the broker
+ * as a virtual peer using the ed25519 keypair stored here, relaying
+ * messages bidirectionally between Telegram and the mesh.
+ */
+export const telegramBridge = meshSchema.table(
+  "telegram_bridge",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    /** Telegram chat ID (can be negative for groups). */
+    chatId: bigint({ mode: "bigint" }).notNull(),
+    chatType: text().default("private"),
+    chatTitle: text(),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    memberId: text().references(() => meshMember.id),
+    /** ed25519 public key (hex) — the virtual peer identity on the mesh. */
+    pubkey: text().notNull(),
+    /** ed25519 secret key (hex) — encrypted at rest. */
+    secretKey: text().notNull(),
+    displayName: text().default("telegram"),
+    active: boolean().default(true),
+    createdAt: timestamp().defaultNow().notNull(),
+    disconnectedAt: timestamp(),
+  },
+  (table) => [
+    uniqueIndex("telegram_bridge_chat_mesh_idx").on(table.chatId, table.meshId),
+  ],
+);
+
+export const telegramBridgeRelations = relations(telegramBridge, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [telegramBridge.meshId],
+    references: [mesh.id],
+  }),
+  member: one(meshMember, {
+    fields: [telegramBridge.memberId],
+    references: [meshMember.id],
+  }),
+}));
+
+export const selectTelegramBridgeSchema = createSelectSchema(telegramBridge);
+export const insertTelegramBridgeSchema = createInsertSchema(telegramBridge);
+export type SelectTelegramBridge = typeof telegramBridge.$inferSelect;
+export type InsertTelegramBridge = typeof telegramBridge.$inferInsert;

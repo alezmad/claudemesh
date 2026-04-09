@@ -44,9 +44,22 @@ interface JoinedMesh {
 }
 
 function loadMeshConfig(): JoinedMesh[] {
+  // Support env-based config for Docker/VPS deployment
+  if (process.env.MESH_ID && process.env.MESH_MEMBER_ID && process.env.MESH_PUBKEY && process.env.MESH_SECRET_KEY) {
+    return [{
+      meshId: process.env.MESH_ID,
+      memberId: process.env.MESH_MEMBER_ID,
+      slug: process.env.MESH_SLUG ?? "mesh",
+      name: process.env.MESH_NAME ?? "mesh",
+      pubkey: process.env.MESH_PUBKEY,
+      secretKey: process.env.MESH_SECRET_KEY,
+      brokerUrl: process.env.MESH_BROKER_URL ?? "wss://ic.claudemesh.com/ws",
+    }];
+  }
+  // Fall back to config file
   const path = join(CONFIG_DIR, "config.json");
   if (!existsSync(path)) {
-    console.error(`No config at ${path} — run 'claudemesh join' first`);
+    console.error(`No config at ${path} — set MESH_ID/MESH_MEMBER_ID/MESH_PUBKEY/MESH_SECRET_KEY env vars or run 'claudemesh join' first`);
     process.exit(1);
   }
   const config = JSON.parse(readFileSync(path, "utf-8"));

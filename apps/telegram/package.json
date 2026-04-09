@@ -2,7 +2,6 @@
   "name": "@claudemesh/telegram",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
     "start": "bun src/index.ts",
     "dev": "bun --hot src/index.ts"
@@ -10,7 +9,9 @@
   "dependencies": {
     "grammy": "^1.35.0",
     "ws": "^8.18.0",
-    "libsodium-wrappers": "^0.7.15"
+    "libsodium": "^0.7.15",
+    "libsodium-wrappers": "^0.7.15",
+    "tsx": "^4.19.0"
   },
   "devDependencies": {
     "@types/ws": "^8.5.13",
