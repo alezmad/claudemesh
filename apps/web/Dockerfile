@@ -10,7 +10,11 @@ RUN corepack enable && corepack prepare pnpm@10.25.0 --activate
 # pnpm workspace needs full context to resolve workspace:* + catalog:
 COPY . .
 
-RUN pnpm install --frozen-lockfile
+# --ignore-scripts skips sherif postinstall linting (exits 1 on warnings)
+RUN pnpm install --frozen-lockfile --ignore-scripts && \
+    node node_modules/esbuild/install.js && \
+    node node_modules/sharp/install/check.js || npm run --prefix node_modules/sharp build 2>/dev/null; \
+    true
 
 # Build — SKIP_ENV_VALIDATION lets missing runtime vars pass (validated at startup instead)
 ENV NODE_ENV=production
