@@ -31,6 +31,7 @@ const envSchema = z.object({
   RUNNER_URL: z.string().default("http://runner:7901"),
   CLAUDEMESH_SERVICES_DIR: z.string().default("/var/claudemesh/services"),
   BROKER_ENCRYPTION_KEY: z.string().default(""),  // 64 hex chars (32 bytes). Auto-generated if empty.
+  CLI_SYNC_SECRET: z.string().default(""),  // HS256 shared secret for dashboard→broker sync JWTs. Required for /cli-sync.
   MAX_SERVICES_PER_MESH: z.coerce.number().int().positive().default(20),
   MAX_SERVICE_ZIP_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
   NODE_ENV: z

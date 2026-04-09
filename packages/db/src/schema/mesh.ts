@@ -1,6 +1,7 @@
 import { relations } from "drizzle-orm";
 import {
   boolean,
+  index,
   integer,
   jsonb,
   pgSchema,
@@ -108,6 +109,16 @@ export const mesh = meshSchema.table("mesh", {
    * with recipient's ed25519 pubkey).
    */
   rootKey: text(),
+  /**
+   * Per-mesh policy controlling which profile fields members can edit
+   * about themselves. Admins can always edit anyone's profile regardless.
+   */
+  selfEditable: jsonb().$type<{
+    displayName: boolean;
+    roleTag: boolean;
+    groups: boolean;
+    messageMode: boolean;
+  }>().default({ displayName: true, roleTag: true, groups: true, messageMode: true }),
   createdAt: timestamp().defaultNow().notNull(),
   archivedAt: timestamp(),
 });
@@ -135,10 +146,20 @@ export const meshMember = meshSchema.table("member", {
   peerPubkey: text().notNull(),
   displayName: text().notNull(),
   role: meshRoleEnum().notNull().default("member"),
+  /** Free-text role label visible to peers (not to be confused with `role` which is the permission enum). */
+  roleTag: text(),
+  /** Persistent group memberships set via dashboard or CLI profile command. */
+  defaultGroups: jsonb().$type<Array<{ name: string; role?: string }>>().default([]),
+  /** Delivery preference: push (real-time), inbox (held), off (manual poll). */
+  messageMode: text().default("push"),
+  /** Links this mesh member to a dashboard OAuth user (Payload CMS user.id). */
+  dashboardUserId: text(),
   joinedAt: timestamp().defaultNow().notNull(),
   lastSeenAt: timestamp(),
   revokedAt: timestamp(),
-});
+}, (table) => [
+  index("member_dashboard_user_idx").on(table.dashboardUserId),
+]);
 
 /**
  * Invite tokens used to join a mesh via shareable URL.
@@ -157,6 +178,13 @@ export const invite = meshSchema.table("invite", {
   maxUses: integer().notNull().default(1),
   usedCount: integer().notNull().default(0),
   role: meshRoleEnum().notNull().default("member"),
+  /** Pre-configured profile values applied to new members on join. */
+  preset: jsonb().$type<{
+    displayName?: string;
+    roleTag?: string;
+    groups?: Array<{ name: string; role?: string }>;
+    messageMode?: string;
+  }>().default({}),
   expiresAt: timestamp().notNull(),
   createdBy: text()
     .references(() => user.id, { onDelete: "cascade", onUpdate: "cascade" })
