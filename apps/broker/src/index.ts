@@ -4130,6 +4130,9 @@ function main(): void {
           displayName: row.displayName,
           chatType: row.chatType,
           chatTitle: row.chatTitle ?? null,
+        }).onConflictDoUpdate({
+          target: [telegramBridge.chatId, telegramBridge.meshId],
+          set: { active: true, disconnectedAt: null, pubkey: row.pubkey, secretKey: row.secretKey, displayName: row.displayName },
         });
       },
       async (chatId, meshId) => {
