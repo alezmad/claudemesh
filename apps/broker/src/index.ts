@@ -650,7 +650,7 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
             { meshId: tgMeshId, meshSlug, memberId: tgMemberId, pubkey: tgPubkey, secretKey: tgSecretKey, createdBy: tgMemberId },
             encKey,
           );
-          const botUsername = process.env.TELEGRAM_BOT_USERNAME ?? "claudemesh_bot";
+          const botUsername = process.env.TELEGRAM_BOT_USERNAME ?? "claudemeshbot";
           const deepLink = generateDeepLink(token, botUsername);
           writeJson(res, 200, { token, deepLink });
           log.info("tg/token", { route: "POST /tg/token", mesh_id: tgMeshId, latency_ms: Date.now() - started });
