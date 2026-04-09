@@ -12,6 +12,7 @@
 import { Bot, InputFile } from "grammy";
 import WebSocket from "ws";
 import sodium from "libsodium-wrappers";
+import { validateTelegramConnectToken } from "./telegram-token";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -314,12 +315,20 @@ class MeshConnection {
         this.connected = false;
         this.ws = null;
         if (this.reconnectTimer) return;
+        const MAX_RECONNECT_ATTEMPTS = 20;
+        if (this.reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+          console.error(
+            `[tg-bridge] mesh ${this.creds.meshId.slice(0, 8)} giving up after ${MAX_RECONNECT_ATTEMPTS} attempts`,
+          );
+          meshConnections.delete(this.creds.meshId);
+          return;
+        }
         const delays = [1000, 2000, 4000, 8000, 16000, 30000];
         const delay =
           delays[Math.min(this.reconnectAttempt, delays.length - 1)]!;
         this.reconnectAttempt++;
         console.log(
-          `[tg-bridge] mesh ${this.creds.meshId.slice(0, 8)} reconnecting in ${delay}ms (attempt ${this.reconnectAttempt})`,
+          `[tg-bridge] mesh ${this.creds.meshId.slice(0, 8)} reconnecting in ${delay}ms (attempt ${this.reconnectAttempt}/${MAX_RECONNECT_ATTEMPTS})`,
         );
         this.reconnectTimer = setTimeout(() => {
           this.reconnectTimer = null;
@@ -672,31 +681,20 @@ function setupBotCommands(
       return;
     }
 
-    // Decode JWT token (3-part base64url)
-    let payload: any;
-    try {
-      const parts = token.split(".");
-      if (parts.length !== 3) throw new Error("not a JWT");
-      payload = JSON.parse(
-        Buffer.from(parts[1]!, "base64url").toString("utf-8"),
-      );
-    } catch {
-      await ctx.reply("❌ Invalid or expired token. Request a new link.");
+    // Validate JWT signature, expiry, and claims
+    const encKey = process.env.BROKER_ENCRYPTION_KEY;
+    if (!encKey) {
+      await ctx.reply("❌ Broker not configured for token validation.");
       return;
     }
 
-    // Validate required fields
+    const payload = validateTelegramConnectToken(token, encKey);
+    if (!payload) {
+      await ctx.reply("❌ Invalid, expired, or tampered token. Request a new link.");
+      return;
+    }
+
     const { meshId, memberId, pubkey, secretKey, meshSlug } = payload;
-    if (!meshId || !memberId || !pubkey || !secretKey) {
-      await ctx.reply("❌ Malformed token — missing credentials.");
-      return;
-    }
-
-    // Check expiry
-    if (payload.expiresAt && Date.now() > payload.expiresAt) {
-      await ctx.reply("❌ Token expired. Request a new connect link.");
-      return;
-    }
 
     const chatId = ctx.chat.id;
     const chatType = ctx.chat.type;
@@ -1393,6 +1391,20 @@ export async function bootTelegramBridge(
       linkChatMesh(row.chatId, meshId);
     }
   }
+
+  // Grammy global error handler — prevents unhandled rejections from crashing broker
+  bot.catch((err) => {
+    console.error("[tg-bridge] Grammy error:", err.message ?? err);
+  });
+
+  // Expire stale pendingDMs entries every 5 minutes (prevent memory leak)
+  setInterval(() => {
+    // pendingDMs has no timestamp, so we just cap size — clear all if > 1000
+    if (pendingDMs.size > 1000) {
+      console.warn(`[tg-bridge] clearing ${pendingDMs.size} stale pendingDMs`);
+      pendingDMs.clear();
+    }
+  }, 5 * 60_000).unref();
 
   // Wire up bot commands
   setupBotCommands(

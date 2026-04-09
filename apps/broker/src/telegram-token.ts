@@ -94,7 +94,12 @@ export function validateTelegramConnectToken(
     // Verify signature
     const signingInput = `${headerB64}.${payloadB64}`;
     const expectedSignature = sign(signingInput, secret);
-    if (signatureB64 !== expectedSignature) return null;
+    // Constant-time comparison to prevent timing attacks
+    const a = Buffer.from(signatureB64);
+    const b = Buffer.from(expectedSignature);
+    if (a.length !== b.length) return null;
+    const { timingSafeEqual } = require("node:crypto");
+    if (!timingSafeEqual(a, b)) return null;
 
     // Verify header algorithm
     const header = JSON.parse(base64urlDecode(headerB64));

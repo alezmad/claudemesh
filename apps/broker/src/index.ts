@@ -142,6 +142,10 @@ interface PeerConn {
 const connections = new Map<string, PeerConn>();
 const connectionsPerMesh = new Map<string, number>();
 
+// Rate limiter for /tg/token endpoint (IP → count, cleared hourly)
+const tgTokenRateLimit = new Map<string, number>();
+setInterval(() => tgTokenRateLimit.clear(), 60 * 60_000).unref();
+
 // --- URL Watch engine ---
 interface WatchEntry {
   id: string;
@@ -630,8 +634,16 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  // Telegram connect token
+  // Telegram connect token (rate-limited: 10 requests/hour per IP)
   if (req.method === "POST" && req.url === "/tg/token") {
+    const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
+    const tgRateBucket = `tg-token:${clientIp}`;
+    const tgRateCount = (tgTokenRateLimit.get(tgRateBucket) ?? 0) + 1;
+    tgTokenRateLimit.set(tgRateBucket, tgRateCount);
+    if (tgRateCount > 10) {
+      writeJson(res, 429, { error: "Rate limit exceeded. Max 10 tokens per hour." });
+      return;
+    }
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
