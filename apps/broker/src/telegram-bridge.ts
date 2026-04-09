@@ -516,6 +516,12 @@ const pendingDMs = new Map<
   { message: string; matches: PeerInfo[]; meshId: string }
 >();
 
+// Pending file upload picker state: chatId → { fileId, fileName, meshId, caption }
+const pendingFiles = new Map<
+  number,
+  { fileId: string; fileName: string; meshId: string; caption: string }
+>();
+
 /** Invite URL regex: https://claudemesh.com/join/<token> */
 const INVITE_URL_RE =
   /https?:\/\/(?:www\.)?claudemesh\.com\/join\/([A-Za-z0-9_\-\.]+)/;
@@ -1049,11 +1055,69 @@ function setupBotCommands(
     );
   });
 
-  // --- Callback query handler (peer picker inline keyboard) ---
+  // --- Callback query handler (DM picker + file picker) ---
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
     const chatId = ctx.chat?.id;
-    if (!chatId || !data.startsWith("dm:")) {
+    if (!chatId) { await ctx.answerCallbackQuery(); return; }
+
+    // --- File recipient picker ---
+    if (data.startsWith("file:")) {
+      const pending = pendingFiles.get(chatId);
+      if (!pending) {
+        await ctx.answerCallbackQuery({ text: "Session expired. Send the file again." });
+        return;
+      }
+
+      const conn = meshConnections.get(pending.meshId);
+      if (!conn?.isConnected()) {
+        pendingFiles.delete(chatId);
+        await ctx.answerCallbackQuery({ text: "Not connected." });
+        return;
+      }
+
+      const target = data.slice(5); // after "file:"
+      const emoji = pending.fileName.endsWith(".jpg") ? "📷" : "📎";
+      const captionSuffix = pending.caption ? ` — "${pending.caption}"` : "";
+      const fileMsg = `[via Telegram] ${emoji} ${pending.fileName}${captionSuffix} (file: ${pending.fileId})`;
+
+      if (target === "none") {
+        // Keep in mesh only — no message sent
+        pendingFiles.delete(chatId);
+        await ctx.answerCallbackQuery({ text: "Kept private" });
+        await ctx.editMessageText(`🔒 File stored in mesh. ID: \`${pending.fileId}\``, { parse_mode: "Markdown" });
+        return;
+      }
+
+      if (target === "*") {
+        // Broadcast to everyone
+        await conn.sendMessage("*", fileMsg, "next");
+        pendingFiles.delete(chatId);
+        await ctx.answerCallbackQuery({ text: "Sent to everyone" });
+        await ctx.editMessageText(`📢 ${emoji} Shared with everyone: \`${pending.fileName}\``, { parse_mode: "Markdown" });
+        return;
+      }
+
+      // Send to specific peer (target is pubkey prefix)
+      const peers = await conn.listPeers();
+      const peer = peers.find(p => p.pubkey.startsWith(target));
+      if (!peer) {
+        await ctx.answerCallbackQuery({ text: "Peer not found" });
+        return;
+      }
+
+      await conn.sendMessage(peer.pubkey, fileMsg, "now");
+      pendingFiles.delete(chatId);
+      await ctx.answerCallbackQuery({ text: `Sent to ${peer.displayName}` });
+      await ctx.editMessageText(
+        `${emoji} Sent to ${peer.avatar ?? "🤖"} *${escapeMarkdown(peer.displayName)}*: \`${escapeMarkdown(pending.fileName)}\``,
+        { parse_mode: "Markdown" },
+      );
+      return;
+    }
+
+    // --- DM peer picker ---
+    if (!data.startsWith("dm:")) {
       await ctx.answerCallbackQuery();
       return;
     }
@@ -1111,100 +1175,90 @@ function setupBotCommands(
     );
   });
 
-  // --- Photo upload → mesh file sharing ---
-  bot.on("message:photo", async (ctx) => {
+  // --- Photo/Document upload → upload to mesh, then show recipient picker ---
+
+  async function handleFileUpload(
+    ctx: any,
+    tgFileId: string,
+    fileName: string,
+    isPhoto: boolean,
+  ): Promise<void> {
     const chatId = ctx.chat.id;
     const meshIds = chatMeshes.get(chatId);
     if (!meshIds || meshIds.length === 0) return;
 
+    const caption = ctx.message?.caption ?? "";
+    const emoji = isPhoto ? "📷" : "📎";
+
+    try {
+      const file = await ctx.api.getFile(tgFileId);
+      const url = `https://api.telegram.org/file/bot${botToken}/${file.file_path}`;
+      const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+      const buf = Buffer.from(await resp.arrayBuffer());
+
+      // Upload to first connected mesh
+      const meshId = meshIds[0]!;
+      const conn = meshConnections.get(meshId);
+      if (!conn?.isConnected()) {
+        await ctx.reply("❌ Not connected to mesh.");
+        return;
+      }
+
+      const meshFileId = await conn.uploadFile(buf, fileName, [
+        "telegram",
+        isPhoto ? "photo" : "document",
+      ]);
+      if (!meshFileId) {
+        await ctx.reply("❌ Upload failed.");
+        return;
+      }
+
+      // Store pending file and show recipient picker
+      pendingFiles.set(chatId, { fileId: meshFileId, fileName, meshId, caption });
+
+      const peers = await conn.listPeers();
+      // Filter out the bridge itself
+      const targets = peers.filter(p => !p.displayName.startsWith("tg:"));
+
+      if (targets.length === 0) {
+        // No peers online — broadcast anyway
+        await conn.sendMessage("*", `[via Telegram] ${emoji} ${fileName}${caption ? ` — "${caption}"` : ""} (file: ${meshFileId})`, "next");
+        pendingFiles.delete(chatId);
+        await ctx.reply(`${emoji} Uploaded and broadcast (no peers online).`);
+        return;
+      }
+
+      // Build inline keyboard: top peers + Everyone + Keep private
+      const buttons: { text: string; callback_data: string }[][] = [];
+      const shown = targets.slice(0, 6); // Cap at 6 to avoid huge keyboard
+      for (const p of shown) {
+        buttons.push([{
+          text: `${p.avatar ?? "🤖"} ${p.displayName}`,
+          callback_data: `file:${p.pubkey.slice(0, 16)}`,
+        }]);
+      }
+      buttons.push([{ text: "📢 Everyone", callback_data: "file:*" }]);
+      buttons.push([{ text: "🔒 Keep in mesh only", callback_data: "file:none" }]);
+
+      await ctx.reply(`${emoji} *Uploaded:* \`${escapeMarkdown(fileName)}\`\nSend to:`, {
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: buttons },
+      });
+    } catch (e) {
+      await ctx.reply(`❌ ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  bot.on("message:photo", async (ctx) => {
     const photo = ctx.message.photo.at(-1);
     if (!photo) return;
-
-    try {
-      const file = await ctx.api.getFile(photo.file_id);
-      const url = `https://api.telegram.org/file/bot${botToken}/${file.file_path}`;
-      const resp = await fetch(url);
-      const buf = Buffer.from(await resp.arrayBuffer());
-      const name = `telegram-photo-${Date.now()}.jpg`;
-      const caption = ctx.message.caption
-        ? ` — "${ctx.message.caption}"`
-        : "";
-
-      let shared = 0;
-      for (const meshId of meshIds) {
-        const conn = meshConnections.get(meshId);
-        if (!conn?.isConnected()) continue;
-        const fileId = await conn.uploadFile(buf, name, [
-          "telegram",
-          "photo",
-        ]);
-        if (fileId) {
-          await conn.sendMessage(
-            "*",
-            `[via Telegram] 📷 Photo shared${caption} (file: ${fileId})`,
-            "next",
-          );
-          shared++;
-        }
-      }
-      await ctx.reply(
-        shared > 0
-          ? `✅ Photo shared to ${shared} mesh${shared > 1 ? "es" : ""}`
-          : "❌ Upload failed",
-      );
-    } catch (e) {
-      await ctx.reply(
-        `❌ ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    await handleFileUpload(ctx, photo.file_id, `telegram-photo-${Date.now()}.jpg`, true);
   });
 
-  // --- Document upload → mesh file sharing ---
   bot.on("message:document", async (ctx) => {
-    const chatId = ctx.chat.id;
-    const meshIds = chatMeshes.get(chatId);
-    if (!meshIds || meshIds.length === 0) return;
-
     const doc = ctx.message.document;
     if (!doc) return;
-
-    try {
-      const file = await ctx.api.getFile(doc.file_id);
-      const url = `https://api.telegram.org/file/bot${botToken}/${file.file_path}`;
-      const resp = await fetch(url);
-      const buf = Buffer.from(await resp.arrayBuffer());
-      const name = doc.file_name ?? `telegram-file-${Date.now()}`;
-      const caption = ctx.message.caption
-        ? ` — "${ctx.message.caption}"`
-        : "";
-
-      let shared = 0;
-      for (const meshId of meshIds) {
-        const conn = meshConnections.get(meshId);
-        if (!conn?.isConnected()) continue;
-        const fileId = await conn.uploadFile(buf, name, [
-          "telegram",
-          "document",
-        ]);
-        if (fileId) {
-          await conn.sendMessage(
-            "*",
-            `[via Telegram] 📎 File shared: ${name}${caption} (file: ${fileId})`,
-            "next",
-          );
-          shared++;
-        }
-      }
-      await ctx.reply(
-        shared > 0
-          ? `✅ File shared to ${shared} mesh${shared > 1 ? "es" : ""}: ${name}`
-          : "❌ Upload failed",
-      );
-    } catch (e) {
-      await ctx.reply(
-        `❌ ${e instanceof Error ? e.message : String(e)}`,
-      );
-    }
+    await handleFileUpload(ctx, doc.file_id, doc.file_name ?? `telegram-file-${Date.now()}`, false);
   });
 
   // --- Default text handler: invite URL detection, @mentions, broadcast ---
@@ -1399,10 +1453,14 @@ export async function bootTelegramBridge(
 
   // Expire stale pendingDMs entries every 5 minutes (prevent memory leak)
   setInterval(() => {
-    // pendingDMs has no timestamp, so we just cap size — clear all if > 1000
+    // pendingDMs/pendingFiles have no timestamp, so we cap size — clear all if > 1000
     if (pendingDMs.size > 1000) {
       console.warn(`[tg-bridge] clearing ${pendingDMs.size} stale pendingDMs`);
       pendingDMs.clear();
+    }
+    if (pendingFiles.size > 1000) {
+      console.warn(`[tg-bridge] clearing ${pendingFiles.size} stale pendingFiles`);
+      pendingFiles.clear();
     }
   }, 5 * 60_000).unref();
 
