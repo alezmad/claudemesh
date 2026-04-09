@@ -1741,10 +1741,10 @@ Your message mode is "${messageMode}".
 
   // Connect to broker WS in background — don't block MCP startup.
   startClients(config).then(() => {
-    wirePushHandlers();
+    wirePushHandlers().catch(() => {});
   }).catch(() => {
     // Connect failed — clients are in reconnecting state, push wiring still needed
-    wirePushHandlers();
+    wirePushHandlers().catch(() => {});
   });
 
   async function wirePushHandlers() {
