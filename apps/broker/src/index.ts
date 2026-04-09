@@ -18,7 +18,8 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { env } from "./env";
 import { db } from "./db";
-import { mesh, messageQueue, scheduledMessage as scheduledMessageTable, meshWebhook, peerState } from "@turbostarter/db/schema/mesh";
+import { mesh, meshMember, messageQueue, scheduledMessage as scheduledMessageTable, meshWebhook, peerState } from "@turbostarter/db/schema/mesh";
+import { user } from "@turbostarter/db/schema/auth";
 import { handleCliSync, type CliSyncRequest } from "./cli-sync";
 import { updateMemberProfile, listMeshMembers, updateMeshSettings } from "./member-api";
 import {
@@ -4153,6 +4154,73 @@ function main(): void {
       },
       tgBotToken,
       "wss://ic.claudemesh.com/ws",
+      // lookupMeshesByEmail: find all meshes a user belongs to by their email
+      async (email) => {
+        const users = await db.select({ id: user.id }).from(user).where(eq(user.email, email)).limit(1);
+        if (users.length === 0) return [];
+        const userId = users[0]!.id;
+        const members = await db.select({
+          memberId: meshMember.id,
+          meshId: meshMember.meshId,
+          pubkey: meshMember.pubkey,
+          secretKey: meshMember.secretKey,
+        }).from(meshMember).where(and(eq(meshMember.dashboardUserId, userId), isNull(meshMember.revokedAt)));
+        const results = [];
+        for (const m of members) {
+          if (!m.pubkey || !m.secretKey) continue;
+          const meshRows = await db.select({ slug: mesh.slug }).from(mesh).where(eq(mesh.id, m.meshId)).limit(1);
+          results.push({
+            userId,
+            meshId: m.meshId,
+            meshSlug: meshRows[0]?.slug ?? m.meshId.slice(0, 8),
+            memberId: m.memberId,
+            pubkey: m.pubkey,
+            secretKey: m.secretKey,
+          });
+        }
+        return results;
+      },
+      // sendVerificationEmail: send 6-digit code via Resend/Postmark
+      async (email, code) => {
+        const apiKey = process.env.RESEND_API_KEY ?? process.env.POSTMARK_API_KEY;
+        const fromAddr = process.env.EMAIL_FROM ?? "noreply@claudemesh.com";
+        if (!apiKey) {
+          log.warn("no email API key configured (RESEND_API_KEY or POSTMARK_API_KEY)");
+          return false;
+        }
+        try {
+          if (process.env.RESEND_API_KEY) {
+            const res = await fetch("https://api.resend.com/emails", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+              body: JSON.stringify({
+                from: fromAddr,
+                to: email,
+                subject: `${code} — Claudemesh Telegram verification`,
+                text: `Your verification code is: ${code}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, ignore this email.`,
+              }),
+              signal: AbortSignal.timeout(10_000),
+            });
+            return res.ok;
+          } else {
+            const res = await fetch("https://api.postmarkapp.com/email", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Postmark-Server-Token": apiKey },
+              body: JSON.stringify({
+                From: fromAddr,
+                To: email,
+                Subject: `${code} — Claudemesh Telegram verification`,
+                TextBody: `Your verification code is: ${code}\n\nThis code expires in 10 minutes.\n\nIf you didn't request this, ignore this email.`,
+              }),
+              signal: AbortSignal.timeout(10_000),
+            });
+            return res.ok;
+          }
+        } catch (e) {
+          log.error("email send failed", { error: e instanceof Error ? e.message : String(e) });
+          return false;
+        }
+      },
     ).then(() => log.info("telegram bridge started"))
      .catch(e => log.error("telegram bridge failed", { error: e instanceof Error ? e.message : String(e) }));
   }
