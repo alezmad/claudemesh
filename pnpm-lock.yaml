@@ -223,9 +223,15 @@ importers:
       grammy:
         specifier: ^1.35.0
         version: 1.42.0(encoding@0.1.13)
+      libsodium:
+        specifier: ^0.7.15
+        version: 0.7.16
       libsodium-wrappers:
         specifier: ^0.7.15
         version: 0.7.15
+      tsx:
+        specifier: ^4.19.0
+        version: 4.21.0
       ws:
         specifier: ^8.18.0
         version: 8.20.0
