@@ -336,6 +336,17 @@ Your message mode is "${messageMode}".
       if (manifest.argument_hint) fm.push(`argument-hint: "${manifest.argument_hint}"`);
       fm.push("---\n");
       if (fm.length > 3) content = fm.join("\n") + content;
+
+      // Enforce context:fork via Agent tool instruction — Claude Code's MCP prompts
+      // path doesn't support the context field natively, so we instruct the model.
+      if (manifest.context === "fork") {
+        const agentType = manifest.agent || "general-purpose";
+        const modelHint = manifest.model ? `, model: "${manifest.model}"` : "";
+        const toolsHint = manifest.allowed_tools?.length
+          ? `\nOnly use these tools: ${manifest.allowed_tools.join(", ")}.`
+          : "";
+        content = `IMPORTANT: Execute this skill in an isolated sub-agent. Use the Agent tool with subagent_type="${agentType}"${modelHint}. Pass the full instructions below as the agent prompt.${toolsHint}\n\n` + content;
+      }
     }
 
     return {
