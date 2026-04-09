@@ -587,6 +587,40 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // File download proxy: streams from MinIO so clients don't need internal URLs.
+  // GET /download/{fileId}?mesh={meshId}
+  if (req.method === "GET" && req.url?.startsWith("/download/")) {
+    const parts = req.url.split("?");
+    const fileId = parts[0]!.replace("/download/", "");
+    const params = new URLSearchParams(parts[1] ?? "");
+    const meshId = params.get("mesh");
+    if (!fileId || !meshId) {
+      writeJson(res, 400, { error: "fileId and ?mesh= required" });
+      log.info("download", { route: "GET /download", status: 400, latency_ms: Date.now() - started });
+      return;
+    }
+    getFile(meshId, fileId).then(async (file) => {
+      if (!file) {
+        writeJson(res, 404, { error: "file not found" });
+        log.info("download", { route: "GET /download", status: 404, file_id: fileId, latency_ms: Date.now() - started });
+        return;
+      }
+      const bucket = meshBucketName(meshId);
+      const stream = await minioClient.getObject(bucket, file.minioKey);
+      res.writeHead(200, {
+        "Content-Type": file.mimeType ?? "application/octet-stream",
+        "Content-Disposition": `attachment; filename="${file.name}"`,
+        "Cache-Control": "private, max-age=60",
+      });
+      stream.pipe(res);
+      log.info("download", { route: "GET /download", file_id: fileId, name: file.name, latency_ms: Date.now() - started });
+    }).catch((e) => {
+      writeJson(res, 500, { error: "download failed" });
+      log.error("download error", { file_id: fileId, error: e instanceof Error ? e.message : String(e) });
+    });
+    return;
+  }
+
   // CLI sync: browser OAuth → broker creates members
   if (req.method === "POST" && req.url === "/cli-sync") {
     handleCliSyncPost(req, res, started);

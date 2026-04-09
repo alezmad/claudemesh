@@ -848,8 +848,13 @@ Your message mode is "${messageMode}".
           return text(`Downloaded and decrypted: ${result.name} → ${save_to}`);
         }
 
-        // Unencrypted — existing download logic
-        const res = await fetch(result.url, { signal: AbortSignal.timeout(30_000) });
+        // Unencrypted — try presigned URL first, fall back to broker download proxy
+        let res = await fetch(result.url, { signal: AbortSignal.timeout(10_000) }).catch(() => null);
+        if (!res || !res.ok) {
+          // Presigned URL failed (internal MinIO hostname) — use broker proxy
+          const brokerHttp = client.mesh.brokerUrl.replace("wss://", "https://").replace("ws://", "http://").replace("/ws", "");
+          res = await fetch(`${brokerHttp}/download/${id}?mesh=${client.meshId}`, { signal: AbortSignal.timeout(30_000) });
+        }
         if (!res.ok) return text(`get_file: download failed (${res.status})`, true);
         const { writeFileSync, mkdirSync } = await import("node:fs");
         const { dirname } = await import("node:path");
