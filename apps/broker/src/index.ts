@@ -4180,8 +4180,9 @@ function main(): void {
         const existingMembers = Array.from(meshIds).map(meshId => ({ meshId }));
 
         // For each mesh, create a new bridge member with a fresh keypair
-        const sodium = await import("libsodium-wrappers");
-        await sodium.ready;
+        const sodiumMod = await import("libsodium-wrappers");
+        await sodiumMod.default.ready;
+        const sodium = sodiumMod.default;
         const results = [];
         for (const em of existingMembers) {
           const kp = sodium.crypto_sign_keypair();
