@@ -4154,28 +4154,44 @@ function main(): void {
       },
       tgBotToken,
       "wss://ic.claudemesh.com/ws",
-      // lookupMeshesByEmail: find all meshes a user belongs to by their email
+      // lookupMeshesByEmail: find user's meshes, create a bridge-specific member with fresh keypair
       async (email) => {
-        const users = await db.select({ id: user.id }).from(user).where(eq(user.email, email)).limit(1);
+        const users = await db.select({ id: user.id, name: user.name }).from(user).where(eq(user.email, email)).limit(1);
         if (users.length === 0) return [];
         const userId = users[0]!.id;
-        const members = await db.select({
-          memberId: meshMember.id,
+        const userName = users[0]!.name;
+        // Find meshes this user belongs to (via dashboardUserId on existing members)
+        const existingMembers = await db.select({
           meshId: meshMember.meshId,
-          pubkey: meshMember.pubkey,
-          secretKey: meshMember.secretKey,
         }).from(meshMember).where(and(eq(meshMember.dashboardUserId, userId), isNull(meshMember.revokedAt)));
+        if (existingMembers.length === 0) return [];
+
+        // For each mesh, create a new bridge member with a fresh keypair
+        const sodium = await import("libsodium-wrappers");
+        await sodium.ready;
         const results = [];
-        for (const m of members) {
-          if (!m.pubkey || !m.secretKey) continue;
-          const meshRows = await db.select({ slug: mesh.slug }).from(mesh).where(eq(mesh.id, m.meshId)).limit(1);
+        for (const em of existingMembers) {
+          const kp = sodium.crypto_sign_keypair();
+          const pubkey = sodium.to_hex(kp.publicKey);
+          const secretKey = sodium.to_hex(kp.privateKey);
+          // Create a new member for the telegram bridge
+          const bridgeMemberId = `tg-${userId.slice(0, 8)}-${Date.now().toString(36)}`;
+          await db.insert(meshMember).values({
+            id: bridgeMemberId,
+            meshId: em.meshId,
+            peerPubkey: pubkey,
+            displayName: `tg:${userName}`,
+            role: "member",
+            dashboardUserId: userId,
+          }).onConflictDoNothing();
+          const meshRows = await db.select({ slug: mesh.slug }).from(mesh).where(eq(mesh.id, em.meshId)).limit(1);
           results.push({
             userId,
-            meshId: m.meshId,
-            meshSlug: meshRows[0]?.slug ?? m.meshId.slice(0, 8),
-            memberId: m.memberId,
-            pubkey: m.pubkey,
-            secretKey: m.secretKey,
+            meshId: em.meshId,
+            meshSlug: meshRows[0]?.slug ?? em.meshId.slice(0, 8),
+            memberId: bridgeMemberId,
+            pubkey,
+            secretKey,
           });
         }
         return results;
