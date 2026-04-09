@@ -122,6 +122,9 @@ importers:
       drizzle-orm:
         specifier: 0.44.7
         version: 0.44.7(@libsql/client@0.14.0)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(better-sqlite3@12.4.1)(kysely@0.28.5)(pg@8.16.3)(postgres@3.4.7)
+      grammy:
+        specifier: ^1.35.0
+        version: 1.42.0(encoding@0.1.13)
       libsodium-wrappers:
         specifier: 0.7.15
         version: 0.7.15
