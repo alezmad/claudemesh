@@ -102,10 +102,19 @@ const config: NextConfig = {
     },
   },
 
-  // Webpack SVG loader (used when TURBOPACK=0 for production builds)
+  // Webpack SVG loader (used when TURBOPACK=0 for production builds).
+  // Exclude app/ dir SVGs (icon.svg, opengraph-image) — Next.js metadata
+  // loader handles those. Only process package SVGs (flags, logos).
   webpack(config) {
+    const existingSvgRule = config.module.rules.find(
+      (rule: { test?: RegExp }) => rule.test?.test?.(".svg"),
+    );
+    if (existingSvgRule) {
+      existingSvgRule.exclude = /packages\/ui\/.*\.svg$/;
+    }
     config.module.rules.push({
       test: /\.svg$/,
+      include: /packages\/ui\//,
       use: ["@svgr/webpack"],
     });
     return config;
