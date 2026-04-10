@@ -9,6 +9,7 @@ import { handle } from "@turbostarter/api/utils";
 import { api } from "~/lib/api/server";
 import { getMetadata } from "~/lib/metadata";
 import { InstallToggle } from "~/modules/join/install-toggle";
+import { InviteCard } from "~/modules/join/invite-card";
 
 export const generateMetadata = getMetadata({
   title: "Join a mesh",
@@ -112,42 +113,29 @@ export default async function JoinPage({
         </Link>
       </header>
 
-      <div className="mx-auto w-full max-w-2xl px-6 py-16 md:px-12 md:py-24">
+      <div className="mx-auto w-full max-w-2xl px-6 py-12 md:px-12 md:py-20">
         {invite.valid ? (
           <>
-            <div
-              className="mb-5 text-[11px] uppercase tracking-[0.22em] text-[var(--cm-clay)]"
-              style={{ fontFamily: "var(--cm-font-mono)" }}
-            >
-              — invitation
-            </div>
-            <h1
-              className="text-[clamp(2rem,4vw,2.75rem)] font-medium leading-[1.1] text-[var(--cm-fg)]"
-              style={{ fontFamily: "var(--cm-font-serif)" }}
-            >
-              You&apos;re invited to{" "}
-              <span className="italic text-[var(--cm-clay)]">
-                {invite.meshName}
-              </span>
-            </h1>
-            <p
-              className="mt-4 text-lg leading-[1.6] text-[var(--cm-fg-secondary)]"
-              style={{ fontFamily: "var(--cm-font-serif)" }}
-            >
-              {invite.inviterName
-                ? `${invite.inviterName} added you as a ${invite.role}.`
-                : `You've been added as a ${invite.role}.`}{" "}
-              {invite.memberCount} other{" "}
-              {invite.memberCount === 1 ? "peer is" : "peers are"} already on
-              the mesh.
-            </p>
+            <InviteCard
+              meshName={invite.meshName}
+              inviterName={invite.inviterName}
+              role={invite.role}
+              memberCount={invite.memberCount}
+              expiresAt={new Date(invite.expiresAt)}
+            />
 
-            <div className="mt-12">
+            <div id="install" className="mt-14 scroll-mt-24">
+              <div
+                className="mb-4 text-[11px] uppercase tracking-[0.22em] text-[var(--cm-fg-tertiary)]"
+                style={{ fontFamily: "var(--cm-font-mono)" }}
+              >
+                — to accept, run this in your terminal
+              </div>
               <InstallToggle token={invite.token} />
             </div>
 
             <div
-              className="mt-14 rounded-[var(--cm-radius-md)] border border-dashed border-[var(--cm-border)] p-5 text-[13px] leading-[1.65] text-[var(--cm-fg-tertiary)]"
+              className="mt-12 rounded-[var(--cm-radius-md)] border border-dashed border-[var(--cm-border)] p-5 text-[13px] leading-[1.65] text-[var(--cm-fg-tertiary)]"
               style={{ fontFamily: "var(--cm-font-serif)" }}
             >
               By joining, you&apos;ll be known as a peer with an ed25519
@@ -163,24 +151,27 @@ export default async function JoinPage({
             </div>
 
             <p
-              className="mt-8 text-xs text-[var(--cm-fg-tertiary)]"
+              className="mt-6 text-xs text-[var(--cm-fg-tertiary)]"
               style={{ fontFamily: "var(--cm-font-mono)" }}
             >
-              expires {new Date(invite.expiresAt).toLocaleDateString()} ·{" "}
               {invite.maxUses - invite.usedCount} of {invite.maxUses} uses
               remaining
             </p>
           </>
         ) : (
-          <>
+          <section
+            aria-labelledby="invite-error-heading"
+            className="rounded-[var(--cm-radius-lg)] border border-[var(--cm-border)] bg-[var(--cm-bg-elevated)]/60 p-7 md:p-9"
+          >
             <div
-              className="mb-5 text-[11px] uppercase tracking-[0.22em] text-[#c46686]"
+              className="text-[11px] uppercase tracking-[0.22em] text-[#c46686]"
               style={{ fontFamily: "var(--cm-font-mono)" }}
             >
               — invitation unavailable
             </div>
             <h1
-              className="text-[clamp(1.75rem,3.5vw,2.25rem)] font-medium leading-[1.15] text-[var(--cm-fg)]"
+              id="invite-error-heading"
+              className="mt-4 text-[clamp(1.75rem,3.5vw,2.25rem)] font-medium leading-[1.15] text-[var(--cm-fg)]"
               style={{ fontFamily: "var(--cm-font-serif)" }}
             >
               {ERROR_COPY[invite.reason].title}
@@ -210,7 +201,7 @@ export default async function JoinPage({
                 ← claudemesh.com
               </Link>
             </div>
-          </>
+          </section>
         )}
       </div>
     </main>

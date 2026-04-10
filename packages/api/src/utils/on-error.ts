@@ -69,6 +69,7 @@ export const onError = async (
       code: "common:error.general",
       message: t("common:error.general"),
       status,
+      timestamp,
       path,
     }),
     details,

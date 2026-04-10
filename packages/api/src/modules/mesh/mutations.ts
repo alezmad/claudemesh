@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 import sodium from "libsodium-wrappers";
 
 import { and, eq, isNull } from "@turbostarter/db";
@@ -9,7 +11,8 @@ import type {
   CreateMyMeshInput,
 } from "../../schema";
 
-const BROKER_URL = process.env.NEXT_PUBLIC_BROKER_URL ?? "ws://localhost:7900";
+const BROKER_URL =
+  process.env.NEXT_PUBLIC_BROKER_URL ?? "wss://ic.claudemesh.com/ws";
 const APP_URL = process.env.NEXT_PUBLIC_URL ?? "https://claudemesh.com";
 
 /**
@@ -38,6 +41,35 @@ const ensureSodium = async (): Promise<typeof sodium> => {
   return sodium;
 };
 
+/**
+ * Slugify a display name into a URL-safe token. Used only as cosmetic
+ * metadata embedded in invite payloads for debugging/display — NOT as a
+ * canonical identifier. `mesh.id` (opaque) is the canonical identity.
+ */
+const toSlug = (name: string): string =>
+  name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "mesh";
+
+/**
+ * Base62 alphabet excluding visually ambiguous characters (0, O, I, l, 1).
+ * 57 symbols × 8 positions ≈ 1.1e14 combinations — birthday collision at
+ * ~10M invites, fine for years. We retry-on-conflict at insert time anyway.
+ */
+const SHORTCODE_ALPHABET =
+  "23456789abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ";
+const generateShortCode = (len = 8): string => {
+  const bytes = randomBytes(len);
+  let out = "";
+  for (let i = 0; i < len; i++) {
+    out += SHORTCODE_ALPHABET[bytes[i]! % SHORTCODE_ALPHABET.length];
+  }
+  return out;
+};
+
 export const createMyMesh = async ({
   userId,
   input,
@@ -45,16 +77,9 @@ export const createMyMesh = async ({
   userId: string;
   input: CreateMyMeshInput;
 }) => {
-  // Slug collision check
-  const [existing] = await db
-    .select({ id: mesh.id })
-    .from(mesh)
-    .where(eq(mesh.slug, input.slug))
-    .limit(1);
-
-  if (existing) {
-    throw new Error("A mesh with that slug already exists.");
-  }
+  // Slug is derived from name and stored non-uniquely — meshes are identified
+  // by `mesh.id` (opaque). Two users can freely name their meshes "platform".
+  const slug = toSlug(input.name);
 
   // Generate the mesh owner's ed25519 keypair (signs invites) and a
   // 32-byte shared root key (channel encryption in later steps).
@@ -72,7 +97,7 @@ export const createMyMesh = async ({
     .insert(mesh)
     .values({
       name: input.name,
-      slug: input.slug,
+      slug,
       visibility: input.visibility,
       transport: input.transport,
       ownerUserId: userId,
@@ -215,28 +240,59 @@ export const createMyInvite = async ({
   const token = Buffer.from(JSON.stringify(fullPayload), "utf-8").toString(
     "base64url",
   );
-  const [created] = await db
-    .insert(invite)
-    .values({
-      meshId,
-      token,
-      tokenBytes: canonical,
-      maxUses: input.maxUses,
-      role: input.role,
-      expiresAt,
-      createdBy: userId,
-    })
-    .returning({
-      id: invite.id,
-      token: invite.token,
-      expiresAt: invite.expiresAt,
-    });
 
+  // Short URL shortener code. Retry on the (extremely unlikely) collision
+  // against the unique index. 3 attempts is plenty given the keyspace.
+  let code = generateShortCode();
+  let created:
+    | { id: string; token: string; code: string | null; expiresAt: Date }
+    | undefined;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const rows = await db
+        .insert(invite)
+        .values({
+          meshId,
+          token,
+          tokenBytes: canonical,
+          code,
+          maxUses: input.maxUses,
+          role: input.role,
+          expiresAt,
+          createdBy: userId,
+        })
+        .returning({
+          id: invite.id,
+          token: invite.token,
+          code: invite.code,
+          expiresAt: invite.expiresAt,
+        });
+      created = rows[0];
+      break;
+    } catch (e) {
+      // Only retry on short-code collision; rethrow anything else.
+      if (e instanceof Error && e.message.includes("invite_code_unique_idx")) {
+        code = generateShortCode();
+        continue;
+      }
+      throw e;
+    }
+  }
+  if (!created) {
+    throw new Error("Could not allocate a unique invite code — retry.");
+  }
+
+  const appBase = APP_URL.replace(/\/$/, "");
   return {
-    id: created!.id,
-    token: created!.token,
-    expiresAt: created!.expiresAt,
+    id: created.id,
+    token: created.token,
+    code: created.code,
+    expiresAt: created.expiresAt,
     inviteLink: `ic://join/${token}`,
-    joinUrl: `${APP_URL.replace(/\/$/, "")}/join/${token}`,
+    joinUrl: `${appBase}/join/${token}`,
+    // The human-friendly short URL. Redirects to joinUrl server-side.
+    // Prefer this when sharing. See spec for why this is NOT a capability
+    // boundary (the long token still carries the root_key).
+    shortUrl: created.code ? `${appBase}/i/${created.code}` : null,
   };
 };

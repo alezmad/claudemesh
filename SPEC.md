@@ -931,6 +931,72 @@ The session keypair generates once on first connect and survives reconnects. Mes
 
 ---
 
+## 14b. Invites (v2 protocol)
+
+### Why v2
+
+The v1 invite token embeds `mesh_root_key` (32-byte shared secret) inside a base64url URL. Any path that caches URLs — link previews, browser history, sync, screenshots, analytics pixels, error logs — is a permanent compromise of the mesh key. Revoking the invite does not rotate the key. The URL *is* the secret.
+
+v2 removes all secret material from the URL. The invite becomes a short opaque code that grants the *right* to receive the key, not the key itself. The server only releases the key after the recipient proves they can receive it, sealed to a public key the recipient controls.
+
+### Canonical bytes
+
+The mesh owner ed25519 secret key signs:
+
+```
+v=2|mesh_id|invite_id|expires_at_unix|role|owner_pubkey_hex
+```
+
+No `root_key`, no `broker_url`. The signed capability lives in the broker DB. The user-visible URL is `claudemesh.com/i/{code}` — base62, 8 chars.
+
+### Claim flow
+
+```
+1. Admin mints invite
+     broker stores {id, mesh_id, code, role, max_uses, expires_at,
+                    signed_capability, version=2}
+     returns claudemesh.com/i/{code}
+
+2. Recipient lands on /i/{code}
+     web resolves the code, shows consent: mesh name, inviter, role,
+     expiry, member count. No secrets in the response.
+
+3. Recipient generates a fresh x25519 keypair
+     (separate from its ed25519 identity — distinct curve, distinct use)
+
+4. Recipient POSTs its x25519 public key
+     POST /api/public/invites/{code}/claim
+     body: { recipient_x25519_pubkey }
+
+5. Broker validates and seals
+     verifies signed_capability against mesh.owner_pubkey
+     checks expires_at, max_uses vs used_count, revoked_at
+     creates mesh.member row, increments used_count
+     sealed_root_key = crypto_box_seal(root_key, recipient_x25519_pubkey)
+     returns { sealed_root_key, mesh_id, member_id, owner_pubkey,
+               canonical_v2 }
+
+6. Recipient unseals with its x25519 secret
+     root_key = crypto_box_seal_open(sealed_root_key, recipient_x25519_sk)
+     joins normal mesh traffic
+```
+
+The server never sees the recipient's private key. `crypto_box_seal` is anonymous — no sender identity, no interaction beyond the single HTTP round trip.
+
+### v1 deprecation timeline
+
+- v0.1.x: the broker, CLI, and web accept both v1 (long token with embedded key) and v2 (short code + sealed key delivery). New invites default to v2.
+- v0.2.0: v1 endpoints return `410 Gone`. Existing members already in a mesh are unaffected — the key rotation story is orthogonal to invite format.
+
+### DB additions
+
+- `mesh.invite.version` int default 1
+- `mesh.invite.capability_v2` text nullable — the canonical signed bytes
+- `mesh.invite.claimed_by_pubkey` text nullable — the recipient x25519 pubkey used at claim time (audit trail, single-use enforcement)
+- `mesh.pending_invite` new table for email invites: `{id, meshId, email, code, sentAt, acceptedAt, revokedAt, createdBy, createdAt}`. Email delivery goes through Postmark (already wired via turbostarter).
+
+---
+
 ## 14. Production hardening (implemented)
 
 | Feature | Description |

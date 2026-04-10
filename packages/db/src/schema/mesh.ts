@@ -78,7 +78,13 @@ export const messagePriorityEnum = meshSchema.enum("message_priority", [
 export const mesh = meshSchema.table("mesh", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   name: text().notNull(),
-  slug: text().notNull().unique(),
+  /**
+   * Cosmetic slug derived from name at creation. NOT unique, NOT used for
+   * identity — `mesh.id` is the canonical identifier everywhere (URLs,
+   * invites, broker lookups). Kept for display/debugging only. Two meshes
+   * can freely share a slug.
+   */
+  slug: text().notNull(),
   ownerUserId: text()
     .references(() => user.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),
@@ -176,6 +182,15 @@ export const invite = meshSchema.table("invite", {
     .notNull(),
   token: text().notNull().unique(),
   tokenBytes: text(),
+  /**
+   * Short opaque URL shortener code (base62, 8 chars). Resolves server-side
+   * to the full canonical `token` for landing page rendering. Nullable for
+   * pre-shortcode invites. Not a capability boundary — the long token still
+   * carries the root_key. See .artifacts/specs/2026-04-10-anthropic-vision-
+   * meshes-invites.md for the v2 protocol that moves the root_key out of
+   * the URL entirely.
+   */
+  code: text().unique(),
   maxUses: integer().notNull().default(1),
   usedCount: integer().notNull().default(0),
   role: meshRoleEnum().notNull().default("member"),
@@ -192,7 +207,46 @@ export const invite = meshSchema.table("invite", {
     .notNull(),
   createdAt: timestamp().defaultNow().notNull(),
   revokedAt: timestamp(),
+  /** Protocol version — 1 = legacy (root_key in URL), 2 = sealed delivery. Default 1 for backward compat. */
+  version: integer().notNull().default(1),
+  /**
+   * v2 canonical signed bytes (the string the broker re-verifies against mesh.ownerPubkey).
+   * Format: `v=2|mesh_id|invite_id|expires_at|role|owner_pubkey`
+   * Nullable for legacy v1 rows.
+   */
+  capabilityV2: text(),
+  /**
+   * Recipient curve25519 pubkey (base64url) that the mesh root_key was sealed to
+   * when this invite was claimed. Audit-only — do NOT use as an authN check.
+   * Nullable until claim.
+   */
+  claimedByPubkey: text(),
 });
+
+/**
+ * Tracks invites sent by email — one row per (mesh, email) pairing.
+ * `code` references an underlying mesh.invite row that will be minted
+ * on send; when the recipient lands on /i/{code} they claim the real invite.
+ */
+export const pendingInvite = meshSchema.table("pending_invite", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  meshId: text()
+    .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .notNull(),
+  email: text().notNull(),
+  /** The short code of the underlying `mesh.invite.code` row this email links to. */
+  code: text().notNull(),
+  sentAt: timestamp().defaultNow().notNull(),
+  acceptedAt: timestamp(),
+  revokedAt: timestamp(),
+  createdBy: text()
+    .references(() => user.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .notNull(),
+  createdAt: timestamp().defaultNow().notNull(),
+}, (table) => [
+  index("pending_invite_email_idx").on(table.email),
+  index("pending_invite_mesh_idx").on(table.meshId),
+]);
 
 /**
  * Signed, hash-chained audit log. NEVER stores message content — every
@@ -685,6 +739,11 @@ export const inviteRelations = relations(invite, ({ one }) => ({
     fields: [invite.createdBy],
     references: [user.id],
   }),
+}));
+
+export const pendingInviteRelations = relations(pendingInvite, ({ one }) => ({
+  mesh: one(mesh, { fields: [pendingInvite.meshId], references: [mesh.id] }),
+  inviter: one(user, { fields: [pendingInvite.createdBy], references: [user.id] }),
 }));
 
 export const auditLogRelations = relations(auditLog, ({ one }) => ({

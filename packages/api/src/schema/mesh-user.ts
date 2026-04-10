@@ -54,11 +54,6 @@ export type GetMyMeshesResponse = z.infer<typeof getMyMeshesResponseSchema>;
 
 export const createMyMeshInputSchema = z.object({
   name: z.string().min(2).max(80),
-  slug: z
-    .string()
-    .min(2)
-    .max(40)
-    .regex(/^[a-z0-9-]+$/, "slug must be lowercase letters, digits, hyphens"),
   visibility: meshVisibilityEnum.default("private"),
   transport: meshTransportEnum.default("managed"),
 });
@@ -130,8 +125,10 @@ export type CreateMyInviteInput = z.infer<typeof createMyInviteInputSchema>;
 export const createMyInviteResponseSchema = z.object({
   id: z.string(),
   token: z.string(),
+  code: z.string().nullable(),
   inviteLink: z.string(),
   joinUrl: z.string(),
+  shortUrl: z.string().nullable(),
   expiresAt: z.coerce.date(),
 });
 export type CreateMyInviteResponse = z.infer<typeof createMyInviteResponseSchema>;

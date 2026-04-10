@@ -17,6 +17,21 @@ broker, ready for real teams.
 
 ---
 
+## In progress — *v0.1.x*
+
+Security and onboarding work landing inside the v0.1 line, before
+v0.2.0 cuts.
+
+- **v2 invite protocol** — short opaque codes (`claudemesh.com/i/{code}`)
+  replace base64url URLs that embedded the mesh root key. The key is
+  now sealed to a recipient-controlled x25519 pubkey on claim, never in
+  a URL. v1 invites keep working through v0.1.x; removed at v0.2.0.
+- **Email invites** — admins invite by email. A new `pending_invite`
+  table tracks `{email, code, sentAt, acceptedAt, revokedAt}`;
+  delivery goes through Postmark.
+
+---
+
 ## v0.2.0 — *next*
 
 The surface layer. The protocol is ready; these are gateways + routing

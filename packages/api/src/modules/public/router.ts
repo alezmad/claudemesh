@@ -232,6 +232,29 @@ export const publicRouter = new Hono()
     }
     return c.json(result);
   })
+  /**
+   * Resolve a short invite code to its canonical long token.
+   *
+   * URL shortener only — the long token still carries the root_key,
+   * so this endpoint is NOT a security boundary. See the v2 invite
+   * protocol spec for the real fix.
+   *
+   * Returns 404 if the code is unknown OR the invite was revoked/
+   * archived so stale short URLs don't leak mesh metadata.
+   */
+  .get("/invite-code/:code", async (c) => {
+    const code = c.req.param("code");
+    const [row] = await db
+      .select({ token: invite.token, revokedAt: invite.revokedAt })
+      .from(invite)
+      .where(eq(invite.code, code))
+      .limit(1);
+    c.header("cache-control", "no-store");
+    if (!row || row.revokedAt) {
+      return c.json({ found: false as const }, 404);
+    }
+    return c.json({ found: true as const, token: row.token });
+  })
   .get("/stats", async (c) => {
   const now = Date.now();
   if (cachedStats && cachedStats.expiresAt > now) {

@@ -366,6 +366,74 @@ the new peer and rebroadcasts presence.
 
 Invite-link issuance: [`apps/cli/src/invite/`](../apps/cli/src/invite/).
 
+### v2 invites (in progress)
+
+v1 embeds the mesh root key inside the URL. v2 removes it: the URL is a
+short opaque code, and the root key is sealed to a recipient-controlled
+x25519 public key on claim. Both formats are accepted through v0.1.x;
+v1 is removed at v0.2.0.
+
+Canonical bytes signed by the mesh owner ed25519 secret:
+
+```
+v=2|mesh_id|invite_id|expires_at_unix|role|owner_pubkey_hex
+```
+
+User-visible URL: `https://claudemesh.com/i/{code}` (base62, 8 chars).
+
+#### Claim endpoint
+
+```
+POST /api/public/invites/:code/claim
+Content-Type: application/json
+
+{
+  "recipient_x25519_pubkey": "<base64url>"
+}
+```
+
+The recipient generates a fresh x25519 keypair (distinct from its
+ed25519 identity) and sends the public half. The server never sees the
+secret.
+
+Success response:
+
+```jsonc
+{
+  "sealed_root_key": "<base64url>",      // crypto_box_seal(root_key, recipient_pubkey)
+  "mesh_id":         "<text>",
+  "member_id":       "<text>",
+  "owner_pubkey":    "<hex>",            // mesh owner ed25519 pubkey
+  "canonical_v2":    "v=2|..."           // the signed bytes, for local verification
+}
+```
+
+The recipient unseals with `crypto_box_seal_open` using its x25519
+secret key, then verifies `canonical_v2` against `owner_pubkey`.
+
+#### Error codes
+
+| Status | Body `code` | Meaning |
+|--------|-------------|---------|
+| 400 | `malformed` | Body missing or `recipient_x25519_pubkey` not a valid 32-byte key |
+| 400 | `bad_signature` | Stored `capability_v2` fails ed25519 verification against the mesh owner pubkey |
+| 404 | `not_found` | No invite row matches `code` |
+| 410 | `expired` | `expires_at` is in the past |
+| 410 | `revoked` | `revoked_at` is set |
+| 410 | `exhausted` | `used_count >= max_uses` |
+
+The broker increments `used_count` and stores
+`claimed_by_pubkey = recipient_x25519_pubkey` atomically with the
+member row insert. A second claim against a single-use invite fails
+with `410 exhausted`.
+
+#### Email invites
+
+A `pending_invite` row is created when an admin invites by email. The
+email contains `https://claudemesh.com/i/{code}` — the same short URL
+surface as link invites. On successful claim the broker sets
+`pending_invite.accepted_at`.
+
 ---
 
 ## Self-hosting

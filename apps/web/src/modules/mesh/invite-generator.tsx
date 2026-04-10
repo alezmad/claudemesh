@@ -36,6 +36,8 @@ interface GeneratedInvite {
   token: string;
   inviteLink: string;
   joinUrl: string;
+  /** Short human-friendly URL, preferred for sharing. Null if the backend didn't mint one. */
+  shortUrl: string | null;
   expiresAt: Date;
   qrDataUrl: string;
 }
@@ -43,6 +45,7 @@ interface GeneratedInvite {
 export const InviteGenerator = ({ meshId }: { meshId: string }) => {
   const [result, setResult] = useState<GeneratedInvite | null>(null);
   const [copied, setCopied] = useState<"url" | "cli" | null>(null);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const form = useForm<CreateMyInviteInput>({
     resolver: zodResolver(createMyInviteInputSchema),
@@ -54,24 +57,20 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
       const res = (await handle(api.my.meshes[":id"].invites.$post)({
         param: { id: meshId },
         json: values,
-      })) as
-        | {
-            id: string;
-            token: string;
-            inviteLink: string;
-            joinUrl: string;
-            expiresAt: string;
-          }
-        | { error: string };
+      })) as {
+        id: string;
+        token: string;
+        inviteLink: string;
+        joinUrl: string;
+        shortUrl: string | null;
+        expiresAt: string;
+      };
 
-      if ("error" in res) {
-        form.setError("root", { message: res.error });
-        return;
-      }
-
-      // QR encodes the HTTPS join URL now — anyone with a camera can
-      // scan and land on the friendly /join/[token] page.
-      const qrDataUrl = await QRCode.toDataURL(res.joinUrl, {
+      // QR encodes the SHORT URL when available — scannable at camera distance
+      // and short enough for the QR to stay low-density. Falls back to the
+      // long token URL for legacy invites minted before the shortener shipped.
+      const qrTarget = res.shortUrl ?? res.joinUrl;
+      const qrDataUrl = await QRCode.toDataURL(qrTarget, {
         width: 256,
         margin: 1,
         color: { dark: "#141413", light: "#ffffff" },
@@ -82,6 +81,7 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
         token: res.token,
         inviteLink: res.inviteLink,
         joinUrl: res.joinUrl,
+        shortUrl: res.shortUrl,
         expiresAt: new Date(res.expiresAt),
         qrDataUrl,
       });
@@ -99,6 +99,10 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
   };
 
   if (result) {
+    // Prefer the short URL everywhere it exists. CLI command still uses the
+    // long token because the broker resolves by token — swapping CLI to short
+    // codes is part of the v2 protocol, not this URL-shortener change.
+    const primaryUrl = result.shortUrl ?? result.joinUrl;
     const cliCmd = `claudemesh join ${result.token}`;
     return (
       <div className="space-y-6">
@@ -117,7 +121,7 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
                   Share this link
                 </div>
                 <code className="bg-muted block break-all rounded p-3 font-mono text-xs">
-                  {result.joinUrl}
+                  {primaryUrl}
                 </code>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-xs">
@@ -126,7 +130,7 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
                 </Badge>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button onClick={() => copy(result.joinUrl, "url")} size="sm">
+                <Button onClick={() => copy(primaryUrl, "url")} size="sm">
                   {copied === "url" ? "Copied ✓" : "Copy link"}
                 </Button>
                 <Button
@@ -168,65 +172,89 @@ export const InviteGenerator = ({ meshId }: { meshId: string }) => {
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="max-w-md space-y-5">
-        <FormField
-          control={form.control}
-          name="role"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Role</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value}>
-                <FormControl>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                </FormControl>
-                <SelectContent>
-                  <SelectItem value="member">Member</SelectItem>
-                  <SelectItem value="admin">Admin</SelectItem>
-                </SelectContent>
-              </Select>
-              <FormMessage />
-            </FormItem>
+        <p className="text-muted-foreground text-sm">
+          One-time invite for a new member. Valid for 7 days.
+        </p>
+
+        {/* Advanced options — hidden by default. Defaults ship 90% of users. */}
+        <div className="rounded-md border border-dashed">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((s) => !s)}
+            className="text-muted-foreground hover:text-foreground flex w-full items-center justify-between px-3 py-2 text-xs uppercase tracking-wider"
+            aria-expanded={showAdvanced}
+          >
+            <span>Advanced</span>
+            <span aria-hidden="true">{showAdvanced ? "−" : "+"}</span>
+          </button>
+          {showAdvanced && (
+            <div className="space-y-4 border-t px-3 py-4">
+              <FormField
+                control={form.control}
+                name="role"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Role</FormLabel>
+                    <Select
+                      onValueChange={field.onChange}
+                      defaultValue={field.value}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="member">Member</SelectItem>
+                        <SelectItem value="admin">Admin</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="maxUses"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Max uses</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={1000}
+                        {...field}
+                        onChange={(e) => field.onChange(Number(e.target.value))}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="expiresInDays"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Expires in (days)</FormLabel>
+                    <FormControl>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={365}
+                        {...field}
+                        onChange={(e) => field.onChange(Number(e.target.value))}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
           )}
-        />
-        <FormField
-          control={form.control}
-          name="maxUses"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Max uses</FormLabel>
-              <FormControl>
-                <Input
-                  type="number"
-                  min={1}
-                  max={1000}
-                  {...field}
-                  onChange={(e) => field.onChange(Number(e.target.value))}
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="expiresInDays"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Expires in (days)</FormLabel>
-              <FormControl>
-                <Input
-                  type="number"
-                  min={1}
-                  max={365}
-                  {...field}
-                  onChange={(e) => field.onChange(Number(e.target.value))}
-                />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
+        </div>
+
         {form.formState.errors.root && (
           <p className="text-destructive text-sm">
             {form.formState.errors.root.message}

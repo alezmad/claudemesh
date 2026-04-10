@@ -15,10 +15,10 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull, lt, sql } from "drizzle-orm";
 import { env } from "./env";
 import { db } from "./db";
-import { mesh, meshMember, messageQueue, scheduledMessage as scheduledMessageTable, meshWebhook, peerState } from "@turbostarter/db/schema/mesh";
+import { invite as inviteTable, mesh, meshMember, messageQueue, scheduledMessage as scheduledMessageTable, meshWebhook, peerState } from "@turbostarter/db/schema/mesh";
 import { user } from "@turbostarter/db/schema/auth";
 import { handleCliSync, type CliSyncRequest } from "./cli-sync";
 import { updateMemberProfile, listMeshMembers, updateMeshSettings } from "./member-api";
@@ -102,7 +102,7 @@ import { metrics, metricsToText } from "./metrics";
 import { TokenBucket } from "./rate-limit";
 import { isDbHealthy, startDbHealth, stopDbHealth } from "./db-health";
 import { buildInfo } from "./build-info";
-import { verifyHelloSignature } from "./crypto";
+import { canonicalInviteV2, sealRootKeyToRecipient, verifyHelloSignature, verifyInviteV2 } from "./crypto";
 import { handleWebhook } from "./webhooks";
 import { audit, loadLastHashes, ensureAuditLogTable, verifyChain, queryAuditLog } from "./audit";
 
@@ -590,6 +590,16 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // v2 invite claim: POST /invites/:code/claim
+  // Body: { recipient_x25519_pubkey: "<base64url, 32 bytes>" }
+  // On success, returns a sealed copy of the mesh root_key the recipient
+  // alone can unseal. See .artifacts/specs/2026-04-10-anthropic-vision-meshes-invites.md
+  const claimMatch = req.method === "POST" && req.url?.match(/^\/invites\/([^/]+)\/claim$/);
+  if (claimMatch) {
+    handleInviteClaimV2Post(req, res, claimMatch[1]!, started);
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/upload") {
     handleUploadPost(req, res, started);
     return;
@@ -858,6 +868,270 @@ function handleJoinPost(
         error: e instanceof Error ? e.message : String(e),
       });
       log.error("join handler error", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+}
+
+// ----------------------------------------------------------------------------
+// v2 invite claim — POST /invites/:code/claim
+// ----------------------------------------------------------------------------
+// The v2 protocol moves the mesh root_key out of the invite URL. Invite
+// URLs are short opaque codes; on claim the broker verifies the signed
+// capability (stored server-side) and seals the root_key to a recipient-
+// provided x25519 pubkey so only that recipient can unseal it.
+//
+// capabilityV2 is stored as JSON on the invite row:
+//   { "canonical": "v=2|mesh_id|invite_id|expires_at|role|owner_pubkey",
+//     "signature": "<hex ed25519 detached signature>" }
+// The broker recomputes the canonical bytes from the invite row and
+// verifies the signature against mesh.ownerPubkey.
+//
+// v1 rows (version === 1 OR capabilityV2 === null) are still accepted:
+// the broker computes the v2 canonical on the fly from the row, but
+// skips signature verification since there is no v2 signature on file.
+// This lets v2 clients claim legacy invites during the deprecation window.
+
+export type InviteClaimV2Result =
+  | {
+      ok: true;
+      status: 200;
+      body: {
+        sealed_root_key: string;
+        mesh_id: string;
+        member_id: string;
+        owner_pubkey: string;
+        canonical_v2: string;
+      };
+    }
+  | { ok: false; status: 400 | 404 | 410; body: { error: string } };
+
+/**
+ * Core claim logic, extracted from the HTTP handler so tests can call it
+ * directly without spinning up the full broker server.
+ */
+export async function claimInviteV2Core(params: {
+  code: string;
+  recipientX25519PubkeyBase64url: string;
+  displayName?: string;
+  now?: number;
+}): Promise<InviteClaimV2Result> {
+  const now = params.now ?? Date.now();
+  const recipientPk = params.recipientX25519PubkeyBase64url;
+
+  // Cheap shape check on the recipient pubkey — full length check happens
+  // inside sealRootKeyToRecipient, but reject obvious garbage early so
+  // we return 400 malformed before touching the DB.
+  if (!recipientPk || typeof recipientPk !== "string" || recipientPk.length < 32) {
+    return { ok: false, status: 400, body: { error: "malformed" } };
+  }
+
+  // 1. Look up the invite by opaque code.
+  const [inv] = await db
+    .select()
+    .from(inviteTable)
+    .where(eq(inviteTable.code, params.code))
+    .limit(1);
+  if (!inv) return { ok: false, status: 404, body: { error: "not_found" } };
+
+  // 2. Lifecycle checks: revoked → expired → exhausted.
+  if (inv.revokedAt) {
+    return { ok: false, status: 410, body: { error: "revoked" } };
+  }
+  if (inv.expiresAt.getTime() < now) {
+    return { ok: false, status: 410, body: { error: "expired" } };
+  }
+  if (inv.usedCount >= inv.maxUses) {
+    return { ok: false, status: 410, body: { error: "exhausted" } };
+  }
+
+  // 3. Load the mesh for owner_pubkey + root_key.
+  const [m] = await db
+    .select({
+      id: mesh.id,
+      ownerPubkey: mesh.ownerPubkey,
+      rootKey: mesh.rootKey,
+    })
+    .from(mesh)
+    .where(and(eq(mesh.id, inv.meshId), isNull(mesh.archivedAt)))
+    .limit(1);
+  if (!m) return { ok: false, status: 404, body: { error: "not_found" } };
+  if (!m.ownerPubkey || !m.rootKey) {
+    return { ok: false, status: 400, body: { error: "malformed" } };
+  }
+
+  // 4. v2 signature verification when applicable.
+  //    Always compute the canonical on the fly so the response can echo it.
+  const expiresAtUnix = Math.floor(inv.expiresAt.getTime() / 1000);
+  const canonical = canonicalInviteV2({
+    mesh_id: inv.meshId,
+    invite_id: inv.id,
+    expires_at: expiresAtUnix,
+    role: inv.role as "admin" | "member",
+    owner_pubkey: m.ownerPubkey,
+  });
+
+  if (inv.version === 2 && inv.capabilityV2) {
+    // Parse capability + verify.
+    let storedCanonical: string | undefined;
+    let signatureHex: string | undefined;
+    try {
+      const parsed = JSON.parse(inv.capabilityV2) as {
+        canonical?: string;
+        signature?: string;
+      };
+      storedCanonical = parsed.canonical;
+      signatureHex = parsed.signature;
+    } catch {
+      return { ok: false, status: 400, body: { error: "malformed" } };
+    }
+    if (!storedCanonical || !signatureHex) {
+      return { ok: false, status: 400, body: { error: "malformed" } };
+    }
+    // Broker-recomputed canonical must match the signed bytes exactly.
+    if (storedCanonical !== canonical) {
+      return { ok: false, status: 400, body: { error: "bad_signature" } };
+    }
+    const sigOk = await verifyInviteV2({
+      canonical: storedCanonical,
+      signatureHex,
+      ownerPubkeyHex: m.ownerPubkey,
+    });
+    if (!sigOk) {
+      return { ok: false, status: 400, body: { error: "bad_signature" } };
+    }
+  }
+  // v1 rows: skip signature verification (legacy path during migration).
+
+  // 5. Atomic consume: increment used_count iff still under max_uses.
+  //    Mirrors the invariant enforced for v1 joins in broker.joinMesh().
+  const [claimed] = await db
+    .update(inviteTable)
+    .set({
+      usedCount: sql`${inviteTable.usedCount} + 1`,
+      claimedByPubkey: recipientPk,
+    })
+    .where(
+      and(
+        eq(inviteTable.id, inv.id),
+        lt(inviteTable.usedCount, inv.maxUses),
+      ),
+    )
+    .returning({ id: inviteTable.id });
+  if (!claimed) {
+    return { ok: false, status: 410, body: { error: "exhausted" } };
+  }
+
+  // 6. Create a member row for the claimant. The peerPubkey column holds
+  //    the claimant's signing identity; for v2 the recipient hasn't
+  //    necessarily connected over WS yet, so we use the x25519 pubkey as
+  //    a placeholder for the pre-claim phase. This matches the spec's
+  //    "one recipient = one root-key-delivery capability" invariant.
+  const preset = (inv.preset as {
+    displayName?: string;
+    roleTag?: string;
+    groups?: Array<{ name: string; role?: string }>;
+    messageMode?: string;
+  } | null) ?? {};
+  const displayName =
+    preset.displayName ?? params.displayName ?? `member-${recipientPk.slice(0, 8)}`;
+  const [row] = await db
+    .insert(meshMember)
+    .values({
+      meshId: inv.meshId,
+      peerPubkey: recipientPk,
+      displayName,
+      role: inv.role,
+      roleTag: preset.roleTag ?? null,
+      defaultGroups: preset.groups ?? [],
+      messageMode: preset.messageMode ?? "push",
+    })
+    .returning({ id: meshMember.id });
+  if (!row) {
+    return { ok: false, status: 400, body: { error: "malformed" } };
+  }
+
+  // 7. Seal the mesh root_key to the recipient's x25519 pubkey.
+  let sealed: string;
+  try {
+    sealed = await sealRootKeyToRecipient({
+      rootKeyBase64url: m.rootKey,
+      recipientX25519PubkeyBase64url: recipientPk,
+    });
+  } catch {
+    return { ok: false, status: 400, body: { error: "malformed" } };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      sealed_root_key: sealed,
+      mesh_id: inv.meshId,
+      member_id: row.id,
+      owner_pubkey: m.ownerPubkey,
+      canonical_v2: canonical,
+    },
+  };
+}
+
+function handleInviteClaimV2Post(
+  req: IncomingMessage,
+  res: ServerResponse,
+  code: string,
+  started: number,
+): void {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let aborted = false;
+  req.on("data", (chunk: Buffer) => {
+    if (aborted) return;
+    total += chunk.length;
+    if (total > env.MAX_MESSAGE_BYTES) {
+      aborted = true;
+      writeJson(res, 413, { error: "payload too large" });
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on("end", async () => {
+    if (aborted) return;
+    try {
+      const raw = Buffer.concat(chunks).toString();
+      let payload: { recipient_x25519_pubkey?: string; display_name?: string };
+      try {
+        payload = JSON.parse(raw);
+      } catch {
+        writeJson(res, 400, { error: "malformed" });
+        return;
+      }
+      if (
+        !payload.recipient_x25519_pubkey ||
+        typeof payload.recipient_x25519_pubkey !== "string"
+      ) {
+        writeJson(res, 400, { error: "malformed" });
+        return;
+      }
+      const result = await claimInviteV2Core({
+        code,
+        recipientX25519PubkeyBase64url: payload.recipient_x25519_pubkey,
+        displayName: payload.display_name,
+      });
+      writeJson(res, result.status, result.body);
+      log.info("invite claim v2", {
+        route: "POST /invites/:code/claim",
+        code,
+        status: result.status,
+        ok: result.ok,
+        latency_ms: Date.now() - started,
+      });
+    } catch (e) {
+      writeJson(res, 500, {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      log.error("invite claim v2 handler error", {
         error: e instanceof Error ? e.message : String(e),
       });
     }
@@ -4282,4 +4556,8 @@ function main(): void {
   });
 }
 
-main();
+// Skip starting the HTTP/WS server when running under vitest — tests import
+// claimInviteV2Core() directly and must not bind ports on module load.
+if (!process.env.VITEST) {
+  main();
+}

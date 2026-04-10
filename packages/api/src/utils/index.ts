@@ -22,6 +22,11 @@ const apiErrorSchema = z.object({
   path: z.string(),
 });
 
+/** Matches the `{ error: "..." }` shape returned by Hono route catch blocks. */
+const routeErrorSchema = z.object({
+  error: z.string(),
+});
+
 export const isAPIError = (e: unknown): e is z.infer<typeof apiErrorSchema> => {
   return apiErrorSchema.safeParse(e).success;
 };
@@ -70,10 +75,13 @@ export const handle = <
 
     if (!response.ok) {
       if (throwOnError) {
+        const parsed = routeErrorSchema.safeParse(data);
         throw new Error(
           isAPIError(data)
             ? data.message
-            : "Something went wrong. Please try again later.",
+            : parsed.success
+              ? parsed.data.error
+              : "Something went wrong. Please try again later.",
         );
       }
       return null as HandleReturn<TResponse, E, S>;

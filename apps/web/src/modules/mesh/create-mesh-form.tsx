@@ -1,7 +1,6 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 
@@ -32,14 +31,6 @@ import {
 import { pathsConfig } from "~/config/paths";
 import { api } from "~/lib/api/client";
 
-const slugify = (s: string) =>
-  s
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-
 export const CreateMeshForm = ({
   onboarding = false,
 }: { onboarding?: boolean } = {}) => {
@@ -48,30 +39,16 @@ export const CreateMeshForm = ({
     resolver: zodResolver(createMyMeshInputSchema),
     defaultValues: {
       name: "",
-      slug: "",
       visibility: "private",
       transport: "managed",
     },
   });
 
-  const nameValue = form.watch("name");
-  const slugDirty = form.formState.dirtyFields.slug;
-
-  useEffect(() => {
-    if (!slugDirty && nameValue) {
-      form.setValue("slug", slugify(nameValue));
-    }
-  }, [nameValue, slugDirty, form]);
-
   const onSubmit = async (values: CreateMyMeshInput) => {
     try {
       const res = (await handle(api.my.meshes.$post)({
         json: values,
-      })) as { id: string; slug: string } | { error: string };
-      if ("error" in res) {
-        form.setError("slug", { message: res.error });
-        return;
-      }
+      })) as { id: string; slug: string };
       router.push(
         onboarding
           ? `${pathsConfig.dashboard.user.meshes.invite(res.id)}?onboarding=1`
@@ -97,23 +74,7 @@ export const CreateMeshForm = ({
                 <Input placeholder="Platform team" {...field} />
               </FormControl>
               <FormDescription>
-                Display name — what teammates see.
-              </FormDescription>
-              <FormMessage />
-            </FormItem>
-          )}
-        />
-        <FormField
-          control={form.control}
-          name="slug"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Slug</FormLabel>
-              <FormControl>
-                <Input placeholder="platform-team" {...field} />
-              </FormControl>
-              <FormDescription>
-                URL-safe identifier: lowercase letters, digits, hyphens.
+                Display name — what teammates see. Pick anything.
               </FormDescription>
               <FormMessage />
             </FormItem>

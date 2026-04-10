@@ -7,7 +7,10 @@
  * current member of the claimed mesh.
  */
 
+import { and, eq, isNull, lt, sql } from "drizzle-orm";
 import sodium from "libsodium-wrappers";
+import { db } from "./db";
+import { invite as inviteTable, mesh, meshMember } from "@turbostarter/db/schema/mesh";
 
 let ready = false;
 async function ensureSodium(): Promise<typeof sodium> {
@@ -69,6 +72,70 @@ export async function verifyEd25519(
   }
 }
 
+/**
+ * Canonical v2 invite bytes — signed by the mesh owner's ed25519 secret key.
+ * NOTE: deliberately does NOT include the root_key or broker_url; the v2
+ * protocol moves the root_key out of the URL entirely. Format is locked:
+ * `v=2|mesh_id|invite_id|expires_at|role|owner_pubkey` (no trailing newline).
+ */
+export function canonicalInviteV2(p: {
+  mesh_id: string;
+  invite_id: string;
+  expires_at: number; // unix seconds
+  role: "admin" | "member";
+  owner_pubkey: string; // hex
+}): string {
+  return `v=2|${p.mesh_id}|${p.invite_id}|${p.expires_at}|${p.role}|${p.owner_pubkey}`;
+}
+
+/**
+ * Verify an ed25519 signature over the v2 canonical invite bytes against
+ * the mesh owner's public key. Returns true on valid signature.
+ */
+export async function verifyInviteV2(params: {
+  canonical: string;
+  signatureHex: string;
+  ownerPubkeyHex: string;
+}): Promise<boolean> {
+  return verifyEd25519(
+    params.canonical,
+    params.signatureHex,
+    params.ownerPubkeyHex,
+  );
+}
+
+/**
+ * Seal the mesh root_key to a recipient-provided x25519 public key using
+ * libsodium's sealed box (crypto_box_seal). Only the holder of the matching
+ * x25519 secret key can unseal.
+ *
+ *   rootKeyBase64url is the mesh.root_key column value (base64url of 32 bytes).
+ *   recipientX25519PubkeyBase64url is the 32-byte x25519 pubkey the recipient
+ *     provided in its claim request. We do NOT convert an ed25519 pubkey here —
+ *     the recipient generates a dedicated x25519 keypair and sends us the pubkey.
+ *
+ * Returns base64url of the sealed ciphertext.
+ */
+export async function sealRootKeyToRecipient(params: {
+  rootKeyBase64url: string;
+  recipientX25519PubkeyBase64url: string;
+}): Promise<string> {
+  const s = await ensureSodium();
+  const rootKeyBytes = s.from_base64(
+    params.rootKeyBase64url,
+    s.base64_variants.URLSAFE_NO_PADDING,
+  );
+  const recipientPk = s.from_base64(
+    params.recipientX25519PubkeyBase64url,
+    s.base64_variants.URLSAFE_NO_PADDING,
+  );
+  if (recipientPk.length !== 32) {
+    throw new Error("recipient_x25519_pubkey must decode to 32 bytes");
+  }
+  const sealed = s.crypto_box_seal(rootKeyBytes, recipientPk);
+  return s.to_base64(sealed, s.base64_variants.URLSAFE_NO_PADDING);
+}
+
 export const HELLO_SKEW_MS = 60_000;
 
 /**
@@ -117,4 +184,186 @@ export async function verifyHelloSignature(args: {
   } catch {
     return { ok: false, reason: "malformed" };
   }
+}
+
+// ----------------------------------------------------------------------------
+// v2 invite claim core — exported for the HTTP handler in index.ts AND for
+// tests that need to exercise the logic without spinning up the broker server.
+// ----------------------------------------------------------------------------
+//
+// capabilityV2 column is stored as JSON:
+//   { "canonical": "v=2|mesh_id|invite_id|expires_at|role|owner_pubkey",
+//     "signature": "<hex ed25519 detached signature>" }
+// The broker recomputes the canonical bytes from the invite row and verifies
+// the signature against mesh.ownerPubkey. v1 rows (version === 1 OR
+// capabilityV2 === null) skip verification — the legacy path still works
+// during the deprecation window.
+
+export type InviteClaimV2Result =
+  | {
+      ok: true;
+      status: 200;
+      body: {
+        sealed_root_key: string;
+        mesh_id: string;
+        member_id: string;
+        owner_pubkey: string;
+        canonical_v2: string;
+      };
+    }
+  | { ok: false; status: 400 | 404 | 410; body: { error: string } };
+
+export async function claimInviteV2Core(params: {
+  code: string;
+  recipientX25519PubkeyBase64url: string;
+  displayName?: string;
+  now?: number;
+}): Promise<InviteClaimV2Result> {
+  const now = params.now ?? Date.now();
+  const recipientPk = params.recipientX25519PubkeyBase64url;
+
+  if (!recipientPk || typeof recipientPk !== "string" || recipientPk.length < 32) {
+    return { ok: false, status: 400, body: { error: "malformed" } };
+  }
+
+  // 1. Look up the invite by opaque code.
+  const [inv] = await db
+    .select()
+    .from(inviteTable)
+    .where(eq(inviteTable.code, params.code))
+    .limit(1);
+  if (!inv) return { ok: false, status: 404, body: { error: "not_found" } };
+
+  // 2. Lifecycle checks: revoked → expired → exhausted.
+  if (inv.revokedAt) {
+    return { ok: false, status: 410, body: { error: "revoked" } };
+  }
+  if (inv.expiresAt.getTime() < now) {
+    return { ok: false, status: 410, body: { error: "expired" } };
+  }
+  if (inv.usedCount >= inv.maxUses) {
+    return { ok: false, status: 410, body: { error: "exhausted" } };
+  }
+
+  // 3. Load the mesh for owner_pubkey + root_key.
+  const [m] = await db
+    .select({
+      id: mesh.id,
+      ownerPubkey: mesh.ownerPubkey,
+      rootKey: mesh.rootKey,
+    })
+    .from(mesh)
+    .where(and(eq(mesh.id, inv.meshId), isNull(mesh.archivedAt)))
+    .limit(1);
+  if (!m) return { ok: false, status: 404, body: { error: "not_found" } };
+  if (!m.ownerPubkey || !m.rootKey) {
+    return { ok: false, status: 400, body: { error: "malformed" } };
+  }
+
+  // 4. Compute canonical_v2 from the row (used in the response either way).
+  const expiresAtUnix = Math.floor(inv.expiresAt.getTime() / 1000);
+  const canonical = canonicalInviteV2({
+    mesh_id: inv.meshId,
+    invite_id: inv.id,
+    expires_at: expiresAtUnix,
+    role: inv.role as "admin" | "member",
+    owner_pubkey: m.ownerPubkey,
+  });
+
+  if (inv.version === 2 && inv.capabilityV2) {
+    let storedCanonical: string | undefined;
+    let signatureHex: string | undefined;
+    try {
+      const parsed = JSON.parse(inv.capabilityV2) as {
+        canonical?: string;
+        signature?: string;
+      };
+      storedCanonical = parsed.canonical;
+      signatureHex = parsed.signature;
+    } catch {
+      return { ok: false, status: 400, body: { error: "malformed" } };
+    }
+    if (!storedCanonical || !signatureHex) {
+      return { ok: false, status: 400, body: { error: "malformed" } };
+    }
+    // Broker-recomputed canonical must match the signed bytes exactly.
+    if (storedCanonical !== canonical) {
+      return { ok: false, status: 400, body: { error: "bad_signature" } };
+    }
+    const sigOk = await verifyInviteV2({
+      canonical: storedCanonical,
+      signatureHex,
+      ownerPubkeyHex: m.ownerPubkey,
+    });
+    if (!sigOk) {
+      return { ok: false, status: 400, body: { error: "bad_signature" } };
+    }
+  }
+  // v1 rows: skip signature verification (legacy path during migration).
+
+  // 5. Atomic consume: increment used_count iff still under max_uses.
+  const [claimed] = await db
+    .update(inviteTable)
+    .set({
+      usedCount: sql`${inviteTable.usedCount} + 1`,
+      claimedByPubkey: recipientPk,
+    })
+    .where(
+      and(
+        eq(inviteTable.id, inv.id),
+        lt(inviteTable.usedCount, inv.maxUses),
+      ),
+    )
+    .returning({ id: inviteTable.id });
+  if (!claimed) {
+    return { ok: false, status: 410, body: { error: "exhausted" } };
+  }
+
+  // 6. Create a member row for the claimant.
+  const preset = (inv.preset as {
+    displayName?: string;
+    roleTag?: string;
+    groups?: Array<{ name: string; role?: string }>;
+    messageMode?: string;
+  } | null) ?? {};
+  const displayName =
+    preset.displayName ?? params.displayName ?? `member-${recipientPk.slice(0, 8)}`;
+  const [row] = await db
+    .insert(meshMember)
+    .values({
+      meshId: inv.meshId,
+      peerPubkey: recipientPk,
+      displayName,
+      role: inv.role,
+      roleTag: preset.roleTag ?? null,
+      defaultGroups: preset.groups ?? [],
+      messageMode: preset.messageMode ?? "push",
+    })
+    .returning({ id: meshMember.id });
+  if (!row) {
+    return { ok: false, status: 400, body: { error: "malformed" } };
+  }
+
+  // 7. Seal the mesh root_key to the recipient's x25519 pubkey.
+  let sealed: string;
+  try {
+    sealed = await sealRootKeyToRecipient({
+      rootKeyBase64url: m.rootKey,
+      recipientX25519PubkeyBase64url: recipientPk,
+    });
+  } catch {
+    return { ok: false, status: 400, body: { error: "malformed" } };
+  }
+
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      sealed_root_key: sealed,
+      mesh_id: inv.meshId,
+      member_id: row.id,
+      owner_pubkey: m.ownerPubkey,
+      canonical_v2: canonical,
+    },
+  };
 }
