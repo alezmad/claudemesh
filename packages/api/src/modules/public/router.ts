@@ -12,6 +12,10 @@ import {
 } from "@turbostarter/db/schema";
 import { db } from "@turbostarter/db/server";
 
+import { validate } from "../../middleware";
+import { claimInviteInputSchema } from "../../schema";
+import { brokerHttpBase } from "../mesh/mutations";
+
 /**
  * Unauthed public stats for the landing page counter.
  *
@@ -255,6 +259,60 @@ export const publicRouter = new Hono()
     }
     return c.json({ found: true as const, token: row.token });
   })
+  /**
+   * v2 invite claim — proxies straight to the broker.
+   *
+   * The broker owns all claim logic (signature verification, atomic
+   * used_count increment, crypto_box_seal of the root key to the
+   * recipient pubkey). The API layer only forwards the request and
+   * mirrors the broker's status + body so CLI/web clients can speak
+   * a single contract regardless of which host serves the claim.
+   *
+   * Error codes are the broker's: 400 malformed|bad_signature,
+   * 404 not_found, 410 expired|revoked|exhausted.
+   */
+  .post(
+    "/invites/:code/claim",
+    validate("json", claimInviteInputSchema),
+    async (c) => {
+      c.header("cache-control", "no-store");
+      const code = c.req.param("code");
+      const body = c.req.valid("json");
+      const url = `${brokerHttpBase()}/invites/${encodeURIComponent(code)}/claim`;
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            recipient_x25519_pubkey: body.recipient_x25519_pubkey,
+          }),
+        });
+        // Pass through status and body verbatim; broker already shapes
+        // the error envelope the way the spec documents.
+        const text = await resp.text();
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          parsed = { error: "upstream_malformed" };
+        }
+        // Hono's c.json only accepts a subset of status codes; cast
+        // through ContentfulStatusCode for the passthrough.
+        return c.json(
+          parsed as Record<string, unknown>,
+          resp.status as 200 | 400 | 404 | 410 | 500,
+        );
+      } catch (e) {
+        return c.json(
+          {
+            error: "broker_unreachable",
+            detail: e instanceof Error ? e.message : String(e),
+          },
+          502,
+        );
+      }
+    },
+  )
   .get("/stats", async (c) => {
   const now = Date.now();
   if (cachedStats && cachedStats.expiresAt > now) {

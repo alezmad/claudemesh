@@ -26,6 +26,15 @@ export interface JoinedMesh {
   secretKey: string; // ed25519 hex (64 bytes = 128 chars)
   brokerUrl: string;
   joinedAt: string;
+  /**
+   * Mesh root key (32 bytes) as URL-safe base64url, no padding.
+   * Present for v2 invite joins (sealed then unsealed client-side).
+   * Absent for v1 joins, where the root key lives inside the saved
+   * invite token on disk instead. Used by channel/group `crypto_secretbox`.
+   */
+  rootKey?: string;
+  /** Invite protocol version used to join. `2` for v2, omitted/`1` for legacy. */
+  inviteVersion?: 1 | 2;
 }
 
 export interface GroupEntry {

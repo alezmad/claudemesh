@@ -130,8 +130,55 @@ export const createMyInviteResponseSchema = z.object({
   joinUrl: z.string(),
   shortUrl: z.string().nullable(),
   expiresAt: z.coerce.date(),
+  // v2 fields — present on every new invite. v1-only rows will return
+  // these as undefined on the legacy list endpoint; new rows always set
+  // them because createMyInvite now mints v2 capabilities by default.
+  version: z.literal(2).optional(),
+  canonicalV2: z.string().optional(),
+  ownerPubkey: z.string().optional(),
 });
 export type CreateMyInviteResponse = z.infer<typeof createMyInviteResponseSchema>;
+
+// ---------------------------------------------------------------------
+// Email invites
+// ---------------------------------------------------------------------
+
+export const createEmailInviteInputSchema = z.object({
+  email: z.string().email(),
+  role: meshRoleEnum.default("member"),
+  maxUses: z.number().int().min(1).max(1000).default(1),
+  expiresInDays: z.number().int().min(1).max(365).default(7),
+});
+export type CreateEmailInviteInput = z.infer<typeof createEmailInviteInputSchema>;
+
+export const createEmailInviteResponseSchema = z.object({
+  pendingInviteId: z.string(),
+  code: z.string(),
+  email: z.string(),
+  shortUrl: z.string(),
+  expiresAt: z.coerce.date(),
+});
+export type CreateEmailInviteResponse = z.infer<
+  typeof createEmailInviteResponseSchema
+>;
+
+// ---------------------------------------------------------------------
+// v2 invite claim (public, proxies to broker)
+// ---------------------------------------------------------------------
+
+export const claimInviteInputSchema = z.object({
+  recipient_x25519_pubkey: z.string().min(32),
+});
+export type ClaimInviteInput = z.infer<typeof claimInviteInputSchema>;
+
+export const claimInviteResponseSchema = z.object({
+  sealed_root_key: z.string(),
+  mesh_id: z.string(),
+  member_id: z.string(),
+  owner_pubkey: z.string(),
+  canonical_v2: z.string(),
+});
+export type ClaimInviteResponse = z.infer<typeof claimInviteResponseSchema>;
 
 // ---------------------------------------------------------------------
 // List my invites (pending + sent)

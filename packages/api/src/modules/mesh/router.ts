@@ -4,6 +4,7 @@ import type { User } from "@turbostarter/auth";
 
 import { enforceAuth, validate } from "../../middleware";
 import {
+  createEmailInviteInputSchema,
   createMyInviteInputSchema,
   createMyMeshInputSchema,
   getMyMeshesInputSchema,
@@ -11,6 +12,7 @@ import {
 
 import {
   archiveMyMesh,
+  createEmailInvite,
   createMyInvite,
   createMyMesh,
   leaveMyMesh,
@@ -83,6 +85,31 @@ export const myRouter = new Hono<Env>()
           {
             error:
               e instanceof Error ? e.message : "Failed to create invite.",
+          },
+          400,
+        );
+      }
+    },
+  )
+  .post(
+    "/meshes/:id/invites/email",
+    validate("json", createEmailInviteInputSchema),
+    async (c) => {
+      const user = c.var.user;
+      try {
+        const result = await createEmailInvite({
+          userId: user.id,
+          meshId: c.req.param("id"),
+          input: c.req.valid("json"),
+        });
+        return c.json(result);
+      } catch (e) {
+        return c.json(
+          {
+            error:
+              e instanceof Error
+                ? e.message
+                : "Failed to send email invite.",
           },
           400,
         );

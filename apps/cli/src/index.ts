@@ -331,9 +331,27 @@ const main = defineCommand({
       },
     }),
   },
-  run() {
-    runWelcome();
+  async run() {
+    await runWelcome();
   },
 });
+
+// Friction reducer: if the user types `claudemesh --resume xxx` or any other
+// flag-first invocation, route it through `launch`. This keeps `claudemesh`
+// bare (welcome screen), `claudemesh <known-sub>` (dispatch normally), and
+// every flag-only form as implicit `launch`.
+const KNOWN_SUBCOMMANDS = new Set(Object.keys(main.subCommands ?? {}));
+// Flags citty handles on the root command — must not be rewritten to `launch`.
+const ROOT_PASSTHROUGH_FLAGS = new Set(["--help", "-h", "--version", "-v"]);
+
+const argv = process.argv.slice(2);
+const first = argv[0];
+if (first && !ROOT_PASSTHROUGH_FLAGS.has(first) && !KNOWN_SUBCOMMANDS.has(first)) {
+  // Starts with a flag, or an unknown bareword → treat as launch args.
+  // (Unknown barewords that look like typos would otherwise hit citty's
+  // "unknown command" path; forwarding to launch lets claude surface the
+  // error if it's a real claude flag, and launch's own parser rejects junk.)
+  process.argv.splice(2, 0, "launch");
+}
 
 runMain(main);

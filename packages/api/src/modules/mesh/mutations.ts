@@ -3,10 +3,11 @@ import { randomBytes } from "node:crypto";
 import sodium from "libsodium-wrappers";
 
 import { and, eq, isNull } from "@turbostarter/db";
-import { invite, mesh, meshMember } from "@turbostarter/db/schema";
+import { invite, mesh, meshMember, pendingInvite } from "@turbostarter/db/schema";
 import { db } from "@turbostarter/db/server";
 
 import type {
+  CreateEmailInviteInput,
   CreateMyInviteInput,
   CreateMyMeshInput,
 } from "../../schema";
@@ -31,6 +32,40 @@ const canonicalInvite = (p: {
   owner_pubkey: string;
 }): string =>
   `${p.v}|${p.mesh_id}|${p.mesh_slug}|${p.broker_url}|${p.expires_at}|${p.mesh_root_key}|${p.role}|${p.owner_pubkey}`;
+
+/**
+ * v2 canonical invite bytes — format is LOCKED and MUST match
+ * `canonicalInviteV2` in apps/broker/src/crypto.ts exactly. The broker
+ * recomputes this on every claim and compares byte-for-byte against the
+ * signed `capabilityV2.canonical` stored on the invite row. Any drift
+ * between this string and the broker's version produces `bad_signature`.
+ *
+ * No root_key and no broker_url: the v2 protocol moves the root_key out
+ * of the URL and the broker is the authority for where the key lives.
+ */
+const canonicalInviteV2 = (p: {
+  mesh_id: string;
+  invite_id: string;
+  expires_at: number; // unix seconds
+  role: "admin" | "member";
+  owner_pubkey: string; // hex
+}): string =>
+  `v=2|${p.mesh_id}|${p.invite_id}|${p.expires_at}|${p.role}|${p.owner_pubkey}`;
+
+/**
+ * Derive the broker's HTTP base URL from the configured WebSocket URL.
+ * `wss://host/ws` → `https://host`, `ws://host/ws` → `http://host`.
+ * The claim endpoint lives at `${base}/invites/:code/claim`.
+ */
+export const brokerHttpBase = (): string => {
+  const wsUrl = BROKER_URL;
+  const httpUrl = wsUrl
+    .replace(/^wss:\/\//, "https://")
+    .replace(/^ws:\/\//, "http://")
+    .replace(/\/ws\/?$/, "")
+    .replace(/\/$/, "");
+  return httpUrl;
+};
 
 let sodiumReady = false;
 const ensureSodium = async (): Promise<typeof sodium> => {
@@ -260,6 +295,10 @@ export const createMyInvite = async ({
           role: input.role,
           expiresAt,
           createdBy: userId,
+          // v2 starts here — capabilityV2 is backfilled below in a second
+          // UPDATE because the canonical bytes depend on invite.id which
+          // we only know post-insert.
+          version: 2,
         })
         .returning({
           id: invite.id,
@@ -282,6 +321,34 @@ export const createMyInvite = async ({
     throw new Error("Could not allocate a unique invite code — retry.");
   }
 
+  // --- v2 capability: sign canonical bytes that include the invite id ---
+  // The broker recomputes these exact bytes on claim and verifies the
+  // signature against mesh.ownerPubkey. Stored shape is the JSON literal
+  // the broker expects in `invite.capabilityV2`:
+  //   { "canonical": "v=2|...", "signature": "<hex>" }
+  // We reuse the existing `capabilityV2` text column — no schema change.
+  const canonicalV2 = canonicalInviteV2({
+    mesh_id: meshRow.id,
+    invite_id: created.id,
+    expires_at: expiresAtSec,
+    role: input.role,
+    owner_pubkey: meshRow.ownerPubkey,
+  });
+  const signatureV2 = s.to_hex(
+    s.crypto_sign_detached(
+      s.from_string(canonicalV2),
+      s.from_hex(meshRow.ownerSecretKey),
+    ),
+  );
+  const capabilityV2Json = JSON.stringify({
+    canonical: canonicalV2,
+    signature: signatureV2,
+  });
+  await db
+    .update(invite)
+    .set({ capabilityV2: capabilityV2Json })
+    .where(eq(invite.id, created.id));
+
   const appBase = APP_URL.replace(/\/$/, "");
   return {
     id: created.id,
@@ -294,5 +361,111 @@ export const createMyInvite = async ({
     // Prefer this when sharing. See spec for why this is NOT a capability
     // boundary (the long token still carries the root_key).
     shortUrl: created.code ? `${appBase}/i/${created.code}` : null,
+    // v2 surface: safe to share (no root_key, no secrets).
+    version: 2 as const,
+    canonicalV2,
+    ownerPubkey: meshRow.ownerPubkey,
   };
+};
+
+// ---------------------------------------------------------------------
+// Email invites (v2 only)
+// ---------------------------------------------------------------------
+
+/**
+ * Send a mesh invite by email. Mints a normal v2 invite (same short code
+ * path as `createMyInvite`), then records a `pending_invite` row tying
+ * `(mesh, email)` to the underlying invite code. Delivery goes through
+ * the email provider if one is wired; otherwise we log a TODO and
+ * return success so the rest of the flow is testable end-to-end.
+ *
+ * The email body contains `${APP_URL}/i/${code}` — the exact same short
+ * URL that link-shares use. No new user-visible surface.
+ */
+export const createEmailInvite = async ({
+  userId,
+  meshId,
+  input,
+}: {
+  userId: string;
+  meshId: string;
+  input: CreateEmailInviteInput;
+}) => {
+  // Reuse createMyInvite — all authz, signing, and short-code collision
+  // logic lives there. We only add the pending_invite row + email send.
+  const minted = await createMyInvite({
+    userId,
+    meshId,
+    input: {
+      role: input.role,
+      maxUses: input.maxUses,
+      expiresInDays: input.expiresInDays,
+    },
+  });
+
+  if (!minted.code) {
+    // Should never happen — createMyInvite always allocates a code now.
+    throw new Error("Could not mint an email invite (no short code).");
+  }
+
+  const [pending] = await db
+    .insert(pendingInvite)
+    .values({
+      meshId,
+      email: input.email,
+      code: minted.code,
+      createdBy: userId,
+    })
+    .returning({ id: pendingInvite.id });
+
+  if (!pending) {
+    throw new Error("Could not record pending invite row.");
+  }
+
+  const appBase = APP_URL.replace(/\/$/, "");
+  const shortUrl = `${appBase}/i/${minted.code}`;
+
+  // Fire-and-forget-ish send. Failures are logged but do NOT roll back
+  // the invite — the admin can copy the short URL from the dashboard.
+  await sendEmailInvite({
+    to: input.email,
+    shortUrl,
+    inviterUserId: userId,
+    meshId,
+  });
+
+  return {
+    pendingInviteId: pending.id,
+    code: minted.code,
+    email: input.email,
+    shortUrl,
+    expiresAt: minted.expiresAt,
+  };
+};
+
+/**
+ * Deliver the email that carries a `claudemesh.com/i/{code}` short URL.
+ *
+ * TODO: wire this to the turbostarter Postmark provider. The email
+ * package exposes `sendEmail` via a template system; adding a new
+ * template file lives in `packages/email/**` which is out of scope for
+ * this wave. For now we log the intended send so the upstream mutation
+ * resolves cleanly and the rest of the flow is integration-testable.
+ */
+const sendEmailInvite = async (params: {
+  to: string;
+  shortUrl: string;
+  inviterUserId: string;
+  meshId: string;
+}): Promise<void> => {
+  // eslint-disable-next-line no-console
+  console.warn(
+    "[claudemesh] TODO: wire email invite to Postmark provider",
+    {
+      to: params.to,
+      shortUrl: params.shortUrl,
+      inviterUserId: params.inviterUserId,
+      meshId: params.meshId,
+    },
+  );
 };
