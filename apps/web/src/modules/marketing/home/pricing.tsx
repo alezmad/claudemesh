@@ -136,6 +136,36 @@ export const Pricing = () => {
             </div>
           </div>
         </Reveal>
+
+        {/* Enterprise tier */}
+        <Reveal delay={4}>
+          <div className="mx-auto mt-6 max-w-[720px] rounded-[var(--cm-radius-md)] border border-dashed border-[var(--cm-border)] p-6 md:p-8">
+            <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3
+                  className="text-[18px] font-medium text-[var(--cm-fg)]"
+                  style={{ fontFamily: "var(--cm-font-serif)" }}
+                >
+                  Enterprise
+                </h3>
+                <p
+                  className="mt-1 text-[13px] leading-[1.5] text-[var(--cm-fg-secondary)]"
+                  style={{ fontFamily: "var(--cm-font-sans)" }}
+                >
+                  Self-hosted broker. SSO. Custom SAML. Dedicated support.
+                  Air-gapped deployment. SLA.
+                </p>
+              </div>
+              <a
+                href="mailto:info@claudemesh.com"
+                className="inline-flex shrink-0 items-center gap-2 rounded-[var(--cm-radius-xs)] border border-[var(--cm-fg-tertiary)] px-5 py-2.5 text-sm font-medium text-[var(--cm-fg)] transition-colors hover:border-[var(--cm-fg)] hover:bg-[var(--cm-bg-elevated)]"
+                style={{ fontFamily: "var(--cm-font-sans)" }}
+              >
+                Contact sales
+              </a>
+            </div>
+          </div>
+        </Reveal>
       </div>
     </section>
   );
