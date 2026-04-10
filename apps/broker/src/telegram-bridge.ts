@@ -21,6 +21,7 @@ import { validateTelegramConnectToken } from "./telegram-token";
 export interface BridgeRow {
   chatId: number;
   meshId: string;
+  meshSlug?: string;
   memberId: string;
   pubkey: string;
   secretKey: string;
@@ -510,6 +511,9 @@ const meshChats = new Map<string, Set<number>>();
 /** meshId → shared WS connection */
 const meshConnections = new Map<string, MeshConnection>();
 
+/** meshId → slug (human-readable name) */
+const meshSlugs = new Map<string, string>();
+
 // Pending DM picker state: chatId → { message, matches, meshId }
 const pendingDMs = new Map<
   number,
@@ -809,6 +813,7 @@ function setupBotCommands(
       );
 
       linkChatMesh(chatId, meshId);
+      if (meshSlug) meshSlugs.set(meshId, meshSlug);
 
       await ctx.reply(
         `✅ Connected to mesh *${escapeMarkdown(meshSlug ?? meshId.slice(0, 8))}*\\!`,
@@ -909,7 +914,7 @@ function setupBotCommands(
     const lines = meshIds.map((id) => {
       const conn = meshConnections.get(id);
       const status = conn?.isConnected() ? "🟢" : "🔴";
-      return `${status} \`${id.slice(0, 16)}\``;
+      return `${status} \`${meshSlugs.get(id) ?? id.slice(0, 12)}\``;
     });
     await ctx.reply(`*Connected meshes:*\n${lines.join("\n")}`, {
       parse_mode: "Markdown",
@@ -1104,7 +1109,7 @@ function setupBotCommands(
     const lines = meshIds.map((id) => {
       const conn = meshConnections.get(id);
       const icon = conn?.isConnected() ? "🟢" : "🔴";
-      return `${icon} \`${id.slice(0, 16)}\``;
+      return `${icon} \`${meshSlugs.get(id) ?? id.slice(0, 12)}\``;
     });
     await ctx.reply(
       `*Claudemesh Telegram Bridge*\n${lines.join("\n")}`,
@@ -1624,9 +1629,10 @@ export async function bootTelegramBridge(
       );
     }
 
-    // Populate routing maps for all chats in this mesh
+    // Populate routing maps and slug cache for all chats in this mesh
     for (const row of meshRows) {
       linkChatMesh(row.chatId, meshId);
+      if (row.meshSlug) meshSlugs.set(meshId, row.meshSlug);
     }
   }
 

@@ -4124,14 +4124,17 @@ function main(): void {
         const rows = await db.select({
           chatId: telegramBridge.chatId,
           meshId: telegramBridge.meshId,
+          meshSlug: mesh.slug,
           memberId: telegramBridge.memberId,
           pubkey: telegramBridge.pubkey,
           secretKey: telegramBridge.secretKey,
           displayName: telegramBridge.displayName,
           chatType: telegramBridge.chatType,
           chatTitle: telegramBridge.chatTitle,
-        }).from(telegramBridge).where(eq(telegramBridge.active, true));
-        return rows.map(r => ({ ...r, chatId: Number(r.chatId) }));
+        }).from(telegramBridge)
+          .leftJoin(mesh, eq(telegramBridge.meshId, mesh.id))
+          .where(eq(telegramBridge.active, true));
+        return rows.map(r => ({ ...r, meshSlug: r.meshSlug ?? undefined, chatId: Number(r.chatId) }));
       },
       async (row) => {
         await db.insert(telegramBridge).values({
@@ -4170,12 +4173,7 @@ function main(): void {
         const byUserId = await db.select({ meshId: meshMember.meshId })
           .from(meshMember).where(and(eq(meshMember.userId, userId), isNull(meshMember.revokedAt)));
         for (const m of byUserId) meshIds.add(m.meshId);
-        // Fallback: if user has no members, check all meshes (owner bootstraps)
-        if (meshIds.size === 0) {
-          const allMeshes = await db.select({ id: mesh.id }).from(mesh);
-          for (const m of allMeshes) meshIds.add(m.id);
-          log.info("tg-email-connect: no member found, trying all meshes", { email, userId, meshCount: meshIds.size });
-        }
+        // No fallback — user must be an explicit member of a mesh
         if (meshIds.size === 0) return [];
         const existingMembers = Array.from(meshIds).map(meshId => ({ meshId }));
 
