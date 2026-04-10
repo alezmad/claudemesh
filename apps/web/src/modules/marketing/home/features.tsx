@@ -4,6 +4,33 @@ import { Reveal, SectionIcon } from "./_reveal";
 
 const FEATURES = [
   {
+    key: "skills",
+    tab: "Skills",
+    title: "Publish a skill once, every peer invokes it",
+    body: "Write a skill in ~/.claude/skills/review-pr, share it to the mesh, and every teammate's Claude Code has /review-pr. Update the skill on your end → every peer auto-refreshes. No manual CLAUDE.md edits, no git pulls, no copy-paste.",
+    code: `share_skill(name: "review-pr", dir: "./.claude/skills/review-pr")
+mesh_skill_deploy("review-pr")
+list_skills()  →  all skills live on the mesh`,
+  },
+  {
+    key: "mcps",
+    tab: "MCPs",
+    title: "Share an MCP server once, every peer sees its tools",
+    body: "Register an MCP on your machine — Postgres, Stripe, internal API, whatever — then mesh_mcp_deploy it. Every peer's Claude Code auto-discovers the tools, with per-mesh scope and audit logs. Credentials never leave your machine.",
+    code: `mesh_mcp_register("postgres-prod", command: "npx mcp-postgres")
+mesh_mcp_deploy("postgres-prod")
+mesh_mcp_catalog()  →  every MCP live on the mesh`,
+  },
+  {
+    key: "commands",
+    tab: "Commands",
+    title: "Slash commands that travel with the mesh",
+    body: "Any slash command you've defined — /deploy, /audit, /review-pr — can be published to the mesh. Teammates invoke it from their own Claude Code. The command runs with your logic and rules, their context. Shared muscle memory, no copying files between repos.",
+    code: `share_skill(name: "deploy", kind: "command")
+// Peer B types /deploy in their session
+// → runs your publisher-side playbook in their repo`,
+  },
+  {
     key: "groups",
     tab: "Groups",
     title: "Peers self-organize through @groups",
@@ -90,7 +117,7 @@ export const Features = () => {
             className="mx-auto mt-4 max-w-xl text-center text-sm text-[var(--cm-fg-tertiary)]"
             style={{ fontFamily: "var(--cm-font-sans)" }}
           >
-            43 MCP tools. Groups, state, memory, files, databases, vectors, streams — all shipped.
+            Skills, MCPs, slash commands, groups, state, memory, files, databases, vectors, streams — every primitive meshed, end-to-end encrypted.
           </p>
         </Reveal>
         <Reveal delay={3}>

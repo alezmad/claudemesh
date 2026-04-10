@@ -1,5 +1,6 @@
-import { Hero } from "~/modules/marketing/home/hero";
+import { HeroWithMesh } from "~/modules/marketing/home/hero-with-mesh";
 import { Features } from "~/modules/marketing/home/features";
+import { WhereMeshFits } from "~/modules/marketing/home/where-mesh-fits";
 import { WhatIsClaudemesh } from "~/modules/marketing/home/what-is-claudemesh";
 import { Timeline } from "~/modules/marketing/home/timeline";
 import { Pricing } from "~/modules/marketing/home/pricing";
@@ -16,8 +17,9 @@ const HomePage = () => {
       className="bg-[var(--cm-bg)] text-[var(--cm-fg)] antialiased"
       style={{ fontFamily: "var(--cm-font-sans)" }}
     >
-      <Hero />
+      <HeroWithMesh />
       <Features />
+      <WhereMeshFits />
       <WhatIsClaudemesh />
       <Timeline />
       <Pricing />
