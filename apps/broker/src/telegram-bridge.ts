@@ -649,12 +649,12 @@ function createPushHandler(bot: Bot) {
     const chatIds = meshChats.get(meshId);
     if (!chatIds || chatIds.size === 0) return;
 
-    const meshLabel = meshId.slice(0, 12);
-    const formatted = `💬 *[${meshLabel}] ${escapeMarkdown(from)}*\n${escapeMarkdown(text)}`;
+    const meshLabel = meshSlugs.get(meshId) ?? meshId.slice(0, 12);
+    const formatted = `💬 [${meshLabel}] ${from}\n${text}`;
 
     for (const chatId of chatIds) {
       bot.api
-        .sendMessage(chatId, formatted, { parse_mode: "Markdown" })
+        .sendMessage(chatId, formatted)
         .catch((e) => {
           console.error(`[tg-bridge] send to chat ${chatId} failed:`, e.message);
         });
