@@ -13,7 +13,7 @@
  *   6. On exit: cleanup tmpdir
  */
 
-import { spawn } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, writeFileSync, rmSync, readdirSync, statSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir, hostname, homedir } from "node:os";
@@ -128,6 +128,192 @@ async function confirmPermissions(): Promise<void> {
 }
 
 // --- Banner ---
+
+import {
+  bold as tBold, dim as tDim, green as tGreen, orange as tOrange,
+  boldOrange, HIDE_CURSOR, SHOW_CURSOR,
+} from "../tui/colors";
+import {
+  enterFullScreen, exitFullScreen, writeCentered, termSize,
+  drawTopBar, drawBottomBar, menuSelect, textInput, confirmPrompt,
+} from "../tui/screen";
+import { createSpinner, FRAME_HEIGHT } from "../tui/spinner";
+
+interface LaunchWizardResult {
+  mesh: JoinedMesh;
+  role: string | null;
+  groups: GroupEntry[];
+  messageMode: "push" | "inbox" | "off";
+  skipPermissions: boolean;
+}
+
+/**
+ * Full-screen launch wizard — spinning logo + interactive config.
+ * Mesh selection, role, groups, message mode, permissions — all in one TUI.
+ * Falls back to plain text on non-TTY.
+ */
+async function runLaunchWizard(opts: {
+  displayName: string;
+  meshes: JoinedMesh[];
+  selectedMesh: JoinedMesh | null;
+  existingRole: string | null;
+  existingGroups: GroupEntry[];
+  existingMessageMode: "push" | "inbox" | "off" | null;
+  skipPermConfirm: boolean;
+}): Promise<LaunchWizardResult> {
+  if (!process.stdout.isTTY) {
+    return {
+      mesh: opts.selectedMesh ?? opts.meshes[0]!,
+      role: opts.existingRole,
+      groups: opts.existingGroups,
+      messageMode: opts.existingMessageMode ?? "push",
+      skipPermissions: opts.skipPermConfirm,
+    };
+  }
+
+  const { rows } = termSize();
+  enterFullScreen();
+  drawTopBar();
+
+  // Spinning logo centered in upper portion
+  const logoTop = Math.floor((rows - FRAME_HEIGHT - 16) / 2);
+  const brandRow = logoTop + FRAME_HEIGHT + 1;
+  const subtitleRow = brandRow + 1;
+  const formRow = subtitleRow + 2;
+
+  writeCentered(brandRow, boldOrange("claudemesh"));
+  writeCentered(subtitleRow, tDim("peer mesh for Claude Code"));
+
+  const spinner = createSpinner({
+    render(lines) {
+      for (let i = 0; i < lines.length; i++) {
+        writeCentered(logoTop + i, lines[i]!);
+      }
+    },
+    interval: 70,
+  });
+  spinner.start();
+
+  // Show detected info
+  let row = formRow;
+  writeCentered(row, `Directory ${tGreen("✓")} ${process.cwd()}`);
+  row++;
+  writeCentered(row, `Name      ${tGreen("✓")} ${opts.displayName}`);
+  row += 2;
+
+  // Mesh selection
+  let mesh: JoinedMesh;
+  if (opts.selectedMesh) {
+    mesh = opts.selectedMesh;
+    writeCentered(row, `Mesh      ${tGreen("✓")} ${mesh.slug}`);
+    row++;
+  } else if (opts.meshes.length === 1) {
+    mesh = opts.meshes[0]!;
+    writeCentered(row, `Mesh      ${tGreen("✓")} ${mesh.slug}`);
+    row++;
+  } else {
+    spinner.stop();
+    const choice = await menuSelect({
+      title: "Select mesh",
+      items: opts.meshes.map(m => m.slug),
+      row,
+    });
+    mesh = opts.meshes[choice]!;
+    // Redraw as confirmed
+    for (let i = 0; i < opts.meshes.length + 1; i++) {
+      writeCentered(row + i, " ");
+    }
+    writeCentered(row, `Mesh      ${tGreen("✓")} ${mesh.slug}`);
+    spinner.start();
+    row++;
+  }
+
+  row++;
+
+  // Interactive fields
+  let role = opts.existingRole;
+  let groups = opts.existingGroups;
+  let messageMode = opts.existingMessageMode ?? "push" as "push" | "inbox" | "off";
+
+  // Role input
+  if (role === null) {
+    spinner.stop();
+    const answer = await textInput({ label: "Role", row, placeholder: "optional — press Enter to skip" });
+    if (answer) role = answer;
+    spinner.start();
+    row++;
+  } else {
+    writeCentered(row, `Role      ${tGreen("✓")} ${role}`);
+    row++;
+  }
+
+  // Groups input
+  if (groups.length === 0) {
+    spinner.stop();
+    const answer = await textInput({ label: "Groups", row, placeholder: "comma-separated, optional" });
+    if (answer) groups = parseGroupsString(answer);
+    spinner.start();
+    row++;
+  } else {
+    const tags = groups.map(g => `@${g.name}${g.role ? `:${g.role}` : ""}`).join(", ");
+    writeCentered(row, `Groups    ${tGreen("✓")} ${tags}`);
+    row++;
+  }
+
+  // Message mode selection
+  if (opts.existingMessageMode === null) {
+    row++;
+    spinner.stop();
+    const choice = await menuSelect({
+      title: "Message mode",
+      items: [
+        "Push (real-time, peers can interrupt)",
+        "Inbox (held until you check)",
+        "Off (tools only, no messages)",
+      ],
+      row,
+    });
+    messageMode = (["push", "inbox", "off"] as const)[choice];
+    spinner.start();
+    row += 5;
+  } else {
+    writeCentered(row, `Messages  ${tGreen("✓")} ${messageMode}`);
+    row++;
+  }
+
+  // Permissions confirmation
+  let skipPermissions = opts.skipPermConfirm;
+  if (!skipPermissions) {
+    row++;
+    spinner.stop();
+    writeCentered(row, tDim("Claude will run with --dangerously-skip-permissions,"));
+    writeCentered(row + 1, tDim("bypassing ALL permission prompts — not just claudemesh."));
+    row += 3;
+    const confirmed = await confirmPrompt({
+      message: boldOrange("Autonomous mode?"),
+      row,
+      defaultYes: true,
+    });
+    if (!confirmed) {
+      exitFullScreen();
+      console.log("  Run without autonomous mode:");
+      console.log("    claude --dangerously-load-development-channels server:claudemesh\n");
+      process.exit(0);
+    }
+    skipPermissions = true;
+    spinner.start();
+  }
+
+  // Final animation
+  row += 2;
+  writeCentered(row, tDim("Launching Claude Code..."));
+
+  await new Promise(r => setTimeout(r, 800));
+  spinner.stop();
+  exitFullScreen();
+
+  return { mesh, role, groups, messageMode, skipPermissions };
+}
 
 function printBanner(name: string, meshSlug: string, role: string | null, groups: GroupEntry[], messageMode: "push" | "inbox" | "off"): void {
   const useColor =
@@ -299,6 +485,7 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     process.exit(1);
   }
 
+  // Resolve mesh — by flag, auto (if 1), or defer to wizard (if >1)
   let mesh: JoinedMesh;
   if (args.meshSlug) {
     const found = config.meshes.find((m) => m.slug === args.meshSlug);
@@ -309,43 +496,38 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
       process.exit(1);
     }
     mesh = found;
+  } else if (config.meshes.length === 1) {
+    mesh = config.meshes[0]!;
   } else {
-    mesh = await pickMesh(config.meshes);
+    // Multiple meshes — wizard will handle selection
+    mesh = null as unknown as JoinedMesh; // set by wizard below
   }
 
-  // 3. Session identity + role/groups.
-  //    The WS client auto-generates a per-session ephemeral keypair on
-  //    connect (sent in hello as sessionPubkey). We set display name via env var.
+  // 3. Session identity + role/groups via TUI wizard.
   const displayName = args.name ?? `${hostname()}-${process.pid}`;
 
-  // Interactive wizard for role & groups (when not provided via flags and not --quiet).
   let role: string | null = args.role;
   let parsedGroups: GroupEntry[] = args.groups ? parseGroupsString(args.groups) : [];
-
   let messageMode: "push" | "inbox" | "off" = args.messageMode ?? "push";
 
   if (!args.quiet && !justSynced) {
-    if (role === null) {
-      const answer = await askLine("  Role (optional): ");
-      if (answer) role = answer;
-    }
-    if (parsedGroups.length === 0 && args.groups === null) {
-      const answer = await askLine("  Groups (comma-separated, optional): ");
-      if (answer) parsedGroups = parseGroupsString(answer);
-    }
-    if (args.messageMode === null) {
-      console.log("\n  Message mode:");
-      console.log("    1) Push (real-time, peers can interrupt your work)");
-      console.log("    2) Inbox (held until you check, notification only)");
-      console.log("    3) Off (tools only, no messages)");
-      console.log("");
-      const answer = await askLine("  Choice [1]: ");
-      const choice = parseInt(answer || "1", 10);
-      if (choice === 2) messageMode = "inbox";
-      else if (choice === 3) messageMode = "off";
-      else messageMode = "push";
-    }
-    if (role || parsedGroups.length) console.log("");
+    const wizardResult = await runLaunchWizard({
+      displayName,
+      meshes: config.meshes,
+      selectedMesh: mesh ?? null,
+      existingRole: args.role,
+      existingGroups: parsedGroups,
+      existingMessageMode: args.messageMode ?? null,
+      skipPermConfirm: args.skipPermConfirm,
+    });
+    mesh = wizardResult.mesh;
+    role = wizardResult.role;
+    parsedGroups = wizardResult.groups;
+    messageMode = wizardResult.messageMode;
+    args.skipPermConfirm = wizardResult.skipPermissions;
+  } else if (!mesh) {
+    // Quiet mode + multiple meshes — fall back to old picker
+    mesh = await pickMesh(config.meshes);
   }
 
   // Clean up orphaned tmpdirs from crashed sessions (older than 1 hour)
@@ -425,13 +607,9 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     "utf-8",
   );
 
-  // 5. Banner + permission confirmation.
+  // 5. Print summary banner (wizard already handled all interactive config).
   if (!args.quiet) {
     printBanner(displayName, mesh.slug, role, parsedGroups, messageMode);
-    // Auto-permissions confirmation — needed for autonomous peer messaging.
-    if (!args.skipPermConfirm) {
-      await confirmPermissions();
-    }
   }
 
   // --- Install native MCP entries for deployed mesh services ---
@@ -518,22 +696,24 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     ...filtered,
   ];
 
+  // Resolve the full path to `claude` — when launched from a non-interactive
+  // shell (e.g. nvm node shebang), ~/.local/bin may not be in PATH.
   const isWindows = process.platform === "win32";
-  const child = spawn("claude", claudeArgs, {
-    stdio: "inherit",
-    shell: isWindows,
-    env: {
-      ...process.env,
-      CLAUDEMESH_CONFIG_DIR: tmpDir,
-      CLAUDEMESH_DISPLAY_NAME: displayName,
-      ...(claudeSessionId ? { CLAUDEMESH_SESSION_ID: claudeSessionId } : {}),
-      MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? "30000",
-      MAX_MCP_OUTPUT_TOKENS: process.env.MAX_MCP_OUTPUT_TOKENS ?? "50000",
-      ...(role ? { CLAUDEMESH_ROLE: role } : {}),
-    },
-  });
+  let claudeBin = "claude";
+  if (!isWindows) {
+    const candidates = [
+      join(homedir(), ".local", "bin", "claude"),
+      "/usr/local/bin/claude",
+      join(homedir(), ".claude", "bin", "claude"),
+    ];
+    for (const c of candidates) {
+      if (existsSync(c)) { claudeBin = c; break; }
+    }
+  }
 
-  // 7. Cleanup on exit.
+  // 7. Define cleanup — runs on every exit path via process.on('exit').
+  //    Synchronous-only (rmSync + writeFileSync) so it works inside the
+  //    'exit' event, which does not allow async work.
   const cleanup = (): void => {
     // Remove mesh MCP entries from ~/.claude.json
     if (meshMcpEntries.length > 0) {
@@ -548,36 +728,90 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
         writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2) + "\n", "utf-8");
       } catch { /* best effort */ }
     }
-    // Existing tmpdir cleanup
+    // Ephemeral config dir
     try {
       rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      /* best effort */
-    }
+    } catch { /* best effort */ }
   };
 
-  child.on("error", (err: NodeJS.ErrnoException) => {
-    cleanup();
+  // Register cleanup on every exit path — including normal exit, uncaught
+  // throws, and fatal signals. process.on('exit') fires synchronously, which
+  // is what the rmSync + writeFileSync above need.
+  process.on("exit", cleanup);
+
+  // 8. Hard-reset the TTY before handing control to claude.
+  //
+  // Every interactive element in the pre-launch flow — the full-screen
+  // wizard (tui/screen.ts), the permission confirmation, the callback-
+  // listener paste prompt, the mesh picker — attaches listeners to
+  // process.stdin, toggles raw mode, hides the cursor, and sometimes
+  // enters the alt-screen. Those helpers do best-effort cleanup in their
+  // own finally blocks, but any leak — an orphaned 'data' listener, a
+  // still-raw TTY, a pending render paint — means the parent node process
+  // keeps competing with claude's Ink TUI for the same keystrokes and
+  // stdout frames. Symptoms: dropped keystrokes at the claude prompt, or
+  // the wizard visibly repainting on top of claude after launch.
+  //
+  // Defensive reset here is cheap and guarantees a clean TTY regardless
+  // of what the wizard helpers did or didn't restore.
+  if (process.stdin.isTTY) {
+    try { process.stdin.setRawMode(false); } catch { /* not a TTY under some parents */ }
+  }
+  process.stdin.removeAllListeners("data");
+  process.stdin.removeAllListeners("keypress");
+  process.stdin.removeAllListeners("readable");
+  process.stdin.pause();
+  if (process.stdout.isTTY) {
+    process.stdout.write("\x1b[?25h");   // show cursor
+    process.stdout.write("\x1b[?1049l"); // exit alt-screen if any wizard step entered it
+  }
+
+  // 9. Block-and-wait on claude with spawnSync.
+  //
+  // Why spawnSync instead of spawn + child.on('exit'):
+  //   - spawn keeps the parent node event loop running alongside claude.
+  //     Any stray listener, setImmediate, or async wizard tail-end can
+  //     still fire during claude's lifetime, stealing input or painting
+  //     over claude's TUI.
+  //   - spawnSync blocks the parent event loop completely until claude
+  //     exits. No listeners fire. Nothing paints. The parent is effectively
+  //     suspended, and claude has exclusive ownership of the TTY.
+  //
+  // Signal forwarding: claude inherits the TTY process group via
+  // stdio: "inherit". When the user hits Ctrl-C, the terminal sends
+  // SIGINT to the whole group. Claude handles it (Ink unmounts, exits
+  // cleanly); spawnSync returns with result.signal='SIGINT'. We re-raise
+  // the same signal on the parent so it dies the same way.
+  const result = spawnSync(claudeBin, claudeArgs, {
+    stdio: "inherit",
+    shell: isWindows,
+    env: {
+      ...process.env,
+      CLAUDEMESH_CONFIG_DIR: tmpDir,
+      CLAUDEMESH_DISPLAY_NAME: displayName,
+      ...(claudeSessionId ? { CLAUDEMESH_SESSION_ID: claudeSessionId } : {}),
+      MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? "30000",
+      MAX_MCP_OUTPUT_TOKENS: process.env.MAX_MCP_OUTPUT_TOKENS ?? "50000",
+      ...(role ? { CLAUDEMESH_ROLE: role } : {}),
+    },
+  });
+
+  // 10. Handle the result. Cleanup runs automatically via process.on('exit').
+  if (result.error) {
+    const err = result.error as NodeJS.ErrnoException;
     if (err.code === "ENOENT") {
-      console.error(
-        "✗ `claude` not found on PATH. Install Claude Code first.",
-      );
+      console.error("✗ `claude` not found on PATH. Install Claude Code first.");
     } else {
       console.error(`✗ failed to launch claude: ${err.message}`);
     }
     process.exit(1);
-  });
+  }
 
-  child.on("exit", (code, signal) => {
-    cleanup();
-    if (signal) {
-      process.kill(process.pid, signal);
-      return;
-    }
-    process.exit(code ?? 0);
-  });
+  if (result.signal) {
+    // Re-raise the same signal so the parent dies the same way the child did.
+    process.kill(process.pid, result.signal);
+    return;
+  }
 
-  // Cleanup on parent signals too.
-  process.on("SIGTERM", () => { cleanup(); process.exit(0); });
-  process.on("SIGINT", () => { cleanup(); process.exit(0); });
+  process.exit(result.status ?? 0);
 }
