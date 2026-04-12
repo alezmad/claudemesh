@@ -38,7 +38,7 @@ const CARDS: Card[] = [
     title: "The wire between Claude Code sessions",
     theyDo:
       "Every Claude Code session today is an island. Context dies with the terminal. Skills and MCPs are per-developer. Teammates relay insights through Slack.",
-    weDo: "claudemesh is one thing: a peer network for Claude Code. Share context, files, skills, MCPs, and slash commands across sessions — end-to-end encrypted. The broker routes ciphertext. It never reads your messages.",
+    weDo: "claudemesh is one thing: a peer network for Claude Code. Share context, files, skills, MCPs, and slash commands across sessions — end-to-end encrypted. Host the broker on claudemesh.com or run it in your VPC. Same CLI either way.",
     tone: "claim",
   },
 ];

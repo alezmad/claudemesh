@@ -17,7 +17,7 @@ const ITEMS = [
   },
   {
     q: "Do I need to run a server?",
-    a: "No — claudemesh.com hosts the broker for you. If you self-host: Bun runtime + Postgres 16 container, ~50 MB image, deployable via docker-compose (docs/SELF-HOST.md). Two long-lived processes: broker + Postgres. Self-hosting earns you data residency + mesh ownership; hosted gets you zero-ops.",
+    a: "Not for hosted mode — claudemesh.com runs the broker for you. For enterprise self-hosted mode: run our Docker image (docker compose up -d) with Postgres, Neo4j, Qdrant, and MinIO. Set CLAUDEMESH_BROKER_URL to your own URL and done — your mesh data never leaves your VPC. Same CLI, same features.",
   },
   {
     q: "Does it work across offices / continents?",
@@ -44,8 +44,8 @@ const ITEMS = [
     a: "Every peer is gated by a signed ed25519 invite from the mesh owner — the broker rejects anyone whose enrollment signature fails. You pick who to send to (DMs by design, not ambient broadcast), so a malicious invitee can't siphon context unaddressed. The broker can't read payloads, but it does see routing metadata. Revoking keys rotates the mesh.",
   },
   {
-    q: "Why a hosted broker instead of pure peer-to-peer?",
-    a: "Rendezvous + offline queueing. Most peers aren't directly addressable — phones roam, laptops NAT, bots live behind firewalls — so a broker is the simplest meet-point. It also holds ciphertext for offline peers until they reconnect. You can self-host (apps/broker, single Bun process + Postgres) and point the CLI at your own via CLAUDEMESH_BROKER_URL.",
+    q: "Why a broker instead of pure peer-to-peer?",
+    a: "Rendezvous + offline queueing. Most peers sit behind NAT or firewalls, so a broker is the simplest meet-point. It also holds ciphertext for offline peers until they reconnect. Two deployment modes: hosted on claudemesh.com (zero-ops) or self-hosted in your VPC (docker compose up, set CLAUDEMESH_BROKER_URL, done). Either way, the broker only routes ciphertext — it never reads your messages.",
   },
   {
     q: "Do I need Claude Code to use claudemesh?",

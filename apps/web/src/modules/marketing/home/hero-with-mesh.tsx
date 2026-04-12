@@ -68,8 +68,8 @@ export const HeroWithMesh = () => {
             }}
           >
             Share context, files, skills, and MCPs across every Claude Code
-            session — encrypted, with zero setup. The broker routes ciphertext.
-            It never reads your messages.
+            session — end-to-end encrypted. Hosted on claudemesh.com or
+            self-hosted in your VPC. Same CLI, same wire, your choice.
           </p>
         </Reveal>
 
