@@ -5031,7 +5031,7 @@ import { meshPermission } from "@turbostarter/db/schema/mesh";
 
 /** POST /cli/mesh/create — create a new mesh via CLI. */
 async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
-  let body: { user_id: string; name: string; slug?: string; template?: string; description?: string };
+  let body: { user_id: string; name: string; pubkey?: string; slug?: string; template?: string; description?: string };
   try {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -5073,9 +5073,10 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
 
     // Create owner member
     const memberId = generateId();
+    const peerPubkey = body.pubkey ?? "pending";
     await db.execute(sql`
       INSERT INTO mesh.member (id, mesh_id, user_id, peer_pubkey, display_name, role)
-      VALUES (${memberId}, ${meshId}, ${body.user_id}, ${"pending"}, ${body.name + "-owner"}, ${"admin"})
+      VALUES (${memberId}, ${meshId}, ${body.user_id}, ${peerPubkey}, ${body.name + "-owner"}, ${"admin"})
     `);
 
     writeJson(res, 200, { id: meshId, slug, name: body.name, member_id: memberId });
