@@ -684,6 +684,11 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/cli/mesh/create") {
+    handleCliMeshCreate(req, res, started);
+    return;
+  }
+
   if (req.method === "DELETE" && req.url?.startsWith("/cli/mesh/")) {
     const slug = req.url.slice("/cli/mesh/".length);
     handleMeshDelete(req, slug, res, started);
@@ -5000,6 +5005,63 @@ async function handleCliSessionRevoke(req: IncomingMessage, res: ServerResponse,
 
 import { checkPermission, getPermissions, setPermissions } from "./permissions";
 import { meshPermission } from "@turbostarter/db/schema/mesh";
+
+/** POST /cli/mesh/create — create a new mesh via CLI. */
+async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
+  let body: { user_id: string; name: string; slug?: string; template?: string; description?: string };
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+  } catch {
+    writeJson(res, 400, { error: "Invalid body" });
+    return;
+  }
+
+  if (!body.user_id || !body.name) {
+    writeJson(res, 400, { error: "user_id and name required" });
+    return;
+  }
+
+  try {
+    const slug = body.slug ?? body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+
+    // Check if slug already taken
+    const [existing] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
+    if (existing && !existing.archivedAt) {
+      writeJson(res, 409, { error: "A mesh with this slug already exists", slug });
+      return;
+    }
+
+    // Generate mesh keypair
+    const meshId = generateId();
+
+    // Create mesh
+    await db.insert(mesh).values({
+      id: meshId,
+      name: body.name,
+      slug,
+      ownerUserId: body.user_id,
+    });
+
+    // Create owner member
+    const memberId = generateId();
+    await db.insert(meshMember).values({
+      id: memberId,
+      meshId,
+      userId: body.user_id,
+      peerPubkey: "pending",
+      displayName: body.name + "-owner",
+      role: "admin",
+    });
+
+    writeJson(res, 200, { id: meshId, slug, name: body.name, member_id: memberId });
+    log.info("mesh-create", { route: "POST /cli/mesh/create", slug, user_id: body.user_id, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("mesh-create", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to create mesh" });
+  }
+}
 
 /** DELETE /cli/mesh/:slug — delete a mesh (owner only). */
 async function handleMeshDelete(req: IncomingMessage, slug: string, res: ServerResponse, started: number): Promise<void> {
