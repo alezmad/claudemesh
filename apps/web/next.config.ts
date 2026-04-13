@@ -72,6 +72,7 @@ const securityHeaders = [
   },
 ];
 
+// build: 1776069543
 const config: NextConfig = {
   reactStrictMode: true,
   output: "standalone",
