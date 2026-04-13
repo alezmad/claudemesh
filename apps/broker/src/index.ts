@@ -669,6 +669,11 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (req.method === "GET" && req.url?.startsWith("/cli/meshes")) {
+    handleCliMeshesList(req, res, started);
+    return;
+  }
+
   if (req.method === "POST" && req.url === "/cli/token") {
     handleCliTokenGenerate(req, res, started);
     return;
@@ -4815,6 +4820,61 @@ async function handleDeviceCodeApprove(req: IncomingMessage, code: string, res: 
 }
 
 /** GET /cli/sessions?user_id=... — list CLI sessions for a user. */
+/** GET /cli/meshes?user_id=... — list all meshes for a user with member counts. */
+async function handleCliMeshesList(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
+  const url = new URL(req.url!, "http://localhost");
+  const userId = url.searchParams.get("user_id");
+
+  if (!userId) {
+    writeJson(res, 400, { error: "user_id required" });
+    return;
+  }
+
+  try {
+    // Find all memberships for this user
+    const memberships = await db.select({
+      memberId: meshMember.id,
+      meshId: meshMember.meshId,
+      role: meshMember.role,
+      displayName: meshMember.displayName,
+      joinedAt: meshMember.joinedAt,
+    }).from(meshMember).where(
+      and(eq(meshMember.userId, userId), isNull(meshMember.revokedAt))
+    );
+
+    // Fetch mesh details + member counts
+    const meshes = await Promise.all(memberships.map(async (m) => {
+      const [meshRow] = await db.select().from(mesh).where(eq(mesh.id, m.meshId)).limit(1);
+      if (!meshRow) return null;
+
+      const memberCount = await db.select({ id: meshMember.id }).from(meshMember)
+        .where(and(eq(meshMember.meshId, m.meshId), isNull(meshMember.revokedAt)));
+
+      // Count active connections
+      let activeConns = 0;
+      for (const c of connections.values()) { if (c.meshId === m.meshId) activeConns++; }
+
+      return {
+        id: meshRow.id,
+        slug: meshRow.slug,
+        name: meshRow.name,
+        role: m.role,
+        is_owner: meshRow.ownerUserId === userId,
+        member_count: memberCount.length,
+        active_peers: activeConns,
+        joined_at: m.joinedAt.toISOString(),
+        broker_url: `wss://${req.headers.host ?? "ic.claudemesh.com"}/ws`,
+      };
+    }));
+
+    writeJson(res, 200, { meshes: meshes.filter(Boolean) });
+    log.info("cli-meshes", { route: "GET /cli/meshes", user_id: userId, count: meshes.length, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("cli-meshes", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to list meshes" });
+  }
+}
+
 async function handleCliSessionsList(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
   const url = new URL(req.url!, "http://localhost");
   const userId = url.searchParams.get("user_id");
