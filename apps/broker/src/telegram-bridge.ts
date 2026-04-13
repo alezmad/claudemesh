@@ -1603,7 +1603,7 @@ function setupBotCommands(
       // Gather context for the AI
       const firstMeshId = meshIds[0]!;
       const firstConn = meshConnections.get(firstMeshId);
-      const meshSlug = meshSlugs.get(firstMeshId) ?? firstMeshId.slice(0, 12);
+      const allMeshSlugs = meshIds.map(id => meshSlugs.get(id) ?? id.slice(0, 12));
       let recentPeers: string[] = [];
       if (firstConn?.isConnected()) {
         try {
@@ -1613,7 +1613,8 @@ function setupBotCommands(
       }
 
       const result = await processMessage(text, {
-        meshSlug,
+        meshSlug: allMeshSlugs[0],
+        meshSlugs: allMeshSlugs,
         userName: ctx.from?.first_name,
         recentPeers,
       });

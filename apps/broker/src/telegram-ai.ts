@@ -150,12 +150,18 @@ You have access to tools for mesh operations. When the user's intent maps to a t
 
 IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If English, respond in English.
 
+Key concepts:
+- A MESH is a workspace/group (like "flexicar", "alexis-mou"). This Telegram chat can be connected to multiple meshes.
+- A PEER is a person/agent connected to a mesh (like "Nedas", "Mou").
+- When user says "send to <mesh-name>", they mean BROADCAST to all peers in that mesh. Use send_message with to="*" — the system will route to the correct mesh.
+- When user says "send to <person-name>", they mean a direct message to that peer.
+
 Rules:
 - Be concise — Telegram messages should be short
 - When sending messages to peers, preserve the user's tone and intent
-- For ambiguous peer names, ask for clarification
-- Never fabricate peer names or data — use list_peers to find real names
-- If unsure which mesh to target, ask the user`;
+- If the target looks like a mesh name (matches one from context), broadcast to it
+- Never fabricate peer names — use list_peers to find real names
+- Default to the first connected mesh if not specified`;
 
 // ---------------------------------------------------------------------------
 // AI Engine
@@ -177,13 +183,13 @@ function getClient(): Anthropic {
  */
 export async function processMessage(
   userMessage: string,
-  context: { meshSlug?: string; userName?: string; recentPeers?: string[] },
+  context: { meshSlug?: string; meshSlugs?: string[]; userName?: string; recentPeers?: string[] },
 ): Promise<AiResult> {
   try {
     const anthropic = getClient();
 
     const contextInfo = [
-      context.meshSlug ? `Current mesh: ${context.meshSlug}` : null,
+      context.meshSlugs?.length ? `Connected meshes: ${context.meshSlugs.join(", ")}` : context.meshSlug ? `Current mesh: ${context.meshSlug}` : null,
       context.userName ? `User's name: ${context.userName}` : null,
       context.recentPeers?.length ? `Known peers: ${context.recentPeers.join(", ")}` : null,
     ].filter(Boolean).join(". ");
