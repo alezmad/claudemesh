@@ -90,7 +90,6 @@ const config: NextConfig = {
     "@payloadcms/richtext-lexical",
     "@payloadcms/next",
     "@payloadcms/ui",
-    "react-image-crop",
     "sharp",
     "libsodium-wrappers",
   ],
@@ -130,7 +129,7 @@ const config: NextConfig = {
   },
 
   /** Enables hot reloading for local packages without a build step */
-  transpilePackages: INTERNAL_PACKAGES,
+  transpilePackages: [...INTERNAL_PACKAGES, "react-image-crop"],
   experimental: {
     optimizePackageImports: INTERNAL_PACKAGES,
   },
