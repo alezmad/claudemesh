@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "NODE_OPTIONS='--experimental-loader ./css-stub-loader.mjs' next build --webpack",
+    "build": "NODE_OPTIONS='--import ./css-stub-register.mjs' next build --webpack",
     "clean": "git clean -xdf .cache .next .turbo node_modules",
     "dev": "next dev",
     "format": "prettier --check . --ignore-path ../../.gitignore",
