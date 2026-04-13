@@ -669,6 +669,11 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/cli/token") {
+    handleCliTokenGenerate(req, res, started);
+    return;
+  }
+
   // Telegram connect token (rate-limited: 10 requests/hour per IP)
   if (req.method === "POST" && req.url === "/tg/token") {
     const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
@@ -4806,6 +4811,52 @@ async function handleCliSessionsList(req: IncomingMessage, res: ServerResponse, 
   } catch (e) {
     log.error("cli-sessions", { error: e instanceof Error ? e.message : String(e) });
     writeJson(res, 500, { error: "Failed to list sessions" });
+  }
+}
+
+/** POST /cli/token — generate a CLI token for paste-based auth. */
+async function handleCliTokenGenerate(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
+  let body: { user_id: string; email: string; name?: string; hostname?: string; platform?: string; arch?: string };
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+  } catch {
+    writeJson(res, 400, { error: "Invalid body" });
+    return;
+  }
+
+  if (!body.user_id || !body.email) {
+    writeJson(res, 400, { error: "user_id and email required" });
+    return;
+  }
+
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const token = await signCliJwt({
+      sub: body.user_id,
+      email: body.email,
+      name: body.name,
+      type: "cli-token",
+      jti: crypto.randomUUID(),
+      iat: now,
+      exp: now + 30 * 24 * 60 * 60,
+    });
+
+    // Record session
+    await db.insert(cliSessionTable).values({
+      userId: body.user_id,
+      hostname: body.hostname ?? "paste-token",
+      platform: body.platform ?? "unknown",
+      arch: body.arch ?? "unknown",
+      tokenHash: await hashToken(token),
+    });
+
+    writeJson(res, 200, { token });
+    log.info("cli-token", { route: "POST /cli/token", user_id: body.user_id, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("cli-token", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to generate token" });
   }
 }
 
