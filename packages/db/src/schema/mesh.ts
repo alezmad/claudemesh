@@ -1125,10 +1125,12 @@ export const deviceCodeStatusEnum = meshSchema.enum("device_code_status", [
  */
 export const deviceCode = meshSchema.table("device_code", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
-  /** Random 16-char code used by CLI to poll. */
+  /** Random 16-char code used by CLI to poll (secret, never shown to user). */
   deviceCode: text().notNull().unique(),
-  /** Human-readable code shown in browser (ABCD-EFGH). */
+  /** Human-readable code shown in both terminal and browser for visual confirmation. */
   userCode: text().notNull(),
+  /** URL-safe session identifier (clm_sess_..., 32 chars). Not secret — appears in browser URL. */
+  sessionId: text().notNull().unique(),
   status: deviceCodeStatusEnum().notNull().default("pending"),
   /** Filled on approve — the authenticated user. */
   userId: text().references(() => user.id, { onDelete: "cascade" }),

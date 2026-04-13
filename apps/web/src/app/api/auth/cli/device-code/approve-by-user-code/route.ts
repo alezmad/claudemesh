@@ -13,19 +13,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  let body: { user_code?: string };
+  let body: { user_code?: string; session_id?: string };
   try {
     body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Invalid body" }, { status: 400 });
   }
 
-  if (!body.user_code) {
-    return NextResponse.json({ error: "user_code required" }, { status: 400 });
+  const code = body.session_id ?? body.user_code;
+  if (!code) {
+    return NextResponse.json({ error: "session_id or user_code required" }, { status: 400 });
   }
 
   // Proxy approve to the broker
-  const brokerRes = await fetch(`${BROKER_URL}/cli/device-code/${body.user_code}/approve`, {
+  const brokerRes = await fetch(`${BROKER_URL}/cli/device-code/${code}/approve`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({

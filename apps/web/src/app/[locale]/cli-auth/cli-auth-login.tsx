@@ -8,7 +8,8 @@ interface Props {
 }
 
 export function CliAuthLogin({ code }: Props) {
-  const redirectTo = `/cli-auth?code=${encodeURIComponent(code)}`;
+  const param = code.startsWith("clm_sess_") ? "session" : "code";
+  const redirectTo = `/cli-auth?${param}=${encodeURIComponent(code)}`;
   const [loading, setLoading] = useState<string | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

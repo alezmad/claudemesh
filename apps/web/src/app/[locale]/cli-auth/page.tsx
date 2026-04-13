@@ -13,29 +13,30 @@ export const generateMetadata = getMetadata({
 export default async function CliAuthPage({
   searchParams,
 }: {
-  searchParams: Promise<{ code?: string; port?: string }>;
+  searchParams: Promise<{ code?: string; session?: string; port?: string }>;
 }) {
   const { user } = await getSession();
-  const { code, port } = await searchParams;
+  const { code, session, port } = await searchParams;
 
-  // Device-code flow: code contains "-" (e.g. "ABCD-EFGH"), no port
-  const isDeviceCode = code && code.includes("-") && !port;
+  // New 3-token flow: ?session=clm_sess_... (session_id in URL)
+  // Legacy flow: ?code=ABCD-EFGH (user_code in URL)
+  const sessionId = session ?? (code && code.startsWith("clm_sess_") ? code : null);
+  const isDeviceCode = sessionId || (code && code.includes("-") && !port);
+  const approvalCode = sessionId ?? code;
 
-  if (isDeviceCode) {
+  if (isDeviceCode && approvalCode) {
     if (!user) {
-      // NOT logged in → show inline auth form with device code context
       return (
         <main className="min-h-screen bg-[var(--cm-bg,#0a0a0a)] text-[var(--cm-fg,#fafafa)] antialiased flex items-center justify-center">
-          <CliAuthLogin code={code} />
+          <CliAuthLogin code={approvalCode} />
         </main>
       );
     }
 
-    // Logged in → auto-approve
     return (
       <main className="min-h-screen bg-[var(--cm-bg,#0a0a0a)] text-[var(--cm-fg,#fafafa)] antialiased flex items-center justify-center">
         <DeviceCodeApproval
-          code={code}
+          code={approvalCode}
           userName={user.name ?? user.email}
         />
       </main>
@@ -66,4 +67,3 @@ export default async function CliAuthPage({
     </main>
   );
 }
-

@@ -21,7 +21,7 @@ export function DeviceCodeApproval({ code, userName }: Props) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({ user_code: code }),
+      body: JSON.stringify({ session_id: code }),
     })
       .then(async (res) => {
         if (res.ok) {

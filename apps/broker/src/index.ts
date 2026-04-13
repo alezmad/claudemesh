@@ -4655,6 +4655,7 @@ async function handleDeviceCodeNew(req: IncomingMessage, res: ServerResponse, st
 
   const dc = generateShortCode(16);
   const uc = generateShortCode(4) + "-" + generateShortCode(4);
+  const sid = "clm_sess_" + generateShortCode(32);
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
   const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
 
@@ -4662,6 +4663,7 @@ async function handleDeviceCodeNew(req: IncomingMessage, res: ServerResponse, st
     await db.insert(deviceCodeTable).values({
       deviceCode: dc,
       userCode: uc,
+      sessionId: sid,
       hostname: body.hostname,
       platform: body.platform,
       arch: body.arch,
@@ -4674,10 +4676,12 @@ async function handleDeviceCodeNew(req: IncomingMessage, res: ServerResponse, st
     writeJson(res, 200, {
       device_code: dc,
       user_code: uc,
+      session_id: sid,
       expires_at: expiresAt.toISOString(),
       verification_url: `${baseUrl}/cli-auth`,
+      token_url: `${baseUrl}/token`,
     });
-    log.info("device-code", { route: "POST /cli/device-code", user_code: uc, latency_ms: Date.now() - started });
+    log.info("device-code", { route: "POST /cli/device-code", user_code: uc, session_id: sid, latency_ms: Date.now() - started });
   } catch (e) {
     log.error("device-code", { error: e instanceof Error ? e.message : String(e) });
     writeJson(res, 500, { error: "Failed to create device code" });
@@ -4745,10 +4749,15 @@ async function handleDeviceCodeApprove(req: IncomingMessage, code: string, res: 
   }
 
   try {
-    // Find device code by user_code (browser sends user_code, not device_code)
-    const [entry] = await db.select().from(deviceCodeTable)
-      .where(and(eq(deviceCodeTable.userCode, code), eq(deviceCodeTable.status, "pending")))
+    // Find by session_id first (URL param), fall back to user_code (legacy)
+    let [entry] = await db.select().from(deviceCodeTable)
+      .where(and(eq(deviceCodeTable.sessionId, code), eq(deviceCodeTable.status, "pending")))
       .limit(1);
+    if (!entry) {
+      [entry] = await db.select().from(deviceCodeTable)
+        .where(and(eq(deviceCodeTable.userCode, code), eq(deviceCodeTable.status, "pending")))
+        .limit(1);
+    }
 
     if (!entry) {
       writeJson(res, 404, { error: "Code not found or expired" });
