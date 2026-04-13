@@ -4,6 +4,7 @@ import { getSession } from "~/lib/auth/server";
 import { getMetadata } from "~/lib/metadata";
 
 import { CliAuthFlow } from "./cli-auth-flow";
+import { DeviceCodeApproval } from "./device-code-approval";
 
 export const generateMetadata = getMetadata({
   title: "Sync with CLI",
@@ -27,6 +28,20 @@ export default async function CliAuthPage({
   }
 
   const { code, port } = await searchParams;
+
+  // Device-code flow: code contains "-" (e.g. "ABCD-EFGH"), no port
+  const isDeviceCode = code && code.includes("-") && !port;
+
+  if (isDeviceCode) {
+    return (
+      <main className="min-h-screen bg-[var(--cm-bg)] text-[var(--cm-fg)] antialiased flex items-center justify-center">
+        <DeviceCodeApproval
+          code={code}
+          userName={user.name ?? user.email}
+        />
+      </main>
+    );
+  }
 
   return (
     <main
