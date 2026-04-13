@@ -4836,26 +4836,48 @@ async function handleCliMeshesList(req: IncomingMessage, res: ServerResponse, st
   }
 
   try {
-    // Find all memberships for this user
-    const memberships = await db.select({
+    // Find meshes via two paths:
+    // 1. member.user_id matches (explicitly linked)
+    // 2. mesh.owner_user_id matches (owner, even if member row has no user_id)
+    const memberMeshes = await db.select({
       memberId: meshMember.id,
       meshId: meshMember.meshId,
       role: meshMember.role,
-      displayName: meshMember.displayName,
       joinedAt: meshMember.joinedAt,
     }).from(meshMember).where(
       and(eq(meshMember.userId, userId), isNull(meshMember.revokedAt))
     );
 
-    // Fetch mesh details + member counts
-    const meshes = await Promise.all(memberships.map(async (m) => {
+    const ownedMeshes = await db.select({
+      id: mesh.id,
+      slug: mesh.slug,
+      name: mesh.name,
+    }).from(mesh).where(
+      and(eq(mesh.ownerUserId, userId), isNull(mesh.archivedAt))
+    );
+
+    // Merge: deduplicate by meshId
+    const seen = new Set<string>();
+    const allMeshIds: Array<{ meshId: string; role: string; joinedAt: Date; fromMember: boolean }> = [];
+
+    for (const m of memberMeshes) {
+      seen.add(m.meshId);
+      allMeshIds.push({ meshId: m.meshId, role: m.role, joinedAt: m.joinedAt, fromMember: true });
+    }
+    for (const m of ownedMeshes) {
+      if (!seen.has(m.id)) {
+        seen.add(m.id);
+        allMeshIds.push({ meshId: m.id, role: "admin", joinedAt: new Date(), fromMember: false });
+      }
+    }
+
+    const meshes = await Promise.all(allMeshIds.map(async (m) => {
       const [meshRow] = await db.select().from(mesh).where(eq(mesh.id, m.meshId)).limit(1);
-      if (!meshRow) return null;
+      if (!meshRow || meshRow.archivedAt) return null;
 
       const memberCount = await db.select({ id: meshMember.id }).from(meshMember)
         .where(and(eq(meshMember.meshId, m.meshId), isNull(meshMember.revokedAt)));
 
-      // Count active connections
       let activeConns = 0;
       for (const c of connections.values()) { if (c.meshId === m.meshId) activeConns++; }
 
@@ -5024,16 +5046,22 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
   }
 
   try {
-    const slug = body.slug ?? body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    let slug = body.slug ?? body.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
-    // Check if slug already taken
-    const [existing] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
-    if (existing && !existing.archivedAt) {
-      writeJson(res, 409, { error: "A mesh with this slug already exists", slug });
-      return;
+    // Auto-increment slug if taken
+    let baseSlug = slug;
+    let suffix = 2;
+    while (true) {
+      const [existing] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
+      if (!existing || existing.archivedAt) break;
+      slug = `${baseSlug}-${suffix}`;
+      suffix++;
+      if (suffix > 100) {
+        writeJson(res, 409, { error: "Too many meshes with this name" });
+        return;
+      }
     }
 
-    // Generate mesh keypair
     const meshId = generateId();
 
     // Create mesh
