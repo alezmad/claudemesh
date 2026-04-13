@@ -712,6 +712,96 @@ export const meshMemberRelations = relations(meshMember, ({ one, many }) => ({
   sentMessages: many(messageQueue),
 }));
 
+// ---------------------------------------------------------------------------
+// Granular mesh permissions
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-member permission overrides. If no row exists for a member,
+ * defaults are derived from the member's role:
+ *   owner  → all true
+ *   admin  → all true except can_delete_mesh
+ *   member → can_send, can_read_state, can_use_tools only
+ *
+ * Explicit rows override these defaults (allow or deny).
+ */
+export const meshPermission = meshSchema.table("permission", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  meshId: text()
+    .references(() => mesh.id, { onDelete: "cascade" })
+    .notNull(),
+  memberId: text()
+    .references(() => meshMember.id, { onDelete: "cascade" })
+    .notNull(),
+  /** Invite other users to the mesh. */
+  canInvite: boolean().notNull().default(false),
+  /** Deploy/undeploy MCP services. */
+  canDeployMcp: boolean().notNull().default(false),
+  /** Upload/delete shared files. */
+  canManageFiles: boolean().notNull().default(false),
+  /** Read/write vault secrets. */
+  canManageVault: boolean().notNull().default(false),
+  /** Create/manage URL watches. */
+  canManageWatches: boolean().notNull().default(false),
+  /** Create/manage webhooks. */
+  canManageWebhooks: boolean().notNull().default(false),
+  /** Write shared state (read is always allowed). */
+  canWriteState: boolean().notNull().default(true),
+  /** Send messages to peers. */
+  canSend: boolean().notNull().default(true),
+  /** Use deployed MCP tools. */
+  canUseTools: boolean().notNull().default(true),
+  /** Delete the mesh entirely (owner only). */
+  canDeleteMesh: boolean().notNull().default(false),
+  /** Manage other members' permissions. */
+  canManagePermissions: boolean().notNull().default(false),
+  updatedAt: timestamp().defaultNow().notNull(),
+}, (table) => [
+  uniqueIndex("permission_member_mesh_idx").on(table.meshId, table.memberId),
+]);
+
+export const meshPermissionRelations = relations(meshPermission, ({ one }) => ({
+  mesh: one(mesh, {
+    fields: [meshPermission.meshId],
+    references: [mesh.id],
+  }),
+  member: one(meshMember, {
+    fields: [meshPermission.memberId],
+    references: [meshMember.id],
+  }),
+}));
+
+export const selectMeshPermissionSchema = createSelectSchema(meshPermission);
+export const insertMeshPermissionSchema = createInsertSchema(meshPermission);
+export type SelectMeshPermission = typeof meshPermission.$inferSelect;
+export type InsertMeshPermission = typeof meshPermission.$inferInsert;
+
+/**
+ * Default permissions by role (used when no explicit permission row exists).
+ */
+export const DEFAULT_PERMISSIONS = {
+  owner: {
+    canInvite: true, canDeployMcp: true, canManageFiles: true,
+    canManageVault: true, canManageWatches: true, canManageWebhooks: true,
+    canWriteState: true, canSend: true, canUseTools: true,
+    canDeleteMesh: true, canManagePermissions: true,
+  },
+  admin: {
+    canInvite: true, canDeployMcp: true, canManageFiles: true,
+    canManageVault: true, canManageWatches: true, canManageWebhooks: true,
+    canWriteState: true, canSend: true, canUseTools: true,
+    canDeleteMesh: false, canManagePermissions: true,
+  },
+  member: {
+    canInvite: false, canDeployMcp: false, canManageFiles: false,
+    canManageVault: false, canManageWatches: false, canManageWebhooks: false,
+    canWriteState: true, canSend: true, canUseTools: true,
+    canDeleteMesh: false, canManagePermissions: false,
+  },
+} as const;
+
+export type PermissionKey = keyof typeof DEFAULT_PERMISSIONS.member;
+
 export const presenceRelations = relations(presence, ({ one }) => ({
   member: one(meshMember, {
     fields: [presence.memberId],

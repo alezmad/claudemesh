@@ -674,6 +674,29 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/cli/session/revoke") {
+    handleCliSessionRevoke(req, res, started);
+    return;
+  }
+
+  if (req.method === "DELETE" && req.url?.startsWith("/cli/mesh/")) {
+    const slug = req.url.slice("/cli/mesh/".length);
+    handleMeshDelete(req, slug, res, started);
+    return;
+  }
+
+  if (req.method === "GET" && req.url?.startsWith("/cli/mesh/") && req.url?.endsWith("/permissions")) {
+    const slug = req.url.slice("/cli/mesh/".length).replace("/permissions", "");
+    handlePermissionsGet(slug, res, started);
+    return;
+  }
+
+  if (req.method === "POST" && req.url?.startsWith("/cli/mesh/") && req.url?.endsWith("/permissions")) {
+    const slug = req.url.slice("/cli/mesh/".length).replace("/permissions", "");
+    handlePermissionsSet(req, slug, res, started);
+    return;
+  }
+
   // Telegram connect token (rate-limited: 10 requests/hour per IP)
   if (req.method === "POST" && req.url === "/tg/token") {
     const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
@@ -4857,6 +4880,170 @@ async function handleCliTokenGenerate(req: IncomingMessage, res: ServerResponse,
   } catch (e) {
     log.error("cli-token", { error: e instanceof Error ? e.message : String(e) });
     writeJson(res, 500, { error: "Failed to generate token" });
+  }
+}
+
+/** POST /cli/session/revoke — revoke a CLI session by token. */
+async function handleCliSessionRevoke(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
+  let body: { token?: string };
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+  } catch {
+    writeJson(res, 400, { error: "Invalid body" });
+    return;
+  }
+
+  if (!body.token) {
+    writeJson(res, 400, { error: "token required" });
+    return;
+  }
+
+  try {
+    const hash = await hashToken(body.token);
+    const [session] = await db.select().from(cliSessionTable)
+      .where(and(eq(cliSessionTable.tokenHash, hash), isNull(cliSessionTable.revokedAt)))
+      .limit(1);
+
+    if (!session) {
+      // Token not in DB — might be an old token from before device-code tracking.
+      // Still return ok since the local token will be cleared.
+      writeJson(res, 200, { ok: true, found: false });
+      return;
+    }
+
+    await db.update(cliSessionTable)
+      .set({ revokedAt: new Date() })
+      .where(eq(cliSessionTable.id, session.id));
+
+    writeJson(res, 200, { ok: true, found: true });
+    log.info("cli-session-revoke", { route: "POST /cli/session/revoke", session_id: session.id, user_id: session.userId, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("cli-session-revoke", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to revoke session" });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Mesh management + permissions handlers
+// ---------------------------------------------------------------------------
+
+import { checkPermission, getPermissions, setPermissions } from "./permissions";
+import { meshPermission } from "@turbostarter/db/schema/mesh";
+
+/** DELETE /cli/mesh/:slug — delete a mesh (owner only). */
+async function handleMeshDelete(req: IncomingMessage, slug: string, res: ServerResponse, started: number): Promise<void> {
+  let body: { user_id: string };
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+  } catch {
+    writeJson(res, 400, { error: "Invalid body" });
+    return;
+  }
+
+  if (!body.user_id) {
+    writeJson(res, 400, { error: "user_id required" });
+    return;
+  }
+
+  try {
+    // Find mesh by slug
+    const [m] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
+    if (!m) { writeJson(res, 404, { error: "Mesh not found" }); return; }
+
+    // Only owner can delete
+    if (m.ownerUserId !== body.user_id) {
+      writeJson(res, 403, { error: "Only the mesh owner can delete it" });
+      return;
+    }
+
+    // Soft delete (archive)
+    await db.update(mesh).set({ archivedAt: new Date() }).where(eq(mesh.id, m.id));
+
+    writeJson(res, 200, { ok: true, deleted: slug });
+    log.info("mesh-delete", { route: "DELETE /cli/mesh/:slug", slug, user_id: body.user_id, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("mesh-delete", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to delete mesh" });
+  }
+}
+
+/** GET /cli/mesh/:slug/permissions — get all member permissions for a mesh. */
+async function handlePermissionsGet(slug: string, res: ServerResponse, started: number): Promise<void> {
+  try {
+    const [m] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
+    if (!m) { writeJson(res, 404, { error: "Mesh not found" }); return; }
+
+    const members = await db.select().from(meshMember).where(eq(meshMember.meshId, m.id));
+
+    const result = await Promise.all(members.map(async (member) => ({
+      member_id: member.id,
+      display_name: member.displayName,
+      role: member.role,
+      is_owner: m.ownerUserId ? member.userId === m.ownerUserId : false,
+      permissions: await getPermissions(m.id, member.id),
+    })));
+
+    writeJson(res, 200, { mesh: slug, members: result });
+    log.info("permissions-get", { route: "GET /cli/mesh/:slug/permissions", slug, count: result.length, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("permissions-get", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to get permissions" });
+  }
+}
+
+/** POST /cli/mesh/:slug/permissions — set permissions for a member. */
+async function handlePermissionsSet(req: IncomingMessage, slug: string, res: ServerResponse, started: number): Promise<void> {
+  let body: { requester_id: string; member_id: string; permissions: Record<string, boolean> };
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+  } catch {
+    writeJson(res, 400, { error: "Invalid body" });
+    return;
+  }
+
+  if (!body.requester_id || !body.member_id || !body.permissions) {
+    writeJson(res, 400, { error: "requester_id, member_id, and permissions required" });
+    return;
+  }
+
+  try {
+    const [m] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
+    if (!m) { writeJson(res, 404, { error: "Mesh not found" }); return; }
+
+    // Find requester's member record
+    const [requester] = await db.select().from(meshMember)
+      .where(and(eq(meshMember.meshId, m.id), eq(meshMember.userId, body.requester_id)))
+      .limit(1);
+
+    if (!requester) { writeJson(res, 403, { error: "Not a member of this mesh" }); return; }
+
+    // Check if requester can manage permissions
+    const canManage = await checkPermission(m.id, requester.id, "canManagePermissions");
+    if (!canManage) {
+      writeJson(res, 403, { error: "You don't have permission to manage permissions" });
+      return;
+    }
+
+    // Apply permission updates
+    await setPermissions(m.id, body.member_id, body.permissions as any);
+
+    writeJson(res, 200, { ok: true });
+    log.info("permissions-set", {
+      route: "POST /cli/mesh/:slug/permissions",
+      slug,
+      requester: body.requester_id,
+      target: body.member_id,
+      latency_ms: Date.now() - started,
+    });
+  } catch (e) {
+    log.error("permissions-set", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to set permissions" });
   }
 }
 
