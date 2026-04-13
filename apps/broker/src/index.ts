@@ -21,6 +21,7 @@ import { db } from "./db";
 import { invite as inviteTable, mesh, meshMember, messageQueue, scheduledMessage as scheduledMessageTable, meshWebhook, peerState } from "@turbostarter/db/schema/mesh";
 import { user } from "@turbostarter/db/schema/auth";
 import { handleCliSync, type CliSyncRequest } from "./cli-sync";
+import { generateId } from "@turbostarter/shared/utils";
 import { updateMemberProfile, listMeshMembers, updateMeshSettings } from "./member-api";
 import {
   claimTask,
