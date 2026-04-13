@@ -1721,6 +1721,28 @@ async function executeAiToolCall(
     case "list_peers":
       return conn.listPeers();
 
+    case "list_services": {
+      // Query deployed services from the broker DB
+      try {
+        const { listDbMeshServices } = await import("./broker");
+        const allServices: Array<{ name: string; type: string; tools: number; status: string }> = [];
+        for (const meshId of meshIds) {
+          const services = await listDbMeshServices(meshId);
+          for (const s of services) {
+            allServices.push({
+              name: s.name,
+              type: s.type ?? "mcp",
+              tools: s.tool_count ?? 0,
+              status: s.status ?? "running",
+            });
+          }
+        }
+        return allServices;
+      } catch {
+        return [];
+      }
+    }
+
     case "list_meshes": {
       const results: Array<{ slug: string; peers: number }> = [];
       for (const meshId of meshIds) {
@@ -1737,6 +1759,9 @@ async function executeAiToolCall(
       }
       return results;
     }
+
+    case "list_commands":
+      return null; // The formatter handles this — no execution needed
 
     case "remember":
     case "recall":

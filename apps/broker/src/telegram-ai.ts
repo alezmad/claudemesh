@@ -133,6 +133,22 @@ const TOOLS: AiTool[] = [
       },
     },
   },
+  {
+    name: "list_services",
+    description: "List all deployed MCP services and skills in the mesh. Use when user asks about available tools, services, MCPs, skills, or capabilities.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
+    name: "list_commands",
+    description: "Show available Telegram bot commands. Use when user asks what commands are available, what they can do, or asks for help.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
 ];
 
 // Actions that need user confirmation before executing
@@ -369,6 +385,32 @@ export function formatResult(toolName: string, result: unknown): string {
 
     case "share_mesh":
       return typeof result === "string" ? `🔗 Invite: ${result}` : "✅ Invite sent.";
+
+    case "list_services": {
+      const services = result as Array<{ name: string; type: string; tools: number; status: string }>;
+      if (!services || services.length === 0) return "No services deployed in this mesh.";
+      return "⚙️ <b>Mesh services:</b>\n\n" + services.map(s =>
+        `• <b>${escHtml(s.name)}</b> (${s.type}) — ${s.tools} tool${s.tools !== 1 ? "s" : ""} [${s.status}]`
+      ).join("\n");
+    }
+
+    case "list_commands":
+      return `📋 <b>Available commands:</b>
+
+/connect — connect to a mesh
+/disconnect — disconnect from mesh
+/peers — list online peers
+/meshes — list connected meshes
+/dm @Name message — send direct message
+/broadcast message — send to all peers
+/status — connection status
+/help — show help
+
+Or just type naturally:
+• "who's online?"
+• "tell Nedas the API is ready"
+• "list my meshes"
+• "what services are available?"`;
 
     default:
       return `✅ Done: ${JSON.stringify(result)}`;
