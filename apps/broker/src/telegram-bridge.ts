@@ -1204,12 +1204,11 @@ function setupBotCommands(
         await ctx.answerCallbackQuery({ text: "Executing..." });
 
         try {
-          const { formatResult } = await import("./telegram-ai");
+          const { formatResult, recordToolResult } = await import("./telegram-ai");
           const result = await executeAiToolCall(pending.toolCall, pending.meshIds);
-          await ctx.editMessageText(
-            formatResult(pending.toolCall.name, result),
-            { parse_mode: "HTML" },
-          );
+          const resultText = formatResult(pending.toolCall.name, result);
+          recordToolResult(chatId, pending.toolCall.name, resultText.replace(/<[^>]+>/g, "").slice(0, 200));
+          await ctx.editMessageText(resultText, { parse_mode: "HTML" });
         } catch (err) {
           await ctx.editMessageText(`❌ Failed: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1612,7 +1611,7 @@ function setupBotCommands(
         } catch {}
       }
 
-      const result = await processMessage(text, {
+      const result = await processMessage(chatId, text, {
         meshSlug: allMeshSlugs[0],
         meshSlugs: allMeshSlugs,
         userName: ctx.from?.first_name,
@@ -1656,7 +1655,11 @@ function setupBotCommands(
         } else {
           // Read-only action — execute immediately
           const execResult = await executeAiToolCall(result.toolCall, meshIds);
-          await ctx.reply(formatResult(result.toolCall.name, execResult), {
+          const resultText = formatResult(result.toolCall.name, execResult);
+          // Record in conversation history
+          const { recordToolResult } = await import("./telegram-ai");
+          recordToolResult(chatId, result.toolCall.name, resultText.replace(/<[^>]+>/g, "").slice(0, 200));
+          await ctx.reply(resultText, {
             parse_mode: "HTML",
           });
         }

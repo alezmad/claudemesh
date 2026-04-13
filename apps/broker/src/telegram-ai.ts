@@ -178,15 +178,62 @@ function getClient(): Anthropic {
   return client;
 }
 
+// ---------------------------------------------------------------------------
+// Conversation history (per chat, rolling window)
+// ---------------------------------------------------------------------------
+
+const MAX_HISTORY = 10;
+const HISTORY_TTL_MS = 30 * 60 * 1000; // 30 min
+
+interface HistoryEntry {
+  role: "user" | "assistant";
+  content: string;
+  ts: number;
+}
+
+const chatHistory = new Map<number, HistoryEntry[]>();
+
+// Clean stale histories every 10 min
+setInterval(() => {
+  const now = Date.now();
+  for (const [chatId, entries] of chatHistory) {
+    const fresh = entries.filter(e => now - e.ts < HISTORY_TTL_MS);
+    if (fresh.length === 0) chatHistory.delete(chatId);
+    else chatHistory.set(chatId, fresh);
+  }
+}, 10 * 60 * 1000);
+
+function getHistory(chatId: number): HistoryEntry[] {
+  return chatHistory.get(chatId) ?? [];
+}
+
+function pushHistory(chatId: number, role: "user" | "assistant", content: string): void {
+  const entries = chatHistory.get(chatId) ?? [];
+  entries.push({ role, content, ts: Date.now() });
+  if (entries.length > MAX_HISTORY * 2) entries.splice(0, entries.length - MAX_HISTORY * 2);
+  chatHistory.set(chatId, entries);
+}
+
+/**
+ * Record a tool result in conversation history so the AI knows what happened.
+ */
+export function recordToolResult(chatId: number, toolName: string, resultSummary: string): void {
+  pushHistory(chatId, "assistant", `[Tool ${toolName} result]: ${resultSummary}`);
+}
+
 /**
  * Process a natural language message through Claude and return the intent.
  */
 export async function processMessage(
+  chatId: number,
   userMessage: string,
   context: { meshSlug?: string; meshSlugs?: string[]; userName?: string; recentPeers?: string[] },
 ): Promise<AiResult> {
   try {
     const anthropic = getClient();
+
+    // Record user message in history
+    pushHistory(chatId, "user", userMessage);
 
     const contextInfo = [
       context.meshSlugs?.length ? `Connected meshes: ${context.meshSlugs.join(", ")}` : context.meshSlug ? `Current mesh: ${context.meshSlug}` : null,
@@ -194,17 +241,36 @@ export async function processMessage(
       context.recentPeers?.length ? `Known peers: ${context.recentPeers.join(", ")}` : null,
     ].filter(Boolean).join(". ");
 
+    // Build message history for multi-turn context
+    const history = getHistory(chatId);
+    const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
+    for (const entry of history) {
+      // Alternate roles — Claude API requires user/assistant alternation
+      if (messages.length === 0 || messages[messages.length - 1]!.role !== entry.role) {
+        messages.push({ role: entry.role, content: entry.content });
+      } else {
+        // Same role consecutive — merge into the last message
+        messages[messages.length - 1]!.content += "\n" + entry.content;
+      }
+    }
+
+    // Ensure messages start with user and alternate
+    if (messages.length > 0 && messages[0]!.role !== "user") {
+      messages.shift();
+    }
+
     const response = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 500,
       system: SYSTEM_PROMPT + (contextInfo ? `\n\nContext: ${contextInfo}` : ""),
       tools: TOOLS as Anthropic.Messages.Tool[],
-      messages: [{ role: "user", content: userMessage }],
+      messages,
     });
 
     // Check for tool use
     for (const block of response.content) {
       if (block.type === "tool_use") {
+        pushHistory(chatId, "assistant", `[Using tool: ${block.name}(${JSON.stringify(block.input).slice(0, 100)})]`);
         return {
           type: "tool_call",
           toolCall: { name: block.name, input: block.input as Record<string, unknown> },
@@ -212,6 +278,7 @@ export async function processMessage(
         };
       }
       if (block.type === "text") {
+        pushHistory(chatId, "assistant", block.text);
         return { type: "text", text: block.text };
       }
     }
