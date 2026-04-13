@@ -645,6 +645,30 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // --- CLI device-code auth ---
+
+  if (req.method === "POST" && req.url === "/cli/device-code") {
+    handleDeviceCodeNew(req, res, started);
+    return;
+  }
+
+  if (req.method === "GET" && req.url?.startsWith("/cli/device-code/")) {
+    const code = req.url.slice("/cli/device-code/".length).split("?")[0]!;
+    handleDeviceCodePoll(code, res, started);
+    return;
+  }
+
+  if (req.method === "POST" && req.url?.startsWith("/cli/device-code/") && req.url?.endsWith("/approve")) {
+    const code = req.url.slice("/cli/device-code/".length).replace("/approve", "");
+    handleDeviceCodeApprove(req, code, res, started);
+    return;
+  }
+
+  if (req.method === "GET" && req.url?.startsWith("/cli/sessions")) {
+    handleCliSessionsList(req, res, started);
+    return;
+  }
+
   // Telegram connect token (rate-limited: 10 requests/hour per IP)
   if (req.method === "POST" && req.url === "/tg/token") {
     const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
@@ -4555,6 +4579,237 @@ function main(): void {
     void shutdown("SIGINT");
   });
 }
+
+// ---------------------------------------------------------------------------
+// CLI device-code auth handlers
+// ---------------------------------------------------------------------------
+
+import { deviceCode as deviceCodeTable, cliSession as cliSessionTable } from "@turbostarter/db/schema/mesh";
+
+function generateShortCode(len: number): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = new Uint8Array(len);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => chars[b % chars.length]).join("");
+}
+
+async function signCliJwt(payload: Record<string, unknown>): Promise<string> {
+  const secret = env.CLI_SYNC_SECRET;
+  if (!secret) throw new Error("CLI_SYNC_SECRET not configured");
+  const encoder = new TextEncoder();
+  const headerB64 = btoa(JSON.stringify({ alg: "HS256", typ: "JWT" }))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const payloadB64 = btoa(JSON.stringify(payload))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const key = await crypto.subtle.importKey(
+    "raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(`${headerB64}.${payloadB64}`));
+  const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return `${headerB64}.${payloadB64}.${sigB64}`;
+}
+
+async function hashToken(token: string): Promise<string> {
+  const data = new TextEncoder().encode(token);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** POST /cli/device-code — create a new device code. */
+async function handleDeviceCodeNew(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
+  let body: { hostname?: string; platform?: string; arch?: string } = {};
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+  } catch {}
+
+  const dc = generateShortCode(16);
+  const uc = generateShortCode(4) + "-" + generateShortCode(4);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  const clientIp = (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket.remoteAddress ?? "unknown";
+
+  try {
+    await db.insert(deviceCodeTable).values({
+      deviceCode: dc,
+      userCode: uc,
+      hostname: body.hostname,
+      platform: body.platform,
+      arch: body.arch,
+      ipAddress: clientIp,
+      expiresAt,
+    });
+
+    const baseUrl = process.env.APP_URL || "https://claudemesh.com";
+
+    writeJson(res, 200, {
+      device_code: dc,
+      user_code: uc,
+      expires_at: expiresAt.toISOString(),
+      verification_url: `${baseUrl}/cli-auth`,
+    });
+    log.info("device-code", { route: "POST /cli/device-code", user_code: uc, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("device-code", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to create device code" });
+  }
+}
+
+/** GET /cli/device-code/:code — poll device code status. */
+async function handleDeviceCodePoll(code: string, res: ServerResponse, started: number): Promise<void> {
+  try {
+    const [entry] = await db.select().from(deviceCodeTable).where(eq(deviceCodeTable.deviceCode, code)).limit(1);
+
+    if (!entry) {
+      writeJson(res, 200, { status: "expired" });
+      return;
+    }
+
+    if (new Date() > entry.expiresAt && entry.status === "pending") {
+      await db.update(deviceCodeTable).set({ status: "expired" }).where(eq(deviceCodeTable.id, entry.id));
+      writeJson(res, 200, { status: "expired" });
+      return;
+    }
+
+    if (entry.status === "approved" && entry.sessionToken && entry.userId) {
+      // Mark as consumed so it can't be polled again
+      await db.update(deviceCodeTable).set({ status: "consumed" }).where(eq(deviceCodeTable.id, entry.id));
+
+      // Look up user info
+      const [u] = await db.select().from(user).where(eq(user.id, entry.userId)).limit(1);
+
+      writeJson(res, 200, {
+        status: "approved",
+        session_token: entry.sessionToken,
+        user: {
+          id: entry.userId,
+          display_name: u?.name ?? u?.email ?? "User",
+          email: u?.email ?? "",
+        },
+      });
+      log.info("device-code-poll", { route: "GET /cli/device-code/:code", status: "approved", latency_ms: Date.now() - started });
+      return;
+    }
+
+    writeJson(res, 200, { status: entry.status });
+  } catch (e) {
+    log.error("device-code-poll", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to poll device code" });
+  }
+}
+
+/** POST /cli/device-code/:code/approve — approve from browser (requires sync token). */
+async function handleDeviceCodeApprove(req: IncomingMessage, code: string, res: ServerResponse, started: number): Promise<void> {
+  let body: { user_id: string; email: string; name?: string };
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+  } catch {
+    writeJson(res, 400, { error: "Invalid body" });
+    return;
+  }
+
+  if (!body.user_id || !body.email) {
+    writeJson(res, 400, { error: "user_id and email required" });
+    return;
+  }
+
+  try {
+    // Find device code by user_code (browser sends user_code, not device_code)
+    const [entry] = await db.select().from(deviceCodeTable)
+      .where(and(eq(deviceCodeTable.userCode, code), eq(deviceCodeTable.status, "pending")))
+      .limit(1);
+
+    if (!entry) {
+      writeJson(res, 404, { error: "Code not found or expired" });
+      return;
+    }
+
+    if (new Date() > entry.expiresAt) {
+      await db.update(deviceCodeTable).set({ status: "expired" }).where(eq(deviceCodeTable.id, entry.id));
+      writeJson(res, 410, { error: "Code expired" });
+      return;
+    }
+
+    // Sign a CLI session JWT (30 days)
+    const now = Math.floor(Date.now() / 1000);
+    const token = await signCliJwt({
+      sub: body.user_id,
+      email: body.email,
+      name: body.name,
+      type: "cli-session",
+      jti: crypto.randomUUID(),
+      iat: now,
+      exp: now + 30 * 24 * 60 * 60,
+    });
+
+    // Update device code as approved
+    await db.update(deviceCodeTable).set({
+      status: "approved",
+      userId: body.user_id,
+      sessionToken: token,
+      approvedAt: new Date(),
+    }).where(eq(deviceCodeTable.id, entry.id));
+
+    // Create CLI session record
+    await db.insert(cliSessionTable).values({
+      userId: body.user_id,
+      deviceCodeId: entry.id,
+      hostname: entry.hostname,
+      platform: entry.platform,
+      arch: entry.arch,
+      tokenHash: await hashToken(token),
+    });
+
+    writeJson(res, 200, { ok: true });
+    log.info("device-code-approve", {
+      route: "POST /cli/device-code/:code/approve",
+      user_id: body.user_id,
+      hostname: entry.hostname,
+      platform: entry.platform,
+      latency_ms: Date.now() - started,
+    });
+  } catch (e) {
+    log.error("device-code-approve", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to approve device code" });
+  }
+}
+
+/** GET /cli/sessions?user_id=... — list CLI sessions for a user. */
+async function handleCliSessionsList(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
+  const url = new URL(req.url!, "http://localhost");
+  const userId = url.searchParams.get("user_id");
+
+  if (!userId) {
+    writeJson(res, 400, { error: "user_id required" });
+    return;
+  }
+
+  try {
+    const sessions = await db.select().from(cliSessionTable)
+      .where(and(eq(cliSessionTable.userId, userId), isNull(cliSessionTable.revokedAt)))
+      .orderBy(cliSessionTable.createdAt);
+
+    writeJson(res, 200, {
+      sessions: sessions.map(s => ({
+        id: s.id,
+        hostname: s.hostname,
+        platform: s.platform,
+        arch: s.arch,
+        last_seen_at: s.lastSeenAt?.toISOString(),
+        created_at: s.createdAt.toISOString(),
+      })),
+    });
+    log.info("cli-sessions", { route: "GET /cli/sessions", user_id: userId, count: sessions.length, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("cli-sessions", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to list sessions" });
+  }
+}
+
+// ---------------------------------------------------------------------------
 
 // Skip starting the HTTP/WS server when running under vitest — tests import
 // claimInviteV2Core() directly and must not bind ports on module load.

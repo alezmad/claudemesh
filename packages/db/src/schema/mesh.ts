@@ -1017,3 +1017,95 @@ export const selectTelegramBridgeSchema = createSelectSchema(telegramBridge);
 export const insertTelegramBridgeSchema = createInsertSchema(telegramBridge);
 export type SelectTelegramBridge = typeof telegramBridge.$inferSelect;
 export type InsertTelegramBridge = typeof telegramBridge.$inferInsert;
+
+// ---------------------------------------------------------------------------
+// CLI device-code authentication
+// ---------------------------------------------------------------------------
+
+export const deviceCodeStatusEnum = meshSchema.enum("device_code_status", [
+  "pending",
+  "approved",
+  "consumed",
+  "expired",
+]);
+
+/**
+ * Device codes for CLI → browser → CLI OAuth flow.
+ * CLI creates a code, browser approves it, CLI polls until approved.
+ */
+export const deviceCode = meshSchema.table("device_code", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  /** Random 16-char code used by CLI to poll. */
+  deviceCode: text().notNull().unique(),
+  /** Human-readable code shown in browser (ABCD-EFGH). */
+  userCode: text().notNull(),
+  status: deviceCodeStatusEnum().notNull().default("pending"),
+  /** Filled on approve — the authenticated user. */
+  userId: text().references(() => user.id, { onDelete: "cascade" }),
+  /** Device info from CLI request. */
+  hostname: text(),
+  platform: text(),
+  arch: text(),
+  ipAddress: text(),
+  /** Signed JWT session token — filled on approve. */
+  sessionToken: text(),
+  createdAt: timestamp().defaultNow().notNull(),
+  approvedAt: timestamp(),
+  expiresAt: timestamp().notNull(),
+}, (table) => [
+  index("device_code_status_idx").on(table.status),
+  index("device_code_user_code_idx").on(table.userCode),
+]);
+
+export const deviceCodeRelations = relations(deviceCode, ({ one }) => ({
+  user: one(user, {
+    fields: [deviceCode.userId],
+    references: [user.id],
+  }),
+}));
+
+export const selectDeviceCodeSchema = createSelectSchema(deviceCode);
+export const insertDeviceCodeSchema = createInsertSchema(deviceCode);
+export type SelectDeviceCode = typeof deviceCode.$inferSelect;
+export type InsertDeviceCode = typeof deviceCode.$inferInsert;
+
+/**
+ * Persistent CLI session records — one per authenticated device.
+ * Enables dashboard "Signed in on N devices" view and per-device revocation.
+ */
+export const cliSession = meshSchema.table("cli_session", {
+  id: text().primaryKey().notNull().$defaultFn(generateId),
+  userId: text()
+    .references(() => user.id, { onDelete: "cascade" })
+    .notNull(),
+  /** Which device-code auth created this session. */
+  deviceCodeId: text().references(() => deviceCode.id),
+  hostname: text(),
+  platform: text(),
+  arch: text(),
+  /** SHA-256 hash of the JWT for revocation lookup. */
+  tokenHash: text().notNull(),
+  lastSeenAt: timestamp().defaultNow(),
+  createdAt: timestamp().defaultNow().notNull(),
+  /** NULL until user revokes from dashboard. */
+  revokedAt: timestamp(),
+}, (table) => [
+  index("cli_session_user_idx").on(table.userId),
+  index("cli_session_token_hash_idx").on(table.tokenHash),
+]);
+
+export const cliSessionRelations = relations(cliSession, ({ one }) => ({
+  user: one(user, {
+    fields: [cliSession.userId],
+    references: [user.id],
+  }),
+  deviceCodeEntry: one(deviceCode, {
+    fields: [cliSession.deviceCodeId],
+    references: [deviceCode.id],
+  }),
+}));
+
+export const selectCliSessionSchema = createSelectSchema(cliSession);
+export const insertCliSessionSchema = createInsertSchema(cliSession);
+export type SelectCliSession = typeof cliSession.$inferSelect;
+export type InsertCliSession = typeof cliSession.$inferInsert;

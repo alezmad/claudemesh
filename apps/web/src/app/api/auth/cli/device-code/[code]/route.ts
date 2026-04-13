@@ -1,33 +1,15 @@
 import { NextResponse } from "next/server";
-import { deviceCodes } from "../new/route";
+
+const BROKER_URL = (process.env.BROKER_HTTP_URL || "https://ic.claudemesh.com").replace(/\/$/, "");
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ code: string }> },
 ) {
   const { code } = await params;
-  const entry = deviceCodes.get(code);
 
-  if (!entry) {
-    return NextResponse.json({ status: "expired" });
-  }
+  const brokerRes = await fetch(`${BROKER_URL}/cli/device-code/${code}`);
+  const brokerBody = await brokerRes.json().catch(() => ({ status: "expired" }));
 
-  if (Date.now() > entry.expires_at) {
-    entry.status = "expired";
-    deviceCodes.delete(code);
-    return NextResponse.json({ status: "expired" });
-  }
-
-  if (entry.status === "approved") {
-    // Return token once, then clean up
-    const response = {
-      status: "approved",
-      session_token: entry.session_token,
-      user: entry.user,
-    };
-    deviceCodes.delete(code);
-    return NextResponse.json(response);
-  }
-
-  return NextResponse.json({ status: "pending" });
+  return NextResponse.json(brokerBody as Record<string, unknown>, { status: brokerRes.status });
 }
