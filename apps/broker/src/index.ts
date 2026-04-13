@@ -690,6 +690,12 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (req.method === "POST" && req.url?.startsWith("/cli/mesh/") && req.url?.endsWith("/invite")) {
+    const slug = req.url.slice("/cli/mesh/".length).replace("/invite", "");
+    handleCliMeshInvite(req, slug, res, started);
+    return;
+  }
+
   if (req.method === "DELETE" && req.url?.startsWith("/cli/mesh/")) {
     const slug = req.url.slice("/cli/mesh/".length);
     handleMeshDelete(req, slug, res, started);
@@ -5030,6 +5036,50 @@ import { checkPermission, getPermissions, setPermissions } from "./permissions";
 import { meshPermission } from "@turbostarter/db/schema/mesh";
 
 /** POST /cli/mesh/create — create a new mesh via CLI. */
+/** POST /cli/mesh/:slug/invite — generate an invite for a mesh. */
+async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: ServerResponse, started: number): Promise<void> {
+  let body: { user_id: string; email?: string; expires_in?: string; role?: string };
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+  } catch {
+    writeJson(res, 400, { error: "Invalid body" });
+    return;
+  }
+
+  if (!body.user_id) {
+    writeJson(res, 400, { error: "user_id required" });
+    return;
+  }
+
+  try {
+    const [m] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
+    if (!m) { writeJson(res, 404, { error: "Mesh not found" }); return; }
+
+    // Generate invite code
+    const code = generateShortCode(8);
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+    await db.insert(inviteTable).values({
+      meshId: m.id,
+      code,
+      createdBy: body.user_id,
+      expiresAt,
+      role: (body.role as "admin" | "member") ?? "member",
+    });
+
+    const baseUrl = process.env.APP_URL || "https://claudemesh.com";
+    const url = `${baseUrl}/i/${code}`;
+
+    writeJson(res, 200, { url, code, expires_at: expiresAt.toISOString() });
+    log.info("mesh-invite", { route: "POST /cli/mesh/:slug/invite", slug, code, email: body.email, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("mesh-invite", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to create invite" });
+  }
+}
+
 async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
   let body: { user_id: string; name: string; pubkey?: string; slug?: string; template?: string; description?: string };
   try {
