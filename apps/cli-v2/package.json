@@ -1,0 +1,67 @@
+{
+  "name": "claudemesh-cli-v2",
+  "version": "1.0.0-alpha.7",
+  "description": "Peer mesh for Claude Code sessions — CLI + MCP server.",
+  "keywords": [
+    "claude-code",
+    "mcp",
+    "model-context-protocol",
+    "claudemesh",
+    "peer-messaging",
+    "multi-agent"
+  ],
+  "author": "Alejandro Gutiérrez",
+  "license": "MIT",
+  "homepage": "https://claudemesh.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alezmad/claudemesh.git",
+    "directory": "apps/cli-v2"
+  },
+  "type": "module",
+  "bin": {
+    "claudemesh": "./dist/entrypoints/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "bun build.ts",
+    "clean": "git clean -xdf .cache .turbo dist node_modules",
+    "dev": "bun --hot src/entrypoints/cli.ts",
+    "start": "bun src/entrypoints/cli.ts",
+    "format": "prettier --check . --ignore-path ../../.gitignore",
+    "lint": "eslint",
+    "prepublishOnly": "bun run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "prettier": "@turbostarter/prettier-config",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.27.1",
+    "citty": "0.2.2",
+    "libsodium-wrappers": "0.7.15",
+    "ws": "8.20.0",
+    "zod": "4.1.13"
+  },
+  "devDependencies": {
+    "@turbostarter/eslint-config": "workspace:*",
+    "@turbostarter/prettier-config": "workspace:*",
+    "@turbostarter/tsconfig": "workspace:*",
+    "@turbostarter/vitest-config": "workspace:*",
+    "@types/libsodium-wrappers": "0.7.14",
+    "@types/ws": "8.5.13",
+    "eslint": "catalog:",
+    "prettier": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
