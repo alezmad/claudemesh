@@ -225,24 +225,24 @@ export function formatConfirmation(toolCall: AiToolCall): string {
 
   switch (name) {
     case "send_message":
-      return `📤 *Send message to ${escMd(String(input.to))}:*\n\n"${escMd(String(input.message))}"\n\nPriority: ${input.priority ?? "next"}`;
+      return `📤 <b>Send message to ${escHtml(String(input.to))}:</b>\n\n"${escHtml(String(input.message))}"\n\nPriority: ${input.priority ?? "next"}`;
 
     case "create_mesh":
-      return `🔧 *Create mesh:*\n\nName: ${escMd(String(input.name))}`;
+      return `🔧 <b>Create mesh:</b>\n\nName: ${escHtml(String(input.name))}`;
 
     case "share_mesh":
       return input.email
-        ? `📧 *Send invite to:*\n\n${escMd(String(input.email))}`
-        : `🔗 *Generate invite link*`;
+        ? `📧 <b>Send invite to:</b>\n\n${escHtml(String(input.email))}`
+        : `🔗 <b>Generate invite link</b>`;
 
     case "set_state":
-      return `📝 *Set state:*\n\n\`${escMd(String(input.key))}\` = \`${escMd(String(input.value))}\``;
+      return `📝 <b>Set state:</b>\n\n<code>${escHtml(String(input.key))}</code> = <code>${escHtml(String(input.value))}</code>`;
 
     case "remember":
-      return `💾 *Remember:*\n\n"${escMd(String(input.content))}"${input.tags ? `\nTags: ${(input.tags as string[]).join(", ")}` : ""}`;
+      return `💾 <b>Remember:</b>\n\n"${escHtml(String(input.content))}"${input.tags ? `\nTags: ${(input.tags as string[]).join(", ")}` : ""}`;
 
     default:
-      return `⚙️ *${name}:*\n\n${JSON.stringify(input, null, 2)}`;
+      return `⚙️ <b>${escHtml(name)}:</b>\n\n<pre>${escHtml(JSON.stringify(input, null, 2))}</pre>`;
   }
 }
 
@@ -256,33 +256,33 @@ export function formatResult(toolName: string, result: unknown): string {
 
     case "list_peers": {
       const peers = result as Array<{ displayName: string; status: string; summary?: string }>;
-      if (!peers || peers.length === 0) return "No peers online\\.";
-      return "👥 *Online peers:*\n\n" + peers.map(p => {
+      if (!peers || peers.length === 0) return "No peers online.";
+      return "👥 <b>Online peers:</b>\n\n" + peers.map(p => {
         const icon = p.status === "idle" ? "🟢" : p.status === "working" ? "🟡" : p.status === "dnd" ? "🔴" : "⚪";
-        return `${icon} *${escMd(p.displayName)}*${p.summary ? ` — ${escMd(p.summary)}` : ""}`;
+        return `${icon} <b>${escHtml(p.displayName)}</b>${p.summary ? ` — ${escHtml(p.summary)}` : ""}`;
       }).join("\n");
     }
 
     case "list_meshes": {
       const meshes = result as Array<{ slug: string; peers: number }>;
-      if (!meshes || meshes.length === 0) return "No meshes connected\\. Use /connect to add one\\.";
-      return "🔗 *Connected meshes:*\n\n" + meshes.map(m =>
-        `• *${escMd(m.slug)}* — ${m.peers} peer${m.peers !== 1 ? "s" : ""} online`
+      if (!meshes || meshes.length === 0) return "No meshes connected. Use /connect to add one.";
+      return "🔗 <b>Connected meshes:</b>\n\n" + meshes.map(m =>
+        `• <b>${escHtml(m.slug)}</b> — ${m.peers} peer${m.peers !== 1 ? "s" : ""} online`
       ).join("\n");
     }
 
     case "recall": {
       const memories = result as Array<{ content: string; tags: string[] }>;
       if (!memories || memories.length === 0) return "No memories found.";
-      return "🧠 *Memories:*\n\n" + memories.map(m =>
-        `• ${escMd(m.content)}${m.tags.length ? ` _[${m.tags.join(", ")}]_` : ""}`
+      return "🧠 <b>Memories:</b>\n\n" + memories.map(m =>
+        `• ${escHtml(m.content)}${m.tags.length ? ` <i>[${m.tags.join(", ")}]</i>` : ""}`
       ).join("\n");
     }
 
     case "get_state": {
       const state = result as { key: string; value: unknown } | null;
       if (!state) return "Key not found.";
-      return `📊 \`${escMd(state.key)}\` = \`${escMd(String(state.value))}\``;
+      return `📊 <code>${escHtml(state.key)}</code> = <code>${escHtml(String(state.value))}</code>`;
     }
 
     case "remember":
@@ -302,8 +302,8 @@ export function formatResult(toolName: string, result: unknown): string {
   }
 }
 
-function escMd(s: string): string {
-  return s.replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, "\\$&");
+function escHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 export { CONFIRM_ACTIONS };

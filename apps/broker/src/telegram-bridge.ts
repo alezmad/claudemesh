@@ -686,6 +686,17 @@ function escapeMarkdown(s: string): string {
   return s.replace(/([_*\[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 }
 
+/** Strip markdown formatting from AI text responses for plain Telegram display. */
+function stripMarkdown(s: string): string {
+  return s
+    .replace(/\*\*(.*?)\*\*/g, "$1")    // **bold** → bold
+    .replace(/\*(.*?)\*/g, "$1")         // *italic* → italic
+    .replace(/__(.*?)__/g, "$1")         // __underline__ → underline
+    .replace(/~~(.*?)~~/g, "$1")         // ~~strike~~ → strike
+    .replace(/`(.*?)`/g, "$1")           // `code` → code
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1"); // [text](url) → text
+}
+
 // ---------------------------------------------------------------------------
 // Bot command handlers
 // ---------------------------------------------------------------------------
@@ -1197,7 +1208,7 @@ function setupBotCommands(
           const result = await executeAiToolCall(pending.toolCall, pending.meshIds);
           await ctx.editMessageText(
             formatResult(pending.toolCall.name, result),
-            { parse_mode: "MarkdownV2" },
+            { parse_mode: "HTML" },
           );
         } catch (err) {
           await ctx.editMessageText(`❌ Failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -1608,12 +1619,12 @@ function setupBotCommands(
       });
 
       if (result.type === "error") {
-        await ctx.reply(result.text ?? "Something went wrong.");
+        await ctx.reply(stripMarkdown(result.text ?? "Something went wrong."));
         return;
       }
 
       if (result.type === "text") {
-        await ctx.reply(result.text ?? "");
+        await ctx.reply(stripMarkdown(result.text ?? ""));
         return;
       }
 
@@ -1630,7 +1641,7 @@ function setupBotCommands(
 
           const confirmText = formatConfirmation(result.toolCall);
           await ctx.reply(confirmText, {
-            parse_mode: "MarkdownV2",
+            parse_mode: "HTML",
             reply_markup: {
               inline_keyboard: [
                 [
@@ -1645,7 +1656,7 @@ function setupBotCommands(
           // Read-only action — execute immediately
           const execResult = await executeAiToolCall(result.toolCall, meshIds);
           await ctx.reply(formatResult(result.toolCall.name, execResult), {
-            parse_mode: "MarkdownV2",
+            parse_mode: "HTML",
           });
         }
       }
