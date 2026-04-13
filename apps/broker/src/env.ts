@@ -34,6 +34,7 @@ const envSchema = z.object({
   CLI_SYNC_SECRET: z.string().default(""),  // HS256 shared secret for dashboard→broker sync JWTs. Required for /cli-sync.
   MAX_SERVICES_PER_MESH: z.coerce.number().int().positive().default(20),
   MAX_SERVICE_ZIP_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
+  ANTHROPIC_API_KEY: z.string().default(""),  // Claude API key for Telegram AI bot
   NODE_ENV: z
     .enum(["development", "production", "test"])
     .default("development"),

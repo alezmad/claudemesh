@@ -15,6 +15,7 @@
   },
   "prettier": "@turbostarter/prettier-config",
   "dependencies": {
+    "@anthropic-ai/sdk": "0.71.2",
     "@qdrant/js-client-rest": "1.17.0",
     "@turbostarter/db": "workspace:*",
     "@turbostarter/shared": "workspace:*",
