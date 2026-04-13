@@ -75,3 +75,5 @@ dist/
 apps/web/payload.db
 apps/web/public/media/*
 !apps/web/public/media/.gitkeep
+.env.local
+apps/cli-v2/
