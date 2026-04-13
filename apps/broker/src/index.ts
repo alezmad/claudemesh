@@ -5065,24 +5065,18 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
 
     const meshId = generateId();
 
-    // Create mesh
-    await db.insert(mesh).values({
-      id: meshId,
-      name: body.name,
-      slug,
-      ownerUserId: body.user_id,
-    });
+    // Create mesh — use raw SQL to avoid Drizzle default-column issues
+    await db.execute(sql`
+      INSERT INTO mesh.mesh (id, name, slug, owner_user_id)
+      VALUES (${meshId}, ${body.name}, ${slug}, ${body.user_id})
+    `);
 
     // Create owner member
     const memberId = generateId();
-    await db.insert(meshMember).values({
-      id: memberId,
-      meshId,
-      userId: body.user_id,
-      peerPubkey: "pending",
-      displayName: body.name + "-owner",
-      role: "admin",
-    });
+    await db.execute(sql`
+      INSERT INTO mesh.member (id, mesh_id, user_id, peer_pubkey, display_name, role)
+      VALUES (${memberId}, ${meshId}, ${body.user_id}, ${"pending"}, ${body.name + "-owner"}, ${"admin"})
+    `);
 
     writeJson(res, 200, { id: meshId, slug, name: body.name, member_id: memberId });
     log.info("mesh-create", { route: "POST /cli/mesh/create", slug, user_id: body.user_id, latency_ms: Date.now() - started });
