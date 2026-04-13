@@ -59,6 +59,14 @@ const TOOLS: AiTool[] = [
     },
   },
   {
+    name: "list_meshes",
+    description: "List all meshes this Telegram chat is connected to. Use when user asks about their meshes, which meshes are available, or wants to see their workspace list.",
+    input_schema: {
+      type: "object",
+      properties: {},
+    },
+  },
+  {
     name: "remember",
     description: "Store a memory/note in the mesh's shared knowledge. Use when user wants to save information for later.",
     input_schema: {
@@ -139,6 +147,8 @@ const CONFIRM_ACTIONS = new Set([
 const SYSTEM_PROMPT = `You are the claudemesh Telegram assistant. You help users interact with their claudemesh peer network using natural language.
 
 You have access to tools for mesh operations. When the user's intent maps to a tool, use it. When it's a general question or conversation, respond directly.
+
+IMPORTANT: Always respond in the same language the user writes in. If they write in Spanish, respond in Spanish. If English, respond in English.
 
 Rules:
 - Be concise — Telegram messages should be short
@@ -246,11 +256,19 @@ export function formatResult(toolName: string, result: unknown): string {
 
     case "list_peers": {
       const peers = result as Array<{ displayName: string; status: string; summary?: string }>;
-      if (!peers || peers.length === 0) return "No peers online.";
+      if (!peers || peers.length === 0) return "No peers online\\.";
       return "👥 *Online peers:*\n\n" + peers.map(p => {
         const icon = p.status === "idle" ? "🟢" : p.status === "working" ? "🟡" : p.status === "dnd" ? "🔴" : "⚪";
         return `${icon} *${escMd(p.displayName)}*${p.summary ? ` — ${escMd(p.summary)}` : ""}`;
       }).join("\n");
+    }
+
+    case "list_meshes": {
+      const meshes = result as Array<{ slug: string; peers: number }>;
+      if (!meshes || meshes.length === 0) return "No meshes connected\\. Use /connect to add one\\.";
+      return "🔗 *Connected meshes:*\n\n" + meshes.map(m =>
+        `• *${escMd(m.slug)}* — ${m.peers} peer${m.peers !== 1 ? "s" : ""} online`
+      ).join("\n");
     }
 
     case "recall": {

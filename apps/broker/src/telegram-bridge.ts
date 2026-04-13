@@ -1592,7 +1592,7 @@ function setupBotCommands(
       // Gather context for the AI
       const firstMeshId = meshIds[0]!;
       const firstConn = meshConnections.get(firstMeshId);
-      const meshSlug = chatMeshSlugs.get(chatId)?.[0];
+      const meshSlug = meshSlugs.get(firstMeshId) ?? firstMeshId.slice(0, 12);
       let recentPeers: string[] = [];
       if (firstConn?.isConnected()) {
         try {
@@ -1706,12 +1706,27 @@ async function executeAiToolCall(
     case "list_peers":
       return conn.listPeers();
 
+    case "list_meshes": {
+      const results: Array<{ slug: string; peers: number }> = [];
+      for (const meshId of meshIds) {
+        const conn = meshConnections.get(meshId);
+        const slug = meshSlugs.get(meshId) ?? meshId.slice(0, 12);
+        let peerCount = 0;
+        if (conn?.isConnected()) {
+          try {
+            const peers = await conn.listPeers();
+            peerCount = peers.length;
+          } catch {}
+        }
+        results.push({ slug, peers: peerCount });
+      }
+      return results;
+    }
+
     case "remember":
     case "recall":
     case "get_state":
     case "set_state":
-      // These operations require WS request/response patterns not yet
-      // implemented in MeshConnection. Coming in a future update.
       throw new Error(`${toolCall.name} not yet available via Telegram. Use the CLI.`);
 
     default:
