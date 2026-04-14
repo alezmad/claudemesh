@@ -103,7 +103,7 @@ import { metrics, metricsToText } from "./metrics";
 import { TokenBucket } from "./rate-limit";
 import { isDbHealthy, startDbHealth, stopDbHealth } from "./db-health";
 import { buildInfo } from "./build-info";
-import { canonicalInviteV2, sealRootKeyToRecipient, verifyHelloSignature, verifyInviteV2 } from "./crypto";
+import { canonicalInvite, canonicalInviteV2, sealRootKeyToRecipient, verifyHelloSignature, verifyInviteV2 } from "./crypto";
 import { handleWebhook } from "./webhooks";
 import { audit, loadLastHashes, ensureAuditLogTable, verifyChain, queryAuditLog } from "./audit";
 
@@ -5056,18 +5056,78 @@ async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: Serv
   try {
     const [m] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
     if (!m) { writeJson(res, 404, { error: "Mesh not found" }); return; }
+    if (m.ownerUserId !== body.user_id) {
+      writeJson(res, 403, { error: "Only the owner can invite (for now)" });
+      return;
+    }
 
-    // Generate invite code
-    const code = generateShortCode(8);
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+    const sodiumMod = await import("libsodium-wrappers");
+    const s = sodiumMod.default;
+    await s.ready;
 
-    await db.insert(inviteTable).values({
-      meshId: m.id,
-      code,
-      createdBy: body.user_id,
-      expiresAt,
-      role: (body.role as "admin" | "member") ?? "member",
-    });
+    // Self-heal: CLI-created meshes before this fix lack owner keys. Generate + persist.
+    let ownerPubkey = m.ownerPubkey;
+    let ownerSecretKey = m.ownerSecretKey;
+    let rootKey = m.rootKey;
+    if (!ownerPubkey || !ownerSecretKey || !rootKey) {
+      const kp = s.crypto_sign_keypair();
+      ownerPubkey = s.to_hex(kp.publicKey);
+      ownerSecretKey = s.to_hex(kp.privateKey);
+      rootKey = s.to_base64(s.randombytes_buf(32), s.base64_variants.URLSAFE_NO_PADDING);
+      await db.execute(sql`UPDATE mesh.mesh SET owner_pubkey = ${ownerPubkey}, owner_secret_key = ${ownerSecretKey}, root_key = ${rootKey} WHERE id = ${m.id}`);
+    }
+
+    const role = (body.role === "admin" ? "admin" : "member") as "admin" | "member";
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const expiresAtSec = Math.floor(expiresAt.getTime() / 1000);
+    const brokerUrl = process.env.BROKER_URL || "wss://ic.claudemesh.com/ws";
+
+    const payloadCore = {
+      v: 1 as const,
+      mesh_id: m.id,
+      mesh_slug: m.slug,
+      broker_url: brokerUrl,
+      expires_at: expiresAtSec,
+      mesh_root_key: rootKey,
+      role,
+      owner_pubkey: ownerPubkey,
+    };
+    const canonical = canonicalInvite(payloadCore);
+    const signature = s.to_hex(s.crypto_sign_detached(s.from_string(canonical), s.from_hex(ownerSecretKey)));
+    const token = Buffer.from(JSON.stringify({ ...payloadCore, signature }), "utf-8").toString("base64url");
+
+    // Short code with collision retry
+    let code = generateShortCode(8);
+    let inviteId = "";
+    for (let i = 0; i < 3; i++) {
+      try {
+        const rows = await db.insert(inviteTable).values({
+          meshId: m.id,
+          token,
+          tokenBytes: canonical,
+          code,
+          maxUses: 1,
+          role,
+          expiresAt,
+          createdBy: body.user_id,
+          version: 2,
+        }).returning({ id: inviteTable.id });
+        inviteId = rows[0]!.id;
+        break;
+      } catch (e) {
+        if (e instanceof Error && e.message.includes("invite_code_unique_idx")) {
+          code = generateShortCode(8);
+          continue;
+        }
+        throw e;
+      }
+    }
+    if (!inviteId) throw new Error("Could not allocate unique invite code");
+
+    // v2 capability backfill
+    const canonicalV2 = canonicalInviteV2({ mesh_id: m.id, invite_id: inviteId, expires_at: expiresAtSec, role, owner_pubkey: ownerPubkey });
+    const signatureV2 = s.to_hex(s.crypto_sign_detached(s.from_string(canonicalV2), s.from_hex(ownerSecretKey)));
+    await db.update(inviteTable).set({ capabilityV2: JSON.stringify({ canonical: canonicalV2, signature: signatureV2 }) }).where(eq(inviteTable.id, inviteId));
 
     const baseUrl = process.env.APP_URL || "https://claudemesh.com";
     const url = `${baseUrl}/i/${code}`;
@@ -5075,7 +5135,7 @@ async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: Serv
     writeJson(res, 200, { url, code, expires_at: expiresAt.toISOString() });
     log.info("mesh-invite", { route: "POST /cli/mesh/:slug/invite", slug, code, email: body.email, latency_ms: Date.now() - started });
   } catch (e) {
-    log.error("mesh-invite", { error: e instanceof Error ? e.message : String(e) });
+    log.error("mesh-invite", { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? e.stack : undefined });
     writeJson(res, 500, { error: "Failed to create invite" });
   }
 }
@@ -5115,10 +5175,19 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
 
     const meshId = generateId();
 
+    // Generate owner signing keypair + root key so invites can be issued later.
+    const sodiumMod = await import("libsodium-wrappers");
+    const s = sodiumMod.default;
+    await s.ready;
+    const kp = s.crypto_sign_keypair();
+    const ownerPubkey = s.to_hex(kp.publicKey);
+    const ownerSecretKey = s.to_hex(kp.privateKey);
+    const rootKey = s.to_base64(s.randombytes_buf(32), s.base64_variants.URLSAFE_NO_PADDING);
+
     // Create mesh — use raw SQL to avoid Drizzle default-column issues
     await db.execute(sql`
-      INSERT INTO mesh.mesh (id, name, slug, owner_user_id)
-      VALUES (${meshId}, ${body.name}, ${slug}, ${body.user_id})
+      INSERT INTO mesh.mesh (id, name, slug, owner_user_id, owner_pubkey, owner_secret_key, root_key)
+      VALUES (${meshId}, ${body.name}, ${slug}, ${body.user_id}, ${ownerPubkey}, ${ownerSecretKey}, ${rootKey})
     `);
 
     // Create owner member
