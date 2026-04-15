@@ -1,7 +1,7 @@
 {
   "name": "claudemesh-cli",
-  "version": "0.10.6",
-  "description": "Claude Code MCP client for claudemesh — peer mesh messaging between Claude sessions.",
+  "version": "1.0.0-alpha.31",
+  "description": "Peer mesh for Claude Code sessions — CLI + MCP server.",
   "keywords": [
     "claude-code",
     "mcp",
@@ -20,7 +20,7 @@
   },
   "type": "module",
   "bin": {
-    "claudemesh": "./dist/index.js"
+    "claudemesh": "./dist/entrypoints/cli.js"
   },
   "files": [
     "dist",
@@ -31,10 +31,10 @@
     "access": "public"
   },
   "scripts": {
-    "build": "bun build src/index.ts --target=node --outfile dist/index.js --banner \"#!/usr/bin/env node\" && chmod +x dist/index.js",
+    "build": "bun build.ts",
     "clean": "git clean -xdf .cache .turbo dist node_modules",
-    "dev": "bun --hot src/index.ts",
-    "start": "bun src/index.ts",
+    "dev": "bun --hot src/entrypoints/cli.ts",
+    "start": "bun src/entrypoints/cli.ts",
     "format": "prettier --check . --ignore-path ../../.gitignore",
     "lint": "eslint",
     "prepublishOnly": "bun run build",
@@ -49,6 +49,7 @@
     "@modelcontextprotocol/sdk": "1.27.1",
     "citty": "0.2.2",
     "libsodium-wrappers": "0.7.15",
+    "qrcode-terminal": "0.12.0",
     "ws": "8.20.0",
     "zod": "4.1.13"
   },
@@ -58,6 +59,7 @@
     "@turbostarter/tsconfig": "workspace:*",
     "@turbostarter/vitest-config": "workspace:*",
     "@types/libsodium-wrappers": "0.7.14",
+    "@types/qrcode-terminal": "0.12.2",
     "@types/ws": "8.5.13",
     "eslint": "catalog:",
     "prettier": "catalog:",

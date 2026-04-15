@@ -696,6 +696,12 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  if (req.method === "POST" && req.url?.startsWith("/cli/mesh/") && req.url?.endsWith("/grants")) {
+    const slug = req.url.slice("/cli/mesh/".length).replace("/grants", "");
+    handleCliMeshGrants(req, slug, res, started);
+    return;
+  }
+
   if (req.method === "DELETE" && req.url?.startsWith("/cli/mesh/")) {
     const slug = req.url.slice("/cli/mesh/".length);
     handleMeshDelete(req, slug, res, started);
@@ -1836,6 +1842,28 @@ async function handleSend(
     ...(subtype ? { subtype } : {}),
   };
 
+  // Per-peer grant enforcement — load recipient grant maps once per send.
+  // See .artifacts/specs/2026-04-15-per-peer-capabilities.md.
+  const DEFAULT_CAPS = ["read", "dm", "broadcast", "state-read"] as const;
+  const capNeeded: "dm" | "broadcast" = isMulticast ? "broadcast" : "dm";
+  const senderPubkey = conn.memberPubkey; // stable member key (survives session rotation)
+  // Fetch grant maps for all connected peers in this mesh in one query.
+  // Small (bounded by concurrent connections per mesh); acceptable per send.
+  const grantRows = await db
+    .select({ id: meshMember.id, peerGrants: meshMember.peerGrants })
+    .from(meshMember)
+    .where(eq(meshMember.meshId, conn.meshId));
+  const grantsByMemberId = new Map<string, Record<string, string[]>>(
+    grantRows.map((r) => [r.id, (r.peerGrants as Record<string, string[]>) ?? {}]),
+  );
+  function allowed(recipientMemberId: string): boolean {
+    const grants = grantsByMemberId.get(recipientMemberId);
+    if (!grants) return DEFAULT_CAPS.includes(capNeeded);
+    const entry = grants[senderPubkey];
+    if (entry === undefined) return DEFAULT_CAPS.includes(capNeeded);
+    return entry.includes(capNeeded);
+  }
+
   for (const [pid, peer] of connections) {
     if (pid === senderPresenceId) continue;
     if (peer.meshId !== conn.meshId) continue;
@@ -1852,6 +1880,14 @@ async function handleSend(
       if (peer.memberPubkey !== msg.targetSpec
           && peer.sessionPubkey !== msg.targetSpec)
         continue;
+    }
+
+    // Per-peer capability check — silent drop if recipient hasn't granted
+    // `capNeeded` to this sender (Signal block semantics: sender sees
+    // delivered, recipient sees nothing).
+    if (!allowed(peer.memberId)) {
+      metrics.messagesDroppedByGrantTotal?.inc?.({ cap: capNeeded });
+      continue;
     }
 
     if (isMulticast) {
@@ -4319,7 +4355,12 @@ async function recoverScheduledMessages(): Promise<void> {
   }
 }
 
-function main(): void {
+async function main(): Promise<void> {
+  // Run pending migrations before the first connection is accepted.
+  // Exits non-zero on failure so Coolify sees a broken container.
+  const { runMigrationsOnStartup } = await import("./migrate");
+  await runMigrationsOnStartup();
+
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: env.MAX_MESSAGE_BYTES,
@@ -5036,6 +5077,52 @@ import { checkPermission, getPermissions, setPermissions } from "./permissions";
 import { meshPermission } from "@turbostarter/db/schema/mesh";
 
 /** POST /cli/mesh/create — create a new mesh via CLI. */
+/** POST /cli/mesh/:slug/grants — set per-peer grants for the caller's membership.
+ *
+ * Body: { user_id: string, grants: Record<peer_pubkey_hex, string[]> }
+ * Merges the map into the caller's mesh_member.peer_grants. Empty array
+ * for a specific peer = blocked. Explicit null = reset to defaults.
+ */
+async function handleCliMeshGrants(req: IncomingMessage, slug: string, res: ServerResponse, started: number): Promise<void> {
+  let body: { user_id: string; grants: Record<string, string[] | null> };
+  try {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
+  } catch {
+    writeJson(res, 400, { error: "Invalid body" });
+    return;
+  }
+  if (!body.user_id || !body.grants) {
+    writeJson(res, 400, { error: "user_id and grants required" });
+    return;
+  }
+  try {
+    const [m] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
+    if (!m) { writeJson(res, 404, { error: "Mesh not found" }); return; }
+    // Find the caller's member row.
+    const [member] = await db.select().from(meshMember)
+      .where(and(eq(meshMember.meshId, m.id), eq(meshMember.userId, body.user_id), isNull(meshMember.revokedAt)))
+      .limit(1);
+    if (!member) {
+      writeJson(res, 403, { error: "Not a member of this mesh" });
+      return;
+    }
+    const current = (member.peerGrants as Record<string, string[]>) ?? {};
+    const merged = { ...current };
+    for (const [pk, caps] of Object.entries(body.grants)) {
+      if (caps === null) delete merged[pk];
+      else merged[pk] = caps;
+    }
+    await db.update(meshMember).set({ peerGrants: merged }).where(eq(meshMember.id, member.id));
+    writeJson(res, 200, { ok: true, grants: merged });
+    log.info("mesh-grants", { route: "POST /cli/mesh/:slug/grants", slug, member_id: member.id, latency_ms: Date.now() - started });
+  } catch (e) {
+    log.error("mesh-grants", { error: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "Failed to update grants" });
+  }
+}
+
 /** POST /cli/mesh/:slug/invite — generate an invite for a mesh. */
 async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: ServerResponse, started: number): Promise<void> {
   let body: { user_id: string; email?: string; expires_in?: string; role?: string };
@@ -5363,5 +5450,8 @@ async function handlePermissionsSet(req: IncomingMessage, slug: string, res: Ser
 // Skip starting the HTTP/WS server when running under vitest — tests import
 // claimInviteV2Core() directly and must not bind ports on module load.
 if (!process.env.VITEST) {
-  main();
+  main().catch((e) => {
+    console.error("fatal:", e instanceof Error ? e.stack : e);
+    process.exit(1);
+  });
 }

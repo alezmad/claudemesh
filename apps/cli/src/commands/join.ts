@@ -11,16 +11,16 @@
  * v1 continues to work throughout v0.1.x. v1 endpoints 410 Gone at v0.2.0.
  */
 
-import { parseInviteLink } from "../invite/parse";
-import { enrollWithBroker } from "../invite/enroll";
-import { generateKeypair } from "../crypto/keypair";
-import { loadConfig, saveConfig, getConfigPath } from "../state/config";
-import { claimInviteV2, parseV2InviteInput } from "../lib/invite-v2";
+import { parseInviteLink } from "~/services/invite/facade.js";
+import { enrollWithBroker } from "~/services/invite/facade.js";
+import { generateKeypair } from "~/services/crypto/facade.js";
+import { readConfig, writeConfig, getConfigPath } from "~/services/config/facade.js";
+import { claimInviteV2, parseV2InviteInput } from "~/services/invite/facade.js";
 import sodium from "libsodium-wrappers";
 import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir, hostname } from "node:os";
-import { env } from "../env";
+import { env } from "~/constants/urls.js";
 
 /** Derive the web app base URL from the broker URL, unless explicitly overridden. */
 function deriveAppBaseUrl(): string {
@@ -73,7 +73,7 @@ async function runJoinV2(code: string): Promise<void> {
   // stable short derivative of the mesh id so `list` / `launch --mesh`
   // still have something to match on.
   const fallbackSlug = `mesh-${claim.meshId.slice(0, 8)}`;
-  const config = loadConfig();
+  const config = readConfig();
   config.meshes = config.meshes.filter((m) => m.meshId !== claim.meshId);
   config.meshes.push({
     meshId: claim.meshId,
@@ -87,7 +87,7 @@ async function runJoinV2(code: string): Promise<void> {
     rootKey: rootKeyB64,
     inviteVersion: 2,
   });
-  saveConfig(config);
+  writeConfig(config);
 
   console.log("");
   console.log(`✓ Joined mesh ${claim.meshId} via v2 invite`);
@@ -153,7 +153,7 @@ export async function runJoin(args: string[]): Promise<void> {
   }
 
   // 4. Persist.
-  const config = loadConfig();
+  const config = readConfig();
   config.meshes = config.meshes.filter(
     (m) => m.slug !== payload.mesh_slug,
   );
@@ -167,7 +167,7 @@ export async function runJoin(args: string[]): Promise<void> {
     brokerUrl: payload.broker_url,
     joinedAt: new Date().toISOString(),
   });
-  saveConfig(config);
+  writeConfig(config);
 
   // 4b. Store invite token for per-session re-enrollment (launch --name).
   const configDir = env.CLAUDEMESH_CONFIG_DIR ?? join(homedir(), ".claudemesh");

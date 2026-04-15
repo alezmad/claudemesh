@@ -5,7 +5,7 @@ name: Release CLI binaries
 # (x64 + arm64) and attaches them to a GitHub Release. The `install.sh`
 # fallback path curls these when Node isn't available.
 #
-# Publishing to npm is still a manual step (pnpm publish from apps/cli-v2) —
+# Publishing to npm is still a manual step (pnpm publish from apps/cli) —
 # this workflow only handles binary distribution.
 
 on:
@@ -48,7 +48,7 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Compile binary
-        working-directory: apps/cli-v2
+        working-directory: apps/cli
         shell: bash
         run: |
           mkdir -p dist/bin
@@ -64,7 +64,7 @@ jobs:
       # on the build host, so skip them.
       - name: Smoke test (native only)
         if: matrix.target == 'darwin-arm64' || matrix.target == 'linux-x64'
-        working-directory: apps/cli-v2
+        working-directory: apps/cli
         run: |
           ./dist/bin/claudemesh-${{ matrix.target }} --version
           ./dist/bin/claudemesh-${{ matrix.target }} --help | head -5
@@ -73,7 +73,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: claudemesh-${{ matrix.target }}
-          path: apps/cli-v2/dist/bin/claudemesh-${{ matrix.target }}${{ matrix.ext }}
+          path: apps/cli/dist/bin/claudemesh-${{ matrix.target }}${{ matrix.ext }}
 
   release:
     needs: build

@@ -5,8 +5,8 @@
  * on the server. Changes are pushed to active sessions in real-time.
  */
 
-import { loadConfig } from "../state/config";
-import { BrokerClient } from "../ws/client";
+import { readConfig } from "~/services/config/facade.js";
+import { BrokerClient } from "~/services/broker/facade.js";
 
 export interface ProfileFlags {
   mesh?: string;
@@ -23,7 +23,7 @@ export async function runProfile(flags: ProfileFlags): Promise<void> {
   const dim = (s: string): string => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
   const green = (s: string): string => (useColor ? `\x1b[32m${s}\x1b[39m` : s);
 
-  const config = loadConfig();
+  const config = readConfig();
   if (config.meshes.length === 0) {
     console.error("No meshes joined. Run `claudemesh join <url>` first.");
     process.exit(1);

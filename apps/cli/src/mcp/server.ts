@@ -15,9 +15,10 @@ import {
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
-import { TOOLS } from "./tools";
-import { loadConfig } from "../state/config";
-import { startClients, stopAll, findClient, allClients } from "../ws/manager";
+import { TOOLS } from "./tools/definitions.js";
+import { readConfig } from "~/services/config/facade.js";
+import { BrokerClient, startClients, stopAll, findClient, allClients } from "~/services/broker/facade.js";
+import type { InboundPush } from "~/services/broker/facade.js";
 import type {
   Priority,
   PeerStatus,
@@ -25,9 +26,7 @@ import type {
   SetStatusArgs,
   SetSummaryArgs,
   ListPeersArgs,
-} from "./types";
-import { BrokerClient } from "../ws/client";
-import type { InboundPush } from "../ws/client";
+} from "./types.js";
 
 /** Compute a human-readable relative time string from an ISO timestamp. */
 function relativeTime(isoStr: string): string {
@@ -105,6 +104,7 @@ async function resolveClient(to: string): Promise<{
       p.displayName.toLowerCase().includes(nameLower),
     );
     if (partials.length === 1) {
+      process.stderr.write(`[claudemesh] resolved "${target}" → "${partials[0]!.displayName}" (partial match)\n`);
       return { client: c, targetSpec: partials[0]!.pubkey };
     }
   }
@@ -155,7 +155,7 @@ export async function startMcpServer(): Promise<void> {
     return startServiceProxy(process.argv[serviceIdx + 1]!);
   }
 
-  const config = loadConfig();
+  const config = readConfig();
 
   const myName = config.displayName ?? "unnamed";
   const myRole = config.role ?? process.env.CLAUDEMESH_ROLE ?? null;
@@ -433,7 +433,7 @@ Your message mode is "${messageMode}".
 
     switch (name) {
       case "send_message": {
-        const { to, message, priority } = (args ?? {}) as SendMessageArgs;
+        const { to, message, priority } = (args ?? {}) as unknown as SendMessageArgs;
         if (!to || !message)
           return text("send_message: `to` and `message` required", true);
 
@@ -477,9 +477,17 @@ Your message mode is "${messageMode}".
             true,
           );
         const sections: string[] = [];
+        // Keep the status-line cache fresh for Claude Code's statusLine renderer.
+        const statusCache: Record<string, { total: number; online: number; updatedAt: string; you?: string }> = {};
         for (const c of clients) {
           const peers = await c!.listPeers();
           const header = `## ${c!.meshSlug} (${c!.status}, mesh ${c!.meshId.slice(0, 8)}…)`;
+          statusCache[c!.meshSlug] = {
+            total: peers.length,
+            online: peers.filter(p => p.status !== "offline").length,
+            updatedAt: new Date().toISOString(),
+            you: process.env.CLAUDEMESH_DISPLAY_NAME ?? undefined,
+          };
           if (peers.length === 0) {
             sections.push(`${header}\nNo peers connected.`);
           } else {
@@ -502,6 +510,15 @@ Your message mode is "${messageMode}".
             sections.push(`${header}\n${peerLines.join("\n")}`);
           }
         }
+        // Persist the peer-cache for claudemesh status-line. Best effort.
+        try {
+          const { writeFileSync, mkdirSync, existsSync } = await import("node:fs");
+          const { join: joinPath } = await import("node:path");
+          const { homedir } = await import("node:os");
+          const dir = joinPath(homedir(), ".claudemesh");
+          if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+          writeFileSync(joinPath(dir, "peer-cache.json"), JSON.stringify(statusCache));
+        } catch { /* non-fatal */ }
         return text(sections.join("\n\n"));
       }
 
@@ -542,7 +559,7 @@ Your message mode is "${messageMode}".
       }
 
       case "set_summary": {
-        const { summary } = (args ?? {}) as SetSummaryArgs;
+        const { summary } = (args ?? {}) as unknown as SetSummaryArgs;
         if (!summary) return text("set_summary: `summary` required", true);
         for (const c of allClients()) await c.setSummary(summary);
         return text(
@@ -551,7 +568,7 @@ Your message mode is "${messageMode}".
       }
 
       case "set_status": {
-        const { status } = (args ?? {}) as SetStatusArgs;
+        const { status } = (args ?? {}) as unknown as SetStatusArgs;
         if (!status) return text("set_status: `status` required", true);
         const s = status as PeerStatus;
         for (const c of allClients()) await c.setStatus(s);
@@ -654,6 +671,8 @@ Your message mode is "${messageMode}".
           cron?: string;
         };
         if (!sArgs.message) return text("schedule_reminder: `message` required", true);
+        const client = allClients()[0];
+        if (!client) return text("schedule_reminder: not connected", true);
 
         const isCron = !!sArgs.cron;
 
@@ -710,6 +729,8 @@ Your message mode is "${messageMode}".
         );
       }
       case "list_scheduled": {
+        const client = allClients()[0];
+        if (!client) return text("list_scheduled: not connected", true);
         const scheduled = await client.listScheduled();
         if (scheduled.length === 0) return text("No pending scheduled messages.");
         const lines = scheduled.map((m) =>
@@ -718,6 +739,8 @@ Your message mode is "${messageMode}".
         return text(`${scheduled.length} scheduled:\n${lines.join("\n")}`);
       }
       case "cancel_scheduled": {
+        const client = allClients()[0];
+        if (!client) return text("cancel_scheduled: not connected", true);
         const { id: schedId } = (args ?? {}) as { id?: string };
         if (!schedId) return text("cancel_scheduled: `id` required", true);
         const ok = await client.cancelScheduled(schedId);
@@ -735,7 +758,7 @@ Your message mode is "${messageMode}".
 
         // If 'to' specified, do E2E encryption
         if (fileTo) {
-          const { encryptFile, sealKeyForPeer } = await import("../crypto/file-crypto");
+          const { encryptFile, sealKeyForPeer } = await import("~/services/crypto/file-crypto.js");
           const { readFileSync, writeFileSync, mkdtempSync, unlinkSync, rmdirSync } = await import("node:fs");
           const { tmpdir } = await import("node:os");
           const { join, basename } = await import("node:path");
@@ -764,14 +787,15 @@ Your message mode is "${messageMode}".
           ];
 
           // Build combined buffer: nonce (24 bytes) + ciphertext
-          const { ensureSodium } = await import("../crypto/keypair");
+          const { ensureSodium } = await import("~/services/crypto/keypair.js");
           const sodium = await ensureSodium();
           const nonceBytes = sodium.from_base64(nonce, sodium.base64_variants.ORIGINAL);
           const combined = new Uint8Array(nonceBytes.length + ciphertext.length);
           combined.set(nonceBytes, 0);
           combined.set(ciphertext, nonceBytes.length);
 
-          const baseName = fileName ?? basename(filePath);
+          const rawName = fileName ?? basename(filePath);
+          const baseName = basename(rawName).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 255);
           const tmpDir = mkdtempSync(join(tmpdir(), "cm-"));
           const tmpPath = join(tmpDir, baseName);
           writeFileSync(tmpPath, combined);
@@ -814,32 +838,33 @@ Your message mode is "${messageMode}".
         if (!result) return text(`get_file: file ${id} not found`, true);
 
         if (result.encrypted) {
-          if (!result.sealedKey) return text("get_file: encrypted file — no decryption key available for your session", true);
-          const { openSealedKey, decryptFile } = await import("../crypto/file-crypto");
-          const { ensureSodium } = await import("../crypto/keypair");
+          const genericErr = "get_file: could not decrypt — you may not have access to this file";
+          if (!result.sealedKey) return text(genericErr, true);
+          const { openSealedKey, decryptFile } = await import("~/services/crypto/file-crypto.js");
+          const { ensureSodium } = await import("~/services/crypto/keypair.js");
           const myPubkey = client.getSessionPubkey();
           const mySecret = client.getSessionSecretKey();
-
-          if (!myPubkey || !mySecret) {
-            return text("get_file: no session keypair — cannot decrypt", true);
-          }
+          if (!myPubkey || !mySecret) return text(genericErr, true);
 
           const kf = await openSealedKey(result.sealedKey, myPubkey, mySecret);
-          if (!kf) return text("get_file: failed to open sealed key", true);
+          if (!kf) return text(genericErr, true);
 
-          // Download file bytes from presigned URL
+          const MAX_DOWNLOAD = 100 * 1024 * 1024; // 100 MB
           const resp = await fetch(result.url, { signal: AbortSignal.timeout(30_000) });
           if (!resp.ok) return text(`get_file: download failed (${resp.status})`, true);
+          const contentLength = parseInt(resp.headers.get("content-length") ?? "0", 10);
+          if (contentLength > MAX_DOWNLOAD) return text(`get_file: file too large (${contentLength} bytes)`, true);
           const buf = new Uint8Array(await resp.arrayBuffer());
+          if (buf.length > MAX_DOWNLOAD) return text(`get_file: file too large (${buf.length} bytes)`, true);
 
-          // Wire format: first 24 bytes = nonce, rest = ciphertext
           const sodium = await ensureSodium();
-          const NONCE_BYTES = sodium.crypto_secretbox_NONCEBYTES; // 24
+          const NONCE_BYTES = sodium.crypto_secretbox_NONCEBYTES;
+          if (buf.length < NONCE_BYTES) return text(genericErr, true);
           const nonce = sodium.to_base64(buf.slice(0, NONCE_BYTES), sodium.base64_variants.ORIGINAL);
           const ciphertext = buf.slice(NONCE_BYTES);
 
           const plaintext = await decryptFile(ciphertext, nonce, kf);
-          if (!plaintext) return text("get_file: decryption failed", true);
+          if (!plaintext) return text(genericErr, true);
 
           const { writeFileSync, mkdirSync } = await import("node:fs");
           const { dirname } = await import("node:path");
@@ -852,7 +877,7 @@ Your message mode is "${messageMode}".
         let res = await fetch(result.url, { signal: AbortSignal.timeout(10_000) }).catch(() => null);
         if (!res || !res.ok) {
           // Presigned URL failed (internal MinIO hostname) — use broker proxy
-          const brokerHttp = client.mesh.brokerUrl.replace("wss://", "https://").replace("ws://", "http://").replace("/ws", "");
+          const brokerHttp = client.brokerUrl.replace("wss://", "https://").replace("ws://", "http://").replace("/ws", "");
           res = await fetch(`${brokerHttp}/download/${id}?mesh=${client.meshId}`, { signal: AbortSignal.timeout(30_000) });
         }
         if (!res.ok) return text(`get_file: download failed (${res.status})`, true);
@@ -1379,7 +1404,7 @@ Your message mode is "${messageMode}".
         if (!result.encrypted) return text("grant_file_access: file is not encrypted", true);
         if (!result.sealedKey) return text("grant_file_access: no key available (are you the owner?)", true);
 
-        const { openSealedKey, sealKeyForPeer } = await import("../crypto/file-crypto");
+        const { openSealedKey, sealKeyForPeer } = await import("~/services/crypto/file-crypto.js");
         const myPubkey = client.getSessionPubkey();
         const mySecret = client.getSessionSecretKey();
         if (!myPubkey || !mySecret) return text("grant_file_access: no session keypair", true);
@@ -1512,6 +1537,9 @@ Your message mode is "${messageMode}".
           key?: string; value?: string; type?: "env" | "file"; mount_path?: string; description?: string;
         };
         if (!key || !value) return text("vault_set: `key` and `value` required", true);
+        if (!/^[a-zA-Z0-9_.-]{1,128}$/.test(key)) return text("vault_set: `key` must be 1-128 alphanumeric/underscore/dot/dash chars", true);
+        if (mount_path && (mount_path.includes("..") || mount_path.length > 512)) return text("vault_set: invalid `mount_path`", true);
+        if (description && description.length > 500) return text("vault_set: `description` too long (max 500 chars)", true);
         const client = allClients()[0];
         if (!client) return text("vault_set: not connected", true);
         const entryType = vType ?? "env";
@@ -1527,12 +1555,12 @@ Your message mode is "${messageMode}".
         }
 
         // E2E encrypt: crypto_secretbox with random Kf, then seal Kf with mesh pubkey
-        const { encryptFile, sealKeyForPeer } = await import("../crypto/file-crypto");
+        const { encryptFile, sealKeyForPeer } = await import("~/services/crypto/file-crypto.js");
         const { ciphertext, nonce, key: kf } = await encryptFile(plaintextBytes);
         const sealedKey = await sealKeyForPeer(kf, client.getMeshPubkey());
 
         // Convert ciphertext to base64 for storage
-        const { ensureSodium } = await import("../crypto/keypair");
+        const { ensureSodium } = await import("~/services/crypto/keypair.js");
         const sodium = await ensureSodium();
         const ciphertextB64 = sodium.to_base64(ciphertext, sodium.base64_variants.ORIGINAL);
 
@@ -1597,8 +1625,8 @@ Your message mode is "${messageMode}".
 
           // Fetch + decrypt vault entries client-side
           if (vaultRefs.length > 0) {
-            const { openSealedKey, decryptFile } = await import("../crypto/file-crypto");
-            const { ensureSodium } = await import("../crypto/keypair");
+            const { openSealedKey, decryptFile } = await import("~/services/crypto/file-crypto.js");
+            const { ensureSodium } = await import("~/services/crypto/keypair.js");
             const sodium = await ensureSodium();
 
             const keys = vaultRefs.map(r => r.vaultKey);
@@ -1606,15 +1634,15 @@ Your message mode is "${messageMode}".
 
             for (const ref of vaultRefs) {
               const entry = encryptedEntries.find((e: any) => e.key === ref.vaultKey);
-              if (!entry) return text(`mesh_mcp_deploy: vault key "${ref.vaultKey}" not found. Use vault_set first.`, true);
+              if (!entry) return text(`mesh_mcp_deploy: a referenced vault key was not found. Use vault_set first.`, true);
 
               // Decrypt: open sealed key with mesh keypair, then decrypt ciphertext
               const kf = await openSealedKey(entry.sealed_key, client.getMeshPubkey(), client.getMeshSecretKey());
-              if (!kf) return text(`mesh_mcp_deploy: failed to decrypt vault key "${ref.vaultKey}" — wrong keypair?`, true);
+              if (!kf) return text(`mesh_mcp_deploy: failed to decrypt a vault entry — wrong keypair?`, true);
 
               const ciphertextBytes = sodium.from_base64(entry.ciphertext, sodium.base64_variants.ORIGINAL);
               const plainBytes = await decryptFile(ciphertextBytes, entry.nonce, kf);
-              if (!plainBytes) return text(`mesh_mcp_deploy: failed to decrypt vault entry "${ref.vaultKey}" — corrupted?`, true);
+              if (!plainBytes) return text(`mesh_mcp_deploy: failed to decrypt a vault entry — data may be corrupted`, true);
 
               if (ref.isFile && ref.mountPath) {
                 // For file-type entries: the plaintext is the file content (raw bytes).
@@ -1826,7 +1854,7 @@ Your message mode is "${messageMode}".
                 event: eventName,
                 mesh_slug: client.meshSlug,
                 mesh_id: client.meshId,
-                ...(Object.keys(data).length > 0 ? { eventData: data } : {}),
+                ...(Object.keys(data).length > 0 ? { eventData: JSON.stringify(data) } : {}),
               },
             },
           });
@@ -1842,6 +1870,18 @@ Your message mode is "${messageMode}".
         ? await resolvePeerName(client, fromPubkey)
         : "unknown";
 
+      // Per-peer capability check — drop silently if sender lacks `dm`.
+      if (fromPubkey) {
+        try {
+          const { isAllowed } = await import("~/commands/grants.js");
+          const kindCap = msg.kind === "broadcast" ? "broadcast" : "dm";
+          if (!isAllowed(client.meshSlug, fromPubkey, kindCap)) {
+            process.stderr.write(`[claudemesh] dropped ${kindCap} from ${fromName} (not granted)\n`);
+            return;
+          }
+        } catch { /* fail-open on grant-read errors — don't break delivery */ }
+      }
+
       if (messageMode === "inbox") {
         try {
           await server.notification({
@@ -1855,8 +1895,13 @@ Your message mode is "${messageMode}".
         return;
       }
 
-      // push mode — full content
-      const content = msg.plaintext ?? decryptFailedWarning(fromPubkey);
+      // push mode — full content. Format the content so it reads as a
+      // first-class chat message even though Claude Code renders it as a
+      // <channel> reminder: sender attribution + priority badge + body.
+      const body = msg.plaintext ?? decryptFailedWarning(fromPubkey);
+      const prioBadge = msg.priority === "now" ? "[URGENT] " : msg.priority === "low" ? "[low] " : "";
+      const kindBadge = msg.kind === "broadcast" ? " (broadcast)" : "";
+      const content = `${prioBadge}${fromName}${kindBadge}: ${body}`;
       try {
         await server.notification({
           method: "notifications/claude/channel",
@@ -1875,7 +1920,7 @@ Your message mode is "${messageMode}".
             },
           },
         });
-        process.stderr.write(`[claudemesh] pushed: from=${fromName} content=${content.slice(0, 60)}\n`);
+        process.stderr.write(`[claudemesh] pushed: from=${fromName} content=${body.slice(0, 60)}\n`);
       } catch (pushErr) {
         process.stderr.write(`[claudemesh] push FAILED: ${pushErr}\n`);
       }
@@ -1970,7 +2015,7 @@ Your message mode is "${messageMode}".
  * Code will not auto-restart it.
  */
 async function startServiceProxy(serviceName: string): Promise<void> {
-  const config = loadConfig();
+  const config = readConfig();
   if (config.meshes.length === 0) {
     process.stderr.write(`[mesh:${serviceName}] no meshes joined\n`);
     process.exit(1);
@@ -2035,13 +2080,13 @@ async function startServiceProxy(serviceName: string): Promise<void> {
     const args = req.params.arguments ?? {};
 
     // Wait for broker reconnection if needed
-    if (client.status !== "open") {
+    if ((client.status as string) !== "open") {
       let waited = 0;
-      while (client.status !== "open" && waited < 10_000) {
+      while ((client.status as string) !== "open" && waited < 10_000) {
         await new Promise((r) => setTimeout(r, 500));
         waited += 500;
       }
-      if (client.status !== "open") {
+      if ((client.status as string) !== "open") {
         return {
           content: [
             {
@@ -2105,7 +2150,7 @@ async function startServiceProxy(serviceName: string): Promise<void> {
       // Refresh tools
       const newTools = (push.eventData as any)?.tools;
       if (Array.isArray(newTools)) {
-        tools = newTools;
+        tools = newTools as typeof tools;
         // Notify Claude Code that tools changed
         server
           .notification({

@@ -6,22 +6,47 @@
  */
 
 import { hostname } from "node:os";
-import { BrokerClient } from "../ws/client";
-import { loadConfig } from "../state/config";
-import type { JoinedMesh } from "../state/config";
+import { createInterface } from "node:readline";
+import { BrokerClient } from "~/services/broker/facade.js";
+import { readConfig } from "~/services/config/facade.js";
+import type { JoinedMesh } from "~/services/config/facade.js";
 
 export interface ConnectOpts {
   /** Mesh slug to connect to. Auto-selects if only one mesh joined. */
   meshSlug?: string | null;
   /** Display name for this session. Defaults to hostname-pid. */
   displayName?: string;
+  /** Connect to all meshes and run fn for each. */
+  all?: boolean;
+}
+
+async function pickMesh(meshes: JoinedMesh[]): Promise<JoinedMesh> {
+  console.log("\n  Select mesh:");
+  meshes.forEach((m, i) => {
+    console.log(`    ${i + 1}) ${m.slug}`);
+  });
+  console.log("");
+
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question("  Choice [1]: ", (answer) => {
+      rl.close();
+      const idx = parseInt(answer || "1", 10) - 1;
+      if (idx >= 0 && idx < meshes.length) {
+        resolve(meshes[idx]!);
+      } else {
+        console.error("  Invalid choice, using first mesh.");
+        resolve(meshes[0]!);
+      }
+    });
+  });
 }
 
 export async function withMesh<T>(
   opts: ConnectOpts,
   fn: (client: BrokerClient, mesh: JoinedMesh) => Promise<T>,
 ): Promise<T> {
-  const config = loadConfig();
+  const config = readConfig();
   if (config.meshes.length === 0) {
     console.error("No meshes joined. Run `claudemesh join <url>` first.");
     process.exit(1);
@@ -40,10 +65,7 @@ export async function withMesh<T>(
   } else if (config.meshes.length === 1) {
     mesh = config.meshes[0]!;
   } else {
-    console.error(
-      `Multiple meshes joined. Specify one with --mesh <slug>.\nJoined: ${config.meshes.map((m) => m.slug).join(", ")}`,
-    );
-    process.exit(1);
+    mesh = await pickMesh(config.meshes);
   }
 
   const displayName = opts.displayName ?? config.displayName ?? `${hostname()}-${process.pid}`;

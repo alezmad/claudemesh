@@ -4,8 +4,8 @@
  * Useful for AI agents to orient themselves in a mesh via bash.
  */
 
-import { withMesh } from "./connect";
-import { loadConfig } from "../state/config";
+import { withMesh } from "./connect.js";
+import { readConfig } from "~/services/config/facade.js";
 
 export interface InfoFlags {
   mesh?: string;
@@ -18,7 +18,7 @@ export async function runInfo(flags: InfoFlags): Promise<void> {
   const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
   const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
 
-  const config = loadConfig();
+  const config = readConfig();
 
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client, mesh) => {
     const [brokerInfo, peers, state] = await Promise.all([

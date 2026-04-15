@@ -35,6 +35,10 @@ ENV BROKER_PORT=7900
 
 COPY --from=deps --chown=bun:bun /deploy /app
 
+# Copy migrations folder alongside the broker so runtime auto-migrate
+# has files to apply. Workspace deploy subset drops them otherwise.
+COPY --from=deps --chown=bun:bun /app/packages/db/migrations /app/migrations
+
 EXPOSE 7900
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \

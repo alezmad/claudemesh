@@ -8,8 +8,8 @@
  *   - *               (broadcast to all)
  */
 
-import { withMesh } from "./connect";
-import type { Priority } from "../ws/client";
+import { withMesh } from "./connect.js";
+import type { Priority } from "~/services/broker/facade.js";
 
 export interface SendFlags {
   mesh?: string;

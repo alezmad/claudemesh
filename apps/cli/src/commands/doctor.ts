@@ -10,8 +10,8 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { loadConfig, getConfigPath } from "../state/config";
-import { VERSION } from "../version";
+import { readConfig, getConfigPath } from "~/services/config/facade.js";
+import { VERSION, URLS } from "~/constants/urls.js";
 
 interface Check {
   name: string;
@@ -110,7 +110,7 @@ function checkConfigFile(): Check {
     };
   }
   try {
-    loadConfig();
+    readConfig();
     const st = statSync(path);
     const mode = (st.mode & 0o777).toString(8);
     const secure = platform() === "win32" || mode === "600";
@@ -132,7 +132,7 @@ function checkConfigFile(): Check {
 
 function checkKeypairs(): Check {
   try {
-    const cfg = loadConfig();
+    const cfg = readConfig();
     if (cfg.meshes.length === 0) {
       return {
         name: "Mesh keypairs valid",
@@ -172,6 +172,73 @@ function checkKeypairs(): Check {
   }
 }
 
+async function checkBrokerWs(): Promise<Check> {
+  const wsUrl = URLS.BROKER;
+  const start = Date.now();
+  try {
+    const WebSocket = (await import("ws")).default;
+    const ws = new WebSocket(wsUrl);
+    const result = await new Promise<Check>((resolve) => {
+      const timer = setTimeout(() => {
+        try { ws.close(); } catch { /* noop */ }
+        resolve({
+          name: "Broker WebSocket reachable",
+          pass: false,
+          detail: `timeout after 5s (${wsUrl})`,
+          fix: "Check firewall/proxy. Broker at ic.claudemesh.com:443 over WSS.",
+        });
+      }, 5000);
+      ws.once("open", () => {
+        clearTimeout(timer);
+        const latency = Date.now() - start;
+        try { ws.close(); } catch { /* noop */ }
+        resolve({
+          name: "Broker WebSocket reachable",
+          pass: true,
+          detail: `${latency}ms to ${wsUrl}`,
+        });
+      });
+      ws.once("error", (e) => {
+        clearTimeout(timer);
+        resolve({
+          name: "Broker WebSocket reachable",
+          pass: false,
+          detail: e.message,
+          fix: "Check network. Broker URL can be overridden via CLAUDEMESH_BROKER_URL.",
+        });
+      });
+    });
+    return result;
+  } catch (e) {
+    return {
+      name: "Broker WebSocket reachable",
+      pass: false,
+      detail: e instanceof Error ? e.message : String(e),
+    };
+  }
+}
+
+async function checkNpmLatest(): Promise<Check> {
+  try {
+    const res = await fetch(URLS.NPM_REGISTRY, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) {
+      return { name: "CLI up-to-date", pass: true, detail: `npm unreachable (${res.status}) — skipped` };
+    }
+    const body = (await res.json()) as { "dist-tags"?: { alpha?: string; latest?: string } };
+    const latest = body["dist-tags"]?.alpha ?? body["dist-tags"]?.latest;
+    if (!latest) return { name: "CLI up-to-date", pass: true, detail: "no dist-tag — skipped" };
+    const up = latest === VERSION;
+    return {
+      name: "CLI up-to-date",
+      pass: up,
+      detail: up ? `latest ${latest}` : `installed ${VERSION} → latest ${latest}`,
+      fix: up ? undefined : "npm i -g claudemesh-cli@alpha",
+    };
+  } catch {
+    return { name: "CLI up-to-date", pass: true, detail: "npm check skipped" };
+  }
+}
+
 export async function runDoctor(): Promise<void> {
   const useColor =
     !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
@@ -189,6 +256,8 @@ export async function runDoctor(): Promise<void> {
     checkHooksRegistered(),
     checkConfigFile(),
     checkKeypairs(),
+    await checkBrokerWs(),
+    await checkNpmLatest(),
   ];
 
   for (const c of checks) {

@@ -164,8 +164,19 @@ export const meshMember = meshSchema.table("member", {
   joinedAt: timestamp().defaultNow().notNull(),
   lastSeenAt: timestamp(),
   revokedAt: timestamp(),
+  /**
+   * Per-peer capability grants — which peer pubkeys can send this member
+   * which kinds of messages. Empty object = use defaults (read + dm +
+   * broadcast + state-read). Empty array for a specific pubkey = blocked.
+   * See .artifacts/specs/2026-04-15-per-peer-capabilities.md.
+   */
+  peerGrants: jsonb()
+    .$type<Record<string, string[]>>()
+    .notNull()
+    .default({}),
 }, (table) => [
   index("member_dashboard_user_idx").on(table.dashboardUserId),
+  index("member_peer_grants_gin_idx").using("gin", table.peerGrants),
 ]);
 
 /**

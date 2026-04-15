@@ -5,8 +5,8 @@
  * Works best when message-mode is "inbox" or "off" (messages held at broker).
  */
 
-import { withMesh } from "./connect";
-import type { InboundPush } from "../ws/client";
+import { withMesh } from "./connect.js";
+import type { InboundPush } from "~/services/broker/facade.js";
 
 export interface InboxFlags {
   mesh?: string;

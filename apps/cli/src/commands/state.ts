@@ -4,7 +4,7 @@
  * `claudemesh state list`          — list all state entries
  */
 
-import { withMesh } from "./connect";
+import { withMesh } from "./connect.js";
 
 export interface StateFlags {
   mesh?: string;

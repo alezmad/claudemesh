@@ -6,7 +6,7 @@
  * Human-facing interface to the broker's scheduled message delivery.
  */
 
-import { withMesh } from "./connect";
+import { withMesh } from "./connect.js";
 
 export interface RemindFlags {
   mesh?: string;

@@ -29,7 +29,7 @@ import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { loadConfig } from "../state/config";
+import { readConfig } from "~/services/config/facade.js";
 
 const MCP_NAME = "claudemesh";
 const CLAUDE_CONFIG = join(homedir(), ".claude.json");
@@ -356,8 +356,25 @@ function uninstallHooks(): number {
   return removed;
 }
 
+function installStatusLine(): { installed: boolean } {
+  const settings = readClaudeSettings();
+  const cmd = `claudemesh status-line`;
+  const current = (settings as { statusLine?: { command?: string } }).statusLine;
+  // If the user has their own statusLine command, don't clobber it.
+  if (current?.command && !current.command.includes("claudemesh status-line")) {
+    return { installed: false };
+  }
+  (settings as { statusLine?: { type: string; command: string } }).statusLine = {
+    type: "command",
+    command: cmd,
+  };
+  writeClaudeSettings(settings);
+  return { installed: true };
+}
+
 export function runInstall(args: string[] = []): void {
   const skipHooks = args.includes("--no-hooks");
+  const wantStatusLine = args.includes("--status-line");
   console.log("claudemesh install");
   console.log("------------------");
 
@@ -452,10 +469,25 @@ export function runInstall(args: string[] = []): void {
     console.log(dim("· Hooks skipped (--no-hooks)"));
   }
 
+  // Opt-in status line (shows mesh + peer count in Claude Code).
+  if (wantStatusLine) {
+    try {
+      const { installed } = installStatusLine();
+      if (installed) {
+        console.log(`✓ Claude Code statusLine → \`claudemesh status-line\``);
+        console.log(dim(`  Shows: ◇ <mesh> · <online>/<total> online · <you>`));
+      } else {
+        console.log(dim("· statusLine already set to a custom command — left alone"));
+      }
+    } catch (e) {
+      console.error(`⚠  statusLine install failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   // Check if user has any meshes joined — nudge them if not.
   let hasMeshes = false;
   try {
-    const meshConfig = loadConfig();
+    const meshConfig = readConfig();
     hasMeshes = meshConfig.meshes.length > 0;
   } catch {
     // Config missing or corrupt — treat as no meshes.
@@ -468,8 +500,8 @@ export function runInstall(args: string[] = []): void {
     console.log("");
     console.log(yellow("No meshes joined.") + " To connect with peers:");
     console.log(
-      `  ${bold("claudemesh join <invite-url>")}` +
-        dim("   — join an existing mesh"),
+      `  ${bold("claudemesh <invite-url>")}` +
+        dim("   — joins + launches in one step"),
     );
     console.log(
       `  ${dim("Create one at")} ${bold("https://claudemesh.com/dashboard")}`,
@@ -477,21 +509,15 @@ export function runInstall(args: string[] = []): void {
   } else {
     console.log("");
     console.log(
-      `Next: ${bold("claudemesh join https://claudemesh.com/join/<token>")}`,
+      `Next: ${bold("claudemesh")}` + dim("   — launch with your joined mesh"),
     );
   }
 
   console.log("");
-  console.log(
-    yellow("⚠  For real-time push messages from peers, launch with:"),
-  );
-  console.log(
-    `     ${bold("claudemesh launch")}` +
-      dim("    (or: claude --dangerously-load-development-channels server:claudemesh)"),
-  );
-  console.log(
-    dim("   Plain `claude` still works — messages are then pull-only via check_messages."),
-  );
+  console.log(dim("Optional:"));
+  console.log(dim(`  claudemesh url-handler install   # click-to-launch from email`));
+  console.log(dim(`  claudemesh install --status-line # live peer count in Claude Code`));
+  console.log(dim(`  claudemesh completions zsh       # shell completions`));
 }
 
 export function runUninstall(): void {

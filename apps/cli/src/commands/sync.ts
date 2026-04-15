@@ -7,16 +7,17 @@
 
 import { createInterface } from "node:readline";
 import { hostname } from "node:os";
-import { loadConfig, saveConfig } from "../state/config";
-import { startCallbackListener, openBrowser, generatePairingCode, syncWithBroker } from "../auth";
-import { generateKeypair } from "../crypto/keypair";
+import { readConfig, writeConfig } from "~/services/config/facade.js";
+import { startCallbackListener, generatePairingCode, syncWithBroker } from "~/services/auth/facade.js";
+import { openBrowser } from "~/services/spawn/facade.js";
+import { generateKeypair } from "~/services/crypto/facade.js";
 
 export async function runSync(args: { force?: boolean }): Promise<void> {
   const useColor = !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
   const dim = (s: string): string => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
   const green = (s: string): string => (useColor ? `\x1b[32m${s}\x1b[39m` : s);
 
-  const config = loadConfig();
+  const config = readConfig();
 
   const code = generatePairingCode();
   const listener = await startCallbackListener();
@@ -78,7 +79,7 @@ export async function runSync(args: { force?: boolean }): Promise<void> {
     added++;
   }
   config.accountId = result.account_id;
-  saveConfig(config);
+  writeConfig(config);
 
   if (added > 0) {
     console.log(green(`✓ Added ${added} new mesh(es)`));

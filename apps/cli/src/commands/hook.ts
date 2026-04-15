@@ -23,7 +23,7 @@
  * in pending_status (harmless, TTL-swept).
  */
 
-import { loadConfig } from "../state/config";
+import { readConfig } from "~/services/config/facade.js";
 
 const DEBUG = process.env.CLAUDEMESH_HOOK_DEBUG === "1";
 
@@ -100,7 +100,7 @@ export async function runHook(args: string[]): Promise<void> {
   // Fan out to EVERY joined mesh's broker in parallel.
   let config;
   try {
-    config = loadConfig();
+    config = readConfig();
   } catch (e) {
     debug(`config load failed: ${e instanceof Error ? e.message : e}`);
     process.exit(0);

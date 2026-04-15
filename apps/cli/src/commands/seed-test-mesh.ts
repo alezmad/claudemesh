@@ -9,7 +9,7 @@
  *   claudemesh seed-test-mesh <broker-url> <mesh-id> <member-id> <pubkey> <slug>
  */
 
-import { loadConfig, saveConfig } from "../state/config";
+import { readConfig, writeConfig } from "~/services/config/facade.js";
 
 export function runSeedTestMesh(args: string[]): void {
   const [brokerUrl, meshId, memberId, pubkey, slug] = args;
@@ -23,7 +23,7 @@ export function runSeedTestMesh(args: string[]): void {
     );
     process.exit(1);
   }
-  const config = loadConfig();
+  const config = readConfig();
   // Remove any prior entry with same slug (idempotent).
   config.meshes = config.meshes.filter((m) => m.slug !== slug);
   config.meshes.push({
@@ -36,7 +36,7 @@ export function runSeedTestMesh(args: string[]): void {
     brokerUrl,
     joinedAt: new Date().toISOString(),
   });
-  saveConfig(config);
+  writeConfig(config);
   console.log(`Seeded mesh "${slug}" (${meshId}) into local config.`);
   console.log(
     `Run \`claudemesh mcp\` to connect, or register with Claude Code via \`claudemesh install\`.`,

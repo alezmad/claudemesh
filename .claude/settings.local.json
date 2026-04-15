@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/Users/agutierrez/.claude/hooks/play-tts.sh Connected to mesh, setting up:*)",
+      "Bash(/Users/agutierrez/.claude/hooks/play-tts.sh Connected to mesh, setting up session:*)",
+      "Bash(npx tsx:*)",
+      "Bash(grep -r \"defineCommand\\\\|export const run\" /Users/agutierrez/Desktop/claudemesh/apps/cli/src/commands/*.ts)",
+      "Bash(pnpm build:*)",
+      "Bash(/Users/agutierrez/.claude/hooks/play-tts.sh Ready to help:*)",
+      "Bash(pnpm publish:*)",
+      "Bash(grep -E \"\\\\.\\(tsx?|jsx?\\)$\")",
+      "Bash(/Users/agutierrez/.claude/hooks/play-tts.sh Investigating dropped keystrokes in claudemesh launch:*)",
+      "Read(//Users/agutierrez/.claude/**)",
+      "Read(//private/tmp/**)",
+      "Bash(timeout 3 node dist/index.js mcp)",
+      "Bash(/Users/agutierrez/.claude/hooks/play-tts.sh Fixed ZodError in MCP notification handler:*)",
+      "Bash(npm i:*)",
+      "Bash(claudemesh --version)",
+      "Bash(/Users/agutierrez/.claude/hooks/play-tts.sh:*)"
+    ]
+  }
+}

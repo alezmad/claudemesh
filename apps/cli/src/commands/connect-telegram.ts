@@ -1,7 +1,7 @@
-import { loadConfig } from "../state/config";
+import { readConfig } from "~/services/config/facade.js";
 
 export async function connectTelegram(args: string[]): Promise<void> {
-  const config = loadConfig();
+  const config = readConfig();
   if (config.meshes.length === 0) {
     console.error("No meshes joined. Run 'claudemesh join' first.");
     process.exit(1);

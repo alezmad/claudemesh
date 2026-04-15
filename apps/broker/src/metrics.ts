@@ -90,6 +90,10 @@ export const metrics = {
     "broker_messages_rejected_total",
     "Messages rejected (size, auth, malformed)",
   ),
+  messagesDroppedByGrantTotal: new Counter(
+    "broker_messages_dropped_by_grant_total",
+    "Messages silently dropped because recipient didn't grant sender the required capability",
+  ),
   queueDepth: new Gauge(
     "broker_queue_depth",
     "Undelivered messages currently in the queue",
