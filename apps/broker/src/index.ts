@@ -483,6 +483,14 @@ const hookRateLimit = new TokenBucket(
   env.HOOK_RATE_LIMIT_PER_MIN,
 );
 
+/**
+ * Per-member send rate limit. Protects the mesh from a runaway peer
+ * dumping messages. Bucket is 60 msgs/min with a burst of 10 — generous
+ * for conversational use, tight enough that a loop bug surfaces in seconds.
+ * Configurable via env in a later pass.
+ */
+const sendRateLimit = new TokenBucket(60, 10);
+
 function sendToPeer(presenceId: string, msg: WSServerMessage): void {
   const conn = connections.get(presenceId);
   if (!conn) return;
@@ -1792,6 +1800,75 @@ async function handleSend(
   msg: Extract<WSClientMessage, { type: "send" }>,
   subtype?: "reminder",
 ): Promise<void> {
+  // Per-member rate limit (60/min, burst 10). Runaway peer → graceful ack
+  // failure instead of queue explosion. Uses member (not session) key so a
+  // peer can't dodge by reconnecting.
+  if (!sendRateLimit.take(conn.memberId)) {
+    metrics.messagesRejectedTotal.inc({ reason: "rate_limit" });
+    const errAck: WSServerMessage = {
+      type: "ack",
+      id: msg.id ?? "",
+      messageId: "",
+      queued: false,
+      error: "rate_limit: max 60 msg/min (burst 10) — slow down",
+    };
+    conn.ws.send(JSON.stringify(errAck));
+    return;
+  }
+
+  // Size cap — ws.maxPayload catches giants at the frame level, but we also
+  // reject verbose nonce+ciphertext combinations above env.MAX_MESSAGE_BYTES
+  // so clients get a clear error instead of a silent socket kill.
+  const approxBytes =
+    (msg.ciphertext?.length ?? 0) + (msg.nonce?.length ?? 0) + (msg.targetSpec?.length ?? 0);
+  if (approxBytes > env.MAX_MESSAGE_BYTES) {
+    metrics.messagesRejectedTotal.inc({ reason: "too_large" });
+    const errAck: WSServerMessage = {
+      type: "ack",
+      id: msg.id ?? "",
+      messageId: "",
+      queued: false,
+      error: `payload too large: ${approxBytes} bytes > MAX_MESSAGE_BYTES=${env.MAX_MESSAGE_BYTES}`,
+    };
+    conn.ws.send(JSON.stringify(errAck));
+    return;
+  }
+
+  // Pre-flight: for direct sends (not @group, not *), verify at least one
+  // matching connected peer exists BEFORE queueing. Prevents silent drops
+  // when a user sends to a typo, their own pubkey with no other session,
+  // or a peer who has disconnected. The CLI's resolveClient already guards
+  // name-based targets; this catches raw-pubkey and CLI-bypassing clients.
+  const isGroupTargetEarly = msg.targetSpec.startsWith("@");
+  const isBroadcastEarly =
+    msg.targetSpec === "*" ||
+    (isGroupTargetEarly && msg.targetSpec === "@all");
+  const isDirectEarly = !isGroupTargetEarly && !isBroadcastEarly && msg.targetSpec !== "*";
+  if (isDirectEarly) {
+    let hasRecipient = false;
+    for (const [pid, peer] of connections) {
+      if (peer.meshId !== conn.meshId) continue;
+      if (peer.ws === conn.ws) continue;
+      if (peer.memberPubkey === msg.targetSpec || peer.sessionPubkey === msg.targetSpec) {
+        hasRecipient = true;
+        break;
+      }
+      void pid;
+    }
+    if (!hasRecipient) {
+      metrics.messagesRejectedTotal.inc({ reason: "no_recipient" });
+      const errAck: WSServerMessage = {
+        type: "ack",
+        id: msg.id ?? "",
+        messageId: "",
+        queued: false,
+        error: `no connected peer for target (not online, or targetSpec is your own key without another session)`,
+      };
+      conn.ws.send(JSON.stringify(errAck));
+      return;
+    }
+  }
+
   const messageId = await queueMessage({
     meshId: conn.meshId,
     senderMemberId: conn.memberId,

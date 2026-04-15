@@ -206,6 +206,8 @@ export interface WSAckMessage {
   id: string; // echoes client-side correlation id
   messageId: string;
   queued: boolean;
+  /** Populated when queued=false to explain why (rate_limit, too_large, etc.). */
+  error?: string;
   _reqId?: string;
 }
 

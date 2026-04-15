@@ -293,6 +293,29 @@ export async function sweepStalePresences(): Promise<void> {
     );
 }
 
+/**
+ * Sweep undelivered message_queue rows older than 7 days.
+ *
+ * Messages sent to non-matching targetSpecs (e.g. typos, peer disconnected
+ * before claim) would otherwise sit in delivered_at=NULL forever — unbounded
+ * growth. 7d matches invite expiry, so any legitimately held message is
+ * already stale by then.
+ *
+ * Returns the number of rows deleted so the caller can log + meter.
+ */
+export async function sweepOrphanMessages(): Promise<number> {
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const result = await db.execute(sql`
+    DELETE FROM mesh.message_queue
+    WHERE delivered_at IS NULL
+      AND created_at < ${cutoff}
+    RETURNING id
+  `);
+  const rows = (result as unknown as { rows?: unknown[]; length?: number }).rows ?? result;
+  const count = Array.isArray(rows) ? rows.length : 0;
+  return count;
+}
+
 /** Sweep expired pending_status entries. */
 export async function sweepPendingStatuses(): Promise<void> {
   const cutoff = new Date(Date.now() - PENDING_TTL_MS);
@@ -1667,6 +1690,12 @@ export function startSweepers(): void {
       console.error("[broker] stale presence sweep:", e),
     );
   }, 30_000);
+  // Orphan-message sweep every hour; cheap, rows are all >7d at deletion time.
+  setInterval(() => {
+    sweepOrphanMessages()
+      .then((n) => { if (n > 0) console.log(`[broker] orphan msgs swept: ${n}`); })
+      .catch((e) => console.error("[broker] orphan msg sweep:", e));
+  }, 60 * 60_000).unref();
 }
 
 /** Stop background sweepers and mark all active presences disconnected. */

@@ -1618,10 +1618,13 @@ export class BrokerClient {
     if (msg.type === "ack") {
       const pending = this.pendingSends.get(String(msg.id ?? ""));
       if (pending) {
-        pending.resolve({
-          ok: true,
-          messageId: String(msg.messageId ?? ""),
-        });
+        const queued = msg.queued !== false;
+        const errStr = typeof msg.error === "string" ? msg.error : undefined;
+        pending.resolve(
+          queued
+            ? { ok: true, messageId: String(msg.messageId ?? "") }
+            : { ok: false, error: errStr ?? "broker rejected send" },
+        );
         this.pendingSends.delete(pending.id);
       }
       return;
