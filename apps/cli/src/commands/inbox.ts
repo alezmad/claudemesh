@@ -7,6 +7,8 @@
 
 import { withMesh } from "./connect.js";
 import type { InboundPush } from "~/services/broker/facade.js";
+import { render } from "~/ui/render.js";
+import { bold, dim } from "~/ui/styles.js";
 
 export interface InboxFlags {
   mesh?: string;
@@ -14,47 +16,34 @@ export interface InboxFlags {
   wait?: number;
 }
 
-function formatMessage(msg: InboundPush, useColor: boolean): string {
-  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
-  const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
-
+function formatMessage(msg: InboundPush): string {
   const text = msg.plaintext ?? `[encrypted: ${msg.ciphertext.slice(0, 32)}…]`;
   const from = msg.senderPubkey.slice(0, 8);
   const time = new Date(msg.createdAt).toLocaleTimeString();
   const kindTag = msg.kind === "direct" ? "→ direct" : msg.kind;
-
   return `  ${bold(from)} ${dim(`[${kindTag}] ${time}`)}\n  ${text}`;
 }
 
 export async function runInbox(flags: InboxFlags): Promise<void> {
-  const useColor =
-    !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
-  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
-  const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
-
   const waitMs = (flags.wait ?? 1) * 1000;
 
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client, mesh) => {
-    // Wait briefly for broker to push any held messages.
     await new Promise<void>((resolve) => setTimeout(resolve, waitMs));
-
     const messages = client.drainPushBuffer();
 
     if (flags.json) {
-      console.log(JSON.stringify(messages, null, 2));
+      process.stdout.write(JSON.stringify(messages, null, 2) + "\n");
       return;
     }
 
     if (messages.length === 0) {
-      console.log(dim(`No messages on mesh "${mesh.slug}".`));
+      render.info(dim(`No messages on mesh "${mesh.slug}".`));
       return;
     }
 
-    console.log(bold(`Inbox — ${mesh.slug}`) + dim(` (${messages.length} message${messages.length === 1 ? "" : "s"})`));
-    console.log("");
+    render.section(`inbox — ${mesh.slug} (${messages.length} message${messages.length === 1 ? "" : "s"})`);
     for (const msg of messages) {
-      console.log(formatMessage(msg, useColor));
-      console.log("");
+      process.stdout.write(formatMessage(msg) + "\n\n");
     }
   });
 }

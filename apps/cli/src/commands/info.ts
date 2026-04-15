@@ -6,6 +6,7 @@
 
 import { withMesh } from "./connect.js";
 import { readConfig } from "~/services/config/facade.js";
+import { render } from "~/ui/render.js";
 
 export interface InfoFlags {
   mesh?: string;
@@ -13,11 +14,6 @@ export interface InfoFlags {
 }
 
 export async function runInfo(flags: InfoFlags): Promise<void> {
-  const useColor =
-    !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
-  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
-  const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
-
   const config = readConfig();
 
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client, mesh) => {
@@ -39,20 +35,24 @@ export async function runInfo(flags: InfoFlags): Promise<void> {
     };
 
     if (flags.json) {
-      console.log(JSON.stringify(output, null, 2));
+      process.stdout.write(JSON.stringify(output, null, 2) + "\n");
       return;
     }
 
-    console.log(bold(mesh.slug) + dim(` · ${mesh.brokerUrl}`));
-    console.log(dim(`  mesh:   ${mesh.meshId}`));
-    console.log(dim(`  member: ${mesh.memberId}`));
-    console.log(`  peers:  ${peers.length} connected`);
-    console.log(`  state:  ${state.length} keys`);
+    render.section(`${mesh.slug} · ${mesh.brokerUrl}`);
+    render.kv([
+      ["mesh", mesh.meshId],
+      ["member", mesh.memberId],
+      ["peers", `${peers.length} connected`],
+      ["state", `${state.length} keys`],
+    ]);
     if (brokerInfo && typeof brokerInfo === "object") {
+      const extras: Array<[string, string]> = [];
       for (const [k, v] of Object.entries(brokerInfo)) {
         if (["slug", "meshId", "brokerUrl"].includes(k)) continue;
-        console.log(dim(`  ${k}: ${JSON.stringify(v)}`));
+        extras.push([k, JSON.stringify(v)]);
       }
+      if (extras.length) render.kv(extras);
     }
   });
 }

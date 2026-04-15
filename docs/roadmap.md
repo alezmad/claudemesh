@@ -17,18 +17,42 @@ broker, ready for real teams.
 
 ---
 
-## In progress — *v0.1.x*
+## v1.0.0-alpha — *shipping now*
 
-Security and onboarding work landing inside the v0.1 line, before
-v0.2.0 cuts.
+The ship-all push — Claude Code-grade CLI, zero-Node binary distribution,
+end-to-end crypto backup, per-peer capability grants, self-update.
 
-- **v2 invite protocol** — short opaque codes (`claudemesh.com/i/{code}`)
-  replace base64url URLs that embedded the mesh root key. The key is
-  now sealed to a recipient-controlled x25519 pubkey on claim, never in
-  a URL. v1 invites keep working through v0.1.x; removed at v0.2.0.
-- **Email invites** — admins invite by email. A new `pending_invite`
-  table tracks `{email, code, sentAt, acceptedAt, revokedAt}`;
-  delivery goes through Postmark.
+- **Single-binary distribution** — `curl -fsSL claudemesh.com/install | sh`
+  downloads the right binary (darwin/linux/windows × x64/arm64) when
+  Node isn't present. GitHub Releases auto-publishes on each `cli-v*` tag.
+- **`claudemesh://` URL scheme** — invite emails become one-click.
+  `claudemesh url-handler install` registers the scheme per-OS.
+- **`claudemesh <url>`** — join + launch in one command. `-y` makes it
+  fully non-interactive for CI.
+- **Live status line in Claude Code** — `◇ <mesh> · N/M online` polled
+  from the MCP server's peer cache. Enable with
+  `claudemesh install --status-line`.
+- **Per-peer capability grants** — `claudemesh grant/revoke/block/grants`.
+  Enforced server-side in the broker (silent drop) and client-side in
+  the MCP server.
+- **Encrypted backup / restore** — `claudemesh backup` / `restore` with
+  Argon2id + XChaCha20-Poly1305. Portable `.cmb` recovery file.
+- **Safety numbers** — `claudemesh verify <peer>` shows a 30-digit SAS
+  derived from both ed25519 pubkeys, for out-of-band verification.
+- **Shell completions** — `claudemesh completions zsh|bash|fish`.
+- **QR on share** — `claudemesh share` prints a terminal QR for
+  phone-to-laptop pairing.
+- **Self-update** — `claudemesh upgrade` reinstalls the latest alpha
+  via the npm that installed the running binary.
+- **Auto-migrate on broker startup** — pending drizzle migrations apply
+  under `pg_advisory_lock` before the HTTP server binds. Exits non-zero
+  on failure so Coolify fails the healthcheck closed.
+- **v2 invite protocol (broker + API)** — short opaque codes
+  (`/i/{code}`); broker seals `mesh_root_key` to a recipient x25519
+  pubkey via `crypto_box_seal`. CLI migration tracked at
+  `.artifacts/specs/2026-04-15-invite-v2-cli-migration.md`.
+- **Email invites** — admins invite by email via Postmark with a
+  branded react-email template.
 
 ---
 

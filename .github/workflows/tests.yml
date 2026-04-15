@@ -45,3 +45,12 @@ jobs:
 
       - name: 🧪 Test
         run: pnpm run test
+
+      - name: 📦 Build CLI bundle (check size budget)
+        working-directory: apps/cli
+        run: pnpm run build
+
+      - name: 🔧 CLI smoke — --version + --help
+        run: |
+          node apps/cli/dist/entrypoints/cli.js --version
+          node apps/cli/dist/entrypoints/cli.js --help | head -5

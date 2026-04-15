@@ -9,9 +9,10 @@
 
 import { headers } from "next/headers";
 
-// In-memory counter (resets on deploy — good enough for a signal).
-// For persistent tracking, write to DB or use PostHog server SDK.
-let installFetches = 0;
+// Persistent counts live in PostHog (event: install_script_fetched).
+// Stdout logs are aggregated by the Coolify log collector. No in-memory
+// counter — it reset on every deploy and misled operators into thinking
+// the signal was fresh.
 
 const SCRIPT = `#!/usr/bin/env bash
 # claudemesh-cli installer
@@ -140,19 +141,24 @@ say ""
 `;
 
 export async function GET(): Promise<Response> {
-  installFetches++;
-
-  // Log server-side for monitoring
+  // Log server-side for Coolify log aggregation.
   const h = await headers();
   const ua = h.get("user-agent") ?? "unknown";
   const ip = h.get("x-forwarded-for") ?? h.get("x-real-ip") ?? "unknown";
   const referer = h.get("referer") ?? "direct";
-
+  const ts = new Date().toISOString();
   console.log(
-    `[install] #${installFetches} | ip=${ip} | ua=${ua.slice(0, 80)} | ref=${referer}`,
+    JSON.stringify({
+      level: "info",
+      event: "install_script_fetched",
+      ts,
+      ip,
+      ua: ua.slice(0, 120),
+      referer,
+    }),
   );
 
-  // PostHog server-side event (if configured)
+  // PostHog server-side event — source of truth for counts.
   try {
     const posthogKey = process.env.NEXT_PUBLIC_POSTHOG_KEY;
     const posthogHost = process.env.NEXT_PUBLIC_POSTHOG_HOST;
@@ -164,10 +170,10 @@ export async function GET(): Promise<Response> {
           api_key: posthogKey,
           event: "install_script_fetched",
           distinct_id: ip,
+          timestamp: ts,
           properties: {
             user_agent: ua,
             referer,
-            install_count: installFetches,
           },
         }),
       }).catch(() => {}); // fire-and-forget
