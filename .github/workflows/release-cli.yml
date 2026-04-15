@@ -52,8 +52,10 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/bin
+          VERSION=$(node -p "require('./package.json').version")
           bun build --compile --minify \
             --target=${{ matrix.bun_target }} \
+            --define "__CLAUDEMESH_VERSION__=\"$VERSION\"" \
             src/entrypoints/cli.ts \
             --outfile dist/bin/claudemesh-${{ matrix.target }}${{ matrix.ext }}
 
