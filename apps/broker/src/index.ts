@@ -5132,8 +5132,40 @@ async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: Serv
     const baseUrl = process.env.APP_URL || "https://claudemesh.com";
     const url = `${baseUrl}/i/${code}`;
 
-    writeJson(res, 200, { url, code, expires_at: expiresAt.toISOString() });
-    log.info("mesh-invite", { route: "POST /cli/mesh/:slug/invite", slug, code, email: body.email, latency_ms: Date.now() - started });
+    // If an email was provided, send the invite link via Postmark/Resend.
+    let emailed = false;
+    if (body.email) {
+      const apiKey = process.env.POSTMARK_API_KEY ?? process.env.RESEND_API_KEY;
+      const fromAddr = process.env.EMAIL_FROM ?? "noreply@claudemesh.com";
+      if (apiKey) {
+        try {
+          const subject = `You've been invited to the "${m.name}" mesh on claudemesh`;
+          const text = `You've been invited to join the "${m.name}" mesh on claudemesh.\n\nAccept the invite:\n${url}\n\nThis link expires on ${expiresAt.toISOString()}.\n\nIf you didn't expect this, ignore this email.`;
+          const res = process.env.POSTMARK_API_KEY
+            ? await fetch("https://api.postmarkapp.com/email", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", "X-Postmark-Server-Token": apiKey },
+                body: JSON.stringify({ From: fromAddr, To: body.email, Subject: subject, TextBody: text }),
+                signal: AbortSignal.timeout(10_000),
+              })
+            : await fetch("https://api.resend.com/emails", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+                body: JSON.stringify({ from: fromAddr, to: body.email, subject, text }),
+                signal: AbortSignal.timeout(10_000),
+              });
+          emailed = res.ok;
+          if (!res.ok) log.warn("invite email send failed", { status: res.status, body: await res.text().catch(() => "") });
+        } catch (e) {
+          log.error("invite email send error", { error: e instanceof Error ? e.message : String(e) });
+        }
+      } else {
+        log.warn("invite email requested but no POSTMARK_API_KEY/RESEND_API_KEY configured");
+      }
+    }
+
+    writeJson(res, 200, { url, code, expires_at: expiresAt.toISOString(), emailed });
+    log.info("mesh-invite", { route: "POST /cli/mesh/:slug/invite", slug, code, email: body.email, emailed, latency_ms: Date.now() - started });
   } catch (e) {
     log.error("mesh-invite", { error: e instanceof Error ? e.message : String(e), stack: e instanceof Error ? e.stack : undefined });
     writeJson(res, 500, { error: "Failed to create invite" });
