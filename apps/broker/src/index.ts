@@ -5139,19 +5139,24 @@ async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: Serv
       const fromAddr = process.env.EMAIL_FROM ?? "noreply@claudemesh.com";
       if (apiKey) {
         try {
-          const subject = `You've been invited to the "${m.name}" mesh on claudemesh`;
-          const text = `You've been invited to join the "${m.name}" mesh on claudemesh.\n\nAccept the invite:\n${url}\n\nThis link expires on ${expiresAt.toISOString()}.\n\nIf you didn't expect this, ignore this email.`;
+          const { render } = await import("@react-email/render");
+          const { MeshInvitation } = await import("./emails/mesh-invitation");
+          const React = await import("react");
+          const subject = `You're invited to join "${m.name}" on claudemesh`;
+          const element = React.createElement(MeshInvitation, { meshName: m.name, inviteUrl: url, expiresAt: expiresAt.toISOString(), appBaseUrl: baseUrl });
+          const html = await render(element);
+          const text = await render(element, { plainText: true });
           const res = process.env.POSTMARK_API_KEY
             ? await fetch("https://api.postmarkapp.com/email", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", "X-Postmark-Server-Token": apiKey },
-                body: JSON.stringify({ From: fromAddr, To: body.email, Subject: subject, TextBody: text }),
+                body: JSON.stringify({ From: fromAddr, To: body.email, Subject: subject, HtmlBody: html, TextBody: text, MessageStream: "outbound" }),
                 signal: AbortSignal.timeout(10_000),
               })
             : await fetch("https://api.resend.com/emails", {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-                body: JSON.stringify({ from: fromAddr, to: body.email, subject, text }),
+                body: JSON.stringify({ from: fromAddr, to: body.email, subject, html, text }),
                 signal: AbortSignal.timeout(10_000),
               });
           emailed = res.ok;

@@ -17,6 +17,8 @@
   "dependencies": {
     "@anthropic-ai/sdk": "0.71.2",
     "@qdrant/js-client-rest": "1.17.0",
+    "@react-email/components": "0.3.2",
+    "@react-email/render": "1.3.2",
     "@turbostarter/db": "workspace:*",
     "@turbostarter/shared": "workspace:*",
     "drizzle-orm": "0.44.7",
@@ -24,6 +26,8 @@
     "libsodium-wrappers": "0.7.15",
     "minio": "8.0.7",
     "neo4j-driver": "6.0.1",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
     "ws": "8.20.0",
     "zod": "catalog:"
   },
@@ -33,6 +37,8 @@
     "@turbostarter/tsconfig": "workspace:*",
     "@turbostarter/vitest-config": "workspace:*",
     "@types/libsodium-wrappers": "0.7.14",
+    "@types/react": "19.2.0",
+    "@types/react-dom": "19.2.0",
     "@types/ws": "8.5.13",
     "eslint": "catalog:",
     "prettier": "catalog:",
