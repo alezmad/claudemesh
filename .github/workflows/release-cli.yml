@@ -57,8 +57,11 @@ jobs:
             src/entrypoints/cli.ts \
             --outfile dist/bin/claudemesh-${{ matrix.target }}${{ matrix.ext }}
 
-      - name: Smoke test (non-Windows)
-        if: matrix.target != 'windows-x64'
+      # Smoke test only on native arch. macos-latest runners are ARM64 (Apple
+      # Silicon); ubuntu-latest is x64. Cross-compiled binaries can't execute
+      # on the build host, so skip them.
+      - name: Smoke test (native only)
+        if: matrix.target == 'darwin-arm64' || matrix.target == 'linux-x64'
         working-directory: apps/cli-v2
         run: |
           ./dist/bin/claudemesh-${{ matrix.target }} --version
