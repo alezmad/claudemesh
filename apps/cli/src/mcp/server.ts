@@ -95,8 +95,10 @@ async function resolveClient(to: string): Promise<{
   }
   // Name-based resolution: query each mesh's peer list for a matching displayName.
   const nameLower = target.toLowerCase();
+  const candidates: Array<{ mesh: string; peers: Array<{ displayName: string; pubkey: string }> }> = [];
   for (const c of targetClients) {
     const peers = await c.listPeers();
+    candidates.push({ mesh: c.meshSlug, peers });
     const match = peers.find((p) => p.displayName.toLowerCase() === nameLower);
     if (match) return { client: c, targetSpec: match.pubkey };
     // Partial match: if only one peer's name contains the search string.
@@ -108,14 +110,19 @@ async function resolveClient(to: string): Promise<{
       return { client: c, targetSpec: partials[0]!.pubkey };
     }
   }
-  // Single-mesh fallback: let the broker try to resolve it.
-  if (targetClients.length === 1) {
-    return { client: targetClients[0]!, targetSpec: target };
-  }
+  // No match — refuse to send rather than silently queue a message for nobody.
+  // (Prior behaviour fell through to "let the broker try" which would queue a
+  // message with targetSpec=<unknown name>, never match any peer, and return
+  // a messageId that looked successful to the caller. Surface the error.)
+  const known = candidates.flatMap((c) => c.peers.map((p) => `${c.mesh}/${p.displayName}`));
   return {
     client: null,
     targetSpec: target,
-    error: `peer "${target}" not found in any mesh (joined: ${clients.map((c) => c.meshSlug).join(", ")})`,
+    error:
+      `peer "${target}" not found. ` +
+      (known.length
+        ? `Known peers: ${known.slice(0, 10).join(", ")}${known.length > 10 ? ", …" : ""}`
+        : "No connected peers on your mesh(es). Use pubkey hex, @group, or * for broadcast."),
   };
 }
 
@@ -491,6 +498,12 @@ Your message mode is "${messageMode}".
           if (peers.length === 0) {
             sections.push(`${header}\nNo peers connected.`);
           } else {
+            // Note: multiple entries with the same pubkey are the SAME member
+            // connected from multiple sessions (each session sends its own
+            // hello display_name). Annotate so the caller doesn't treat them
+            // as distinct people.
+            const pubkeyCounts = new Map<string, number>();
+            for (const p of peers) pubkeyCounts.set(p.pubkey, (pubkeyCounts.get(p.pubkey) ?? 0) + 1);
             const peerLines = peers.map((p) => {
               const summary = p.summary ? ` — "${p.summary}"` : "";
               const groupsStr = p.groups?.length ? ` [${p.groups.map(g => `@${g.name}${g.role ? ':' + g.role : ''}`).join(', ')}]` : "";
@@ -505,7 +518,9 @@ Your message mode is "${messageMode}".
               const profileAvatar = p.profile?.avatar ? `${p.profile.avatar} ` : "";
               const profileTitle = p.profile?.title ? ` (${p.profile.title})` : "";
               const hiddenTag = p.visible === false ? " [hidden]" : "";
-              return `- ${profileAvatar}**${p.displayName}**${profileTitle} [${p.status}]${localityTag}${hiddenTag}${groupsStr}${metaStr} (${p.pubkey.slice(0, 12)}…)${cwdStr}${summary}`;
+              const sameKeyCount = pubkeyCounts.get(p.pubkey) ?? 1;
+              const sameKeyTag = sameKeyCount > 1 ? ` [shares key with ${sameKeyCount - 1} other session(s)]` : "";
+              return `- ${profileAvatar}**${p.displayName}**${profileTitle} [${p.status}]${localityTag}${hiddenTag}${sameKeyTag}${groupsStr}${metaStr} (${p.pubkey.slice(0, 12)}…)${cwdStr}${summary}`;
             });
             sections.push(`${header}\n${peerLines.join("\n")}`);
           }
