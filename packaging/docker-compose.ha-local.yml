@@ -1,0 +1,76 @@
+# Local HA smoke-test harness for claudemesh broker.
+#
+# 2 broker replicas behind Traefik with sticky sessions, single Postgres.
+# Boot with:
+#   docker compose -f packaging/docker-compose.ha-local.yml up --build
+#
+# Then:
+#   claudemesh launch --name A --join <invite> --broker ws://localhost/ws
+#   # kill a container:
+#   docker compose -f packaging/docker-compose.ha-local.yml kill broker-a
+#   # observe that sessions reconnect to broker-b automatically
+#
+# Known gaps (see .artifacts/specs/2026-04-15-broker-ha-statelessness-audit.md):
+#   - streamSubscriptions are per-node (pub on A, sub on B won't work)
+#   - audit hash chain may fork under concurrent writes
+#   - meshClocks may double-fire if both nodes think they own a clock
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: claudemesh
+      POSTGRES_PASSWORD: ha_smoke_test
+      POSTGRES_DB: claudemesh
+    volumes:
+      - ha-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claudemesh"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
+  broker-a: &broker-template
+    build:
+      context: ../
+      dockerfile: apps/broker/Dockerfile
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://claudemesh:ha_smoke_test@db:5432/claudemesh
+      BROKER_PORT: 7900
+      BROKER_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      BROKER_LEGACY_AUTH: "1"
+      BROKER_PUBLIC_URL: http://localhost
+      BROKER_WS_URL: ws://localhost/ws
+      MAX_CONNECTIONS_PER_MESH: "200"
+    depends_on:
+      db:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.broker.rule=Host(`localhost`) || PathPrefix(`/`)"
+      - "traefik.http.services.broker.loadbalancer.sticky.cookie=true"
+      - "traefik.http.services.broker.loadbalancer.sticky.cookie.name=cm_node"
+      - "traefik.http.services.broker.loadbalancer.server.port=7900"
+
+  broker-b:
+    <<: *broker-template
+
+  traefik:
+    image: traefik:v3.0
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --api.insecure=true
+    ports:
+      - "80:80"
+      - "8080:8080" # Traefik dashboard
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - broker-a
+      - broker-b
+
+volumes:
+  ha-pgdata:

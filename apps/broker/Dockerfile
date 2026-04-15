@@ -41,6 +41,11 @@ COPY --from=deps --chown=bun:bun /app/packages/db/migrations /app/migrations
 
 EXPOSE 7900
 
+# Liveness (Docker HEALTHCHECK) hits /health — permissive, tolerates
+# transient DB blips so the container isn't killed during brief DB
+# restarts. Deploy-time readiness is a separate /health/ready endpoint
+# which checks DB + migration version; an external gate should poll
+# that after container start and fail the deploy if not green.
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=5 \
   CMD bun -e "fetch('http://localhost:7900/health').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"
 

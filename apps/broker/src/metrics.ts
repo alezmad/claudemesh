@@ -94,6 +94,10 @@ export const metrics = {
     "broker_messages_dropped_by_grant_total",
     "Messages silently dropped because recipient didn't grant sender the required capability",
   ),
+  brokerLegacyAuthHitsTotal: new Counter(
+    "broker_legacy_auth_hits_total",
+    "Pre-alpha.36 clients authenticating via body.user_id fallback (remove shim when near zero)",
+  ),
   queueDepth: new Gauge(
     "broker_queue_depth",
     "Undelivered messages currently in the queue",

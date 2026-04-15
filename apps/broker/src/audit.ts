@@ -61,10 +61,26 @@ function computeHash(
 }
 
 /**
+ * Stable 63-bit lock key per mesh for audit serialization under HA.
+ * Use the audit lock space; keep distinct from migrate's 74737_73831.
+ */
+function meshLockKey(meshId: string): bigint {
+  const digest = createHash("sha256").update("audit:" + meshId).digest();
+  const unsigned = digest.readBigUInt64BE(0);
+  return unsigned & 0x7fffffffffffffffn;
+}
+
+/**
  * Append an audit entry for a mesh event.
  *
  * Fire-and-forget safe — callers should `void audit(...)` or
  * `.catch(log.warn)` to avoid blocking the hot path.
+ *
+ * Concurrency under HA: wraps the write in a transaction that takes
+ * `pg_advisory_xact_lock(meshLockKey(meshId))` before reading the
+ * tail hash from the DB. This serializes all concurrent writers to
+ * the same mesh and prevents the chain from forking. The in-memory
+ * `lastHash` cache is updated after a successful commit.
  */
 export async function audit(
   meshId: string,
@@ -73,22 +89,31 @@ export async function audit(
   actorDisplayName: string | null,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  const prevHash = lastHash.get(meshId) ?? "genesis";
   const createdAt = new Date();
-  const hash = computeHash(prevHash, meshId, eventType, actorMemberId, payload, createdAt);
-
   try {
-    await db.insert(auditLog).values({
-      meshId,
-      eventType,
-      actorMemberId,
-      actorDisplayName,
-      payload,
-      prevHash,
-      hash,
-      createdAt,
+    await db.transaction(async (tx) => {
+      const key = meshLockKey(meshId);
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${key}::bigint)`);
+      const [latest] = await tx
+        .select({ hash: auditLog.hash })
+        .from(auditLog)
+        .where(eq(auditLog.meshId, meshId))
+        .orderBy(desc(auditLog.id))
+        .limit(1);
+      const prevHash = latest?.hash ?? "genesis";
+      const hash = computeHash(prevHash, meshId, eventType, actorMemberId, payload, createdAt);
+      await tx.insert(auditLog).values({
+        meshId,
+        eventType,
+        actorMemberId,
+        actorDisplayName,
+        payload,
+        prevHash,
+        hash,
+        createdAt,
+      });
+      lastHash.set(meshId, hash);
     });
-    lastHash.set(meshId, hash);
   } catch (e) {
     log.warn("audit log insert failed", {
       mesh_id: meshId,

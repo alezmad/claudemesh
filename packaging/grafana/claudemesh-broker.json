@@ -1,0 +1,63 @@
+{
+  "annotations": { "list": [] },
+  "schemaVersion": 38,
+  "title": "claudemesh broker",
+  "uid": "claudemesh-broker",
+  "tags": ["claudemesh"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active connections",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "broker_connections_active" }]
+    },
+    {
+      "type": "stat",
+      "title": "Queue depth",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "broker_queue_depth" }]
+    },
+    {
+      "type": "stat",
+      "title": "Legacy auth hits (24h)",
+      "description": "Pre-alpha.36 clients still sending body.user_id. Should trend to 0.",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [{ "expr": "increase(broker_legacy_auth_hits_total[24h])" }]
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages routed / sec",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "sum(rate(broker_messages_routed_total[1m])) by (priority)", "legendFormat": "{{priority}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages rejected / sec",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "sum(rate(broker_messages_rejected_total[1m])) by (reason)", "legendFormat": "{{reason}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages dropped by grant / sec",
+      "description": "Non-zero means recipient blocked sender. Watch for spikes (abuse signal).",
+      "gridPos": { "x": 0, "y": 10, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "sum(rate(broker_messages_dropped_by_grant_total[1m])) by (cap)", "legendFormat": "{{cap}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Connections rejected / sec",
+      "gridPos": { "x": 12, "y": 10, "w": 12, "h": 6 },
+      "targets": [
+        { "expr": "sum(rate(broker_connections_rejected[1m])) by (reason)", "legendFormat": "{{reason}}" }
+      ]
+    }
+  ]
+}
