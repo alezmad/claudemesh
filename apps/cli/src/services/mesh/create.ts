@@ -11,21 +11,18 @@ export async function createMesh(name: string, opts?: { template?: string; descr
   const auth = getStoredToken();
   if (!auth) throw new Error("Not signed in");
 
-  let userId = "";
-  try {
-    const payload = JSON.parse(Buffer.from(auth.session_token.split(".")[1]!, "base64url").toString()) as { sub?: string };
-    userId = payload.sub ?? "";
-  } catch {}
-  if (!userId) throw new Error("Invalid token — run `claudemesh login` again");
-
   // Generate keypair first so we can send the pubkey to the broker
   const kp = await generateKeypair();
 
+  // Broker authenticates via Authorization: Bearer <session_token>.
+  // user_id used to be in the body but is now derived from the verified
+  // session on the server. Older broker deploys still accept both.
   const result = await request<{ id: string; slug: string; name: string; member_id: string }>({
     path: "/cli/mesh/create",
     method: "POST",
-    body: { user_id: userId, name, pubkey: kp.publicKey, ...opts },
+    body: { name, pubkey: kp.publicKey, ...opts },
     baseUrl: BROKER_HTTP,
+    token: auth.session_token,
   });
 
   const mesh: JoinedMesh = {

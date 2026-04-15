@@ -417,6 +417,7 @@ export async function listPeersInMesh(
 ): Promise<
   Array<{
     pubkey: string;
+    memberPubkey: string;
     displayName: string;
     status: string;
     summary: string | null;
@@ -449,8 +450,12 @@ export async function listPeersInMesh(
     )
     .orderBy(asc(presence.connectedAt));
   // Prefer session pubkey for routing, session displayName for display.
+  // memberPubkey is also surfaced so callers (grants, audit, safety-number
+  // verify) can operate on the stable identity key rather than the
+  // per-connection ephemeral one.
   return rows.map((r) => ({
     pubkey: r.sessionPubkey || r.memberPubkey,
+    memberPubkey: r.memberPubkey,
     displayName: r.presenceDisplayName || r.memberDisplayName,
     status: r.status,
     summary: r.summary,

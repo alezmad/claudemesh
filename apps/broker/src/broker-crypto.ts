@@ -23,13 +23,23 @@ let _key: Buffer | null = null;
 function getKey(): Buffer {
   if (_key) return _key;
 
-  if (env.BROKER_ENCRYPTION_KEY && env.BROKER_ENCRYPTION_KEY.length === 64) {
+  if (env.BROKER_ENCRYPTION_KEY && /^[0-9a-f]{64}$/i.test(env.BROKER_ENCRYPTION_KEY)) {
     _key = Buffer.from(env.BROKER_ENCRYPTION_KEY, "hex");
-  } else {
-    _key = randomBytes(32);
-    log.warn("BROKER_ENCRYPTION_KEY not set — generated ephemeral key. " +
-      "Set BROKER_ENCRYPTION_KEY=" + _key.toString("hex") + " to persist across restarts.");
+    return _key;
   }
+
+  // In production, refuse to start without a persistent key. Silently
+  // generating a random one meant every restart invalidated all encrypted
+  // rows on disk — and the ephemeral key was logged in clear, which is
+  // itself a leak.
+  if (process.env.NODE_ENV === "production") {
+    log.error("BROKER_ENCRYPTION_KEY is missing or malformed (need 64 hex chars) — refusing to start in production");
+    process.exit(1);
+  }
+
+  // Dev only: generate a stable per-process key. Never log the value.
+  _key = randomBytes(32);
+  log.warn("BROKER_ENCRYPTION_KEY not set — using ephemeral key for this dev process (encrypted data WILL NOT survive restarts). Set BROKER_ENCRYPTION_KEY to a 64-hex-char value for persistence.");
   return _key;
 }
 
@@ -62,7 +72,11 @@ export function decryptFromStorage(packed: string): string | null {
     decipher.setAuthTag(tag);
     const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     return decrypted.toString("utf8");
-  } catch {
+  } catch (e) {
+    // Loud failure: if a stored row fails to decrypt the key changed or
+    // data is corrupt — don't silently return null and let downstream
+    // code assume "no value".
+    log.error("decryptFromStorage failed", { err: e instanceof Error ? e.message : String(e) });
     return null;
   }
 }

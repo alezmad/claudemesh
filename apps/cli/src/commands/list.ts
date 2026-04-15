@@ -25,23 +25,16 @@ export async function runList(): Promise<void> {
   const config = readConfig();
   const auth = getStoredToken();
 
-  // Try to fetch from server
+  // Try to fetch from server. Broker authenticates via Bearer token.
   let serverMeshes: ServerMesh[] = [];
   if (auth) {
     try {
-      let userId = "";
-      try {
-        const payload = JSON.parse(Buffer.from(auth.session_token.split(".")[1]!, "base64url").toString()) as { sub?: string };
-        userId = payload.sub ?? "";
-      } catch {}
-
-      if (userId) {
-        const res = await request<{ meshes: ServerMesh[] }>({
-          path: `/cli/meshes?user_id=${userId}`,
-          baseUrl: BROKER_HTTP,
-        });
-        serverMeshes = res.meshes ?? [];
-      }
+      const res = await request<{ meshes: ServerMesh[] }>({
+        path: `/cli/meshes`,
+        baseUrl: BROKER_HTTP,
+        token: auth.session_token,
+      });
+      serverMeshes = res.meshes ?? [];
     } catch {}
   }
 

@@ -46,9 +46,25 @@ export interface HookSetStatusResponse {
 
 // --- WebSocket protocol envelopes ---
 
+/**
+ * Wire protocol version. Bump ONLY on breaking changes to the hello or
+ * push envelope shape. Clients send their highest supported version;
+ * broker picks the minimum of its own and the client's and echoes it
+ * on hello_ack. Backward-compat fields can be gated on this.
+ *   1 = initial release
+ */
+export const WS_PROTOCOL_VERSION = 1 as const;
+
 /** Sent by client on connect to authenticate. */
 export interface WSHelloMessage {
   type: "hello";
+  /** Highest WS protocol version the client understands. Optional —
+   * pre-alpha.36 clients omit it and the broker treats missing as 1. */
+  protocolVersion?: number;
+  /** Optional feature strings the client supports. Broker uses this to
+   * avoid emitting envelopes the client can't parse. Examples: "grants",
+   * "channels", "streams". Unknown capabilities ignored. */
+  capabilities?: string[];
   meshId: string;
   memberId: string;
   pubkey: string; // must match mesh.member.peerPubkey

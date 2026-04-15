@@ -35,18 +35,13 @@ const BROKER_HTTP = URLS.BROKER.replace("wss://", "https://").replace("ws://", "
 async function syncToBroker(meshSlug: string, grants: Record<string, string[] | null>): Promise<void> {
   const auth = getStoredToken();
   if (!auth) return;
-  let userId = "";
-  try {
-    const payload = JSON.parse(Buffer.from(auth.session_token.split(".")[1]!, "base64url").toString()) as { sub?: string };
-    userId = payload.sub ?? "";
-  } catch { return; }
-  if (!userId) return;
   try {
     await request<{ ok: true }>({
       path: `/cli/mesh/${meshSlug}/grants`,
       method: "POST",
-      body: { user_id: userId, grants },
+      body: { grants },
       baseUrl: BROKER_HTTP,
+      token: auth.session_token,
     });
   } catch (e) {
     render.warn(`broker grant sync failed — client filter still active: ${e instanceof Error ? e.message : e}`);
@@ -91,8 +86,20 @@ function resolveCaps(input: string[]): Capability[] {
 async function resolvePeer(meshSlug: string, name: string): Promise<{ displayName: string; pubkey: string } | null> {
   return await withMesh({ meshSlug }, async (client) => {
     const peers = await client.listPeers();
-    const match = peers.find((p) => p.displayName === name || p.pubkey === name || p.pubkey.startsWith(name));
-    return match ? { displayName: match.displayName, pubkey: match.pubkey } : null;
+    const match = peers.find(
+      (p) =>
+        p.displayName === name ||
+        p.pubkey === name ||
+        p.pubkey.startsWith(name) ||
+        p.memberPubkey === name ||
+        (p.memberPubkey && p.memberPubkey.startsWith(name)),
+    );
+    if (!match) return null;
+    // Prefer the stable member pubkey for grant keys — session pubkey
+    // rotates on every reconnect and would invalidate the grant entry.
+    // Broker falls back to session-key lookup for pre-alpha.36 clients.
+    const key = match.memberPubkey ?? match.pubkey;
+    return { displayName: match.displayName, pubkey: key };
   });
 }
 

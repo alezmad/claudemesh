@@ -25,6 +25,29 @@ const lastHash = new Map<string, string>();
 // Core audit logging
 // ---------------------------------------------------------------------------
 
+/**
+ * Deterministic JSON serialization: keys sorted recursively. The store
+ * is JSONB, which does NOT preserve key order, so hashing a naive
+ * JSON.stringify(row.payload) on verify can yield a different string
+ * from insert-time — false tamper reports. Canonical form guarantees
+ * both sides agree.
+ */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return "[" + value.map(canonicalJson).join(",") + "]";
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return (
+    "{" +
+    keys
+      .map((k) => JSON.stringify(k) + ":" + canonicalJson(obj[k]))
+      .join(",") +
+    "}"
+  );
+}
+
 function computeHash(
   prevHash: string,
   meshId: string,
@@ -33,7 +56,7 @@ function computeHash(
   payload: Record<string, unknown>,
   createdAt: Date,
 ): string {
-  const input = `${prevHash}|${meshId}|${eventType}|${actorMemberId}|${JSON.stringify(payload)}|${createdAt.toISOString()}`;
+  const input = `${prevHash}|${meshId}|${eventType}|${actorMemberId}|${canonicalJson(payload)}|${createdAt.toISOString()}`;
   return createHash("sha256").update(input).digest("hex");
 }
 

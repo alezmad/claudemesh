@@ -15,7 +15,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
-import { and, eq, isNull, lt, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, sql } from "drizzle-orm";
 import { env } from "./env";
 import { db } from "./db";
 import { invite as inviteTable, mesh, meshMember, messageQueue, scheduledMessage as scheduledMessageTable, meshWebhook, peerState } from "@turbostarter/db/schema/mesh";
@@ -103,7 +103,10 @@ import { metrics, metricsToText } from "./metrics";
 import { TokenBucket } from "./rate-limit";
 import { isDbHealthy, startDbHealth, stopDbHealth } from "./db-health";
 import { buildInfo } from "./build-info";
-import { canonicalInvite, canonicalInviteV2, sealRootKeyToRecipient, verifyHelloSignature, verifyInviteV2 } from "./crypto";
+import { canonicalInvite, canonicalInviteV2, claimInviteV2Core as _claimInviteV2Core, sealRootKeyToRecipient, verifyHelloSignature, verifyInviteV2 } from "./crypto";
+// Alias for in-module callers; the public re-export below surfaces the
+// same symbol without colliding with tests that import from index.ts.
+const claimInviteV2Core = _claimInviteV2Core;
 import { handleWebhook } from "./webhooks";
 import { audit, loadLastHashes, ensureAuditLogTable, verifyChain, queryAuditLog } from "./audit";
 
@@ -485,11 +488,14 @@ const hookRateLimit = new TokenBucket(
 
 /**
  * Per-member send rate limit. Protects the mesh from a runaway peer
- * dumping messages. Bucket is 60 msgs/min with a burst of 10 — generous
- * for conversational use, tight enough that a loop bug surfaces in seconds.
- * Configurable via env in a later pass.
+ * dumping messages. Burst of 10, refill 60/min — generous for
+ * conversational use, tight enough that a loop bug surfaces in seconds.
+ *
+ * NOTE: TokenBucket signature is `(capacity, refillPerMinute)`, so the
+ * args ARE (burst, per-minute). Swept periodically below so old keys
+ * don't leak.
  */
-const sendRateLimit = new TokenBucket(60, 10);
+const sendRateLimit = new TokenBucket(10, 60);
 
 function sendToPeer(presenceId: string, msg: WSServerMessage): void {
   const conn = connections.get(presenceId);
@@ -616,35 +622,59 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
 
   // File download proxy: streams from MinIO so clients don't need internal URLs.
   // GET /download/{fileId}?mesh={meshId}
+  // Auth: Bearer token + mesh membership. Previously wide open — anyone
+  // who knew a fileId could exfiltrate.
   if (req.method === "GET" && req.url?.startsWith("/download/")) {
-    const parts = req.url.split("?");
-    const fileId = parts[0]!.replace("/download/", "");
-    const params = new URLSearchParams(parts[1] ?? "");
-    const meshId = params.get("mesh");
-    if (!fileId || !meshId) {
-      writeJson(res, 400, { error: "fileId and ?mesh= required" });
-      log.info("download", { route: "GET /download", status: 400, latency_ms: Date.now() - started });
-      return;
-    }
-    getFile(meshId, fileId).then(async (file) => {
-      if (!file) {
-        writeJson(res, 404, { error: "file not found" });
-        log.info("download", { route: "GET /download", status: 404, file_id: fileId, latency_ms: Date.now() - started });
+    (async () => {
+      const auth = await requireCliAuth(req, res);
+      if (!auth) return;
+      const parts = req.url!.split("?");
+      const fileId = parts[0]!.replace("/download/", "");
+      const params = new URLSearchParams(parts[1] ?? "");
+      const meshId = params.get("mesh");
+      if (!fileId || !meshId) {
+        writeJson(res, 400, { error: "fileId and ?mesh= required" });
+        log.info("download", { route: "GET /download", status: 400, latency_ms: Date.now() - started });
         return;
       }
-      const bucket = meshBucketName(meshId);
-      const stream = await minioClient.getObject(bucket, file.minioKey);
-      res.writeHead(200, {
-        "Content-Type": file.mimeType ?? "application/octet-stream",
-        "Content-Disposition": `attachment; filename="${file.name}"`,
-        "Cache-Control": "private, max-age=60",
-      });
-      stream.pipe(res);
-      log.info("download", { route: "GET /download", file_id: fileId, name: file.name, latency_ms: Date.now() - started });
-    }).catch((e) => {
-      writeJson(res, 500, { error: "download failed" });
-      log.error("download error", { file_id: fileId, error: e instanceof Error ? e.message : String(e) });
-    });
+      // Membership check: the authenticated user must have a live member
+      // row in the requested mesh.
+      try {
+        const [m] = await db
+          .select({ id: meshMember.id })
+          .from(meshMember)
+          .where(and(eq(meshMember.meshId, meshId), eq(meshMember.userId, auth.userId), isNull(meshMember.revokedAt)))
+          .limit(1);
+        if (!m) {
+          writeJson(res, 403, { error: "not a member of this mesh" });
+          return;
+        }
+      } catch (e) {
+        writeJson(res, 500, { error: "membership check failed" });
+        log.error("download-auth", { err: e instanceof Error ? e.message : String(e) });
+        return;
+      }
+      try {
+        const file = await getFile(meshId, fileId);
+        if (!file) {
+          writeJson(res, 404, { error: "file not found" });
+          log.info("download", { route: "GET /download", status: 404, file_id: fileId, latency_ms: Date.now() - started });
+          return;
+        }
+        const bucket = meshBucketName(meshId);
+        const stream = await minioClient.getObject(bucket, file.minioKey);
+        res.writeHead(200, {
+          "Content-Type": file.mimeType ?? "application/octet-stream",
+          "Content-Disposition": `attachment; filename="${file.name}"`,
+          "Cache-Control": "private, max-age=60",
+        });
+        stream.pipe(res);
+        log.info("download", { route: "GET /download", file_id: fileId, name: file.name, latency_ms: Date.now() - started });
+      } catch (e) {
+        writeJson(res, 500, { error: "download failed" });
+        log.error("download error", { file_id: fileId, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
     return;
   }
 
@@ -976,188 +1006,13 @@ function handleJoinPost(
 // skips signature verification since there is no v2 signature on file.
 // This lets v2 clients claim legacy invites during the deprecation window.
 
-export type InviteClaimV2Result =
-  | {
-      ok: true;
-      status: 200;
-      body: {
-        sealed_root_key: string;
-        mesh_id: string;
-        member_id: string;
-        owner_pubkey: string;
-        canonical_v2: string;
-      };
-    }
-  | { ok: false; status: 400 | 404 | 410; body: { error: string } };
-
-/**
- * Core claim logic, extracted from the HTTP handler so tests can call it
- * directly without spinning up the full broker server.
- */
-export async function claimInviteV2Core(params: {
-  code: string;
-  recipientX25519PubkeyBase64url: string;
-  displayName?: string;
-  now?: number;
-}): Promise<InviteClaimV2Result> {
-  const now = params.now ?? Date.now();
-  const recipientPk = params.recipientX25519PubkeyBase64url;
-
-  // Cheap shape check on the recipient pubkey — full length check happens
-  // inside sealRootKeyToRecipient, but reject obvious garbage early so
-  // we return 400 malformed before touching the DB.
-  if (!recipientPk || typeof recipientPk !== "string" || recipientPk.length < 32) {
-    return { ok: false, status: 400, body: { error: "malformed" } };
-  }
-
-  // 1. Look up the invite by opaque code.
-  const [inv] = await db
-    .select()
-    .from(inviteTable)
-    .where(eq(inviteTable.code, params.code))
-    .limit(1);
-  if (!inv) return { ok: false, status: 404, body: { error: "not_found" } };
-
-  // 2. Lifecycle checks: revoked → expired → exhausted.
-  if (inv.revokedAt) {
-    return { ok: false, status: 410, body: { error: "revoked" } };
-  }
-  if (inv.expiresAt.getTime() < now) {
-    return { ok: false, status: 410, body: { error: "expired" } };
-  }
-  if (inv.usedCount >= inv.maxUses) {
-    return { ok: false, status: 410, body: { error: "exhausted" } };
-  }
-
-  // 3. Load the mesh for owner_pubkey + root_key.
-  const [m] = await db
-    .select({
-      id: mesh.id,
-      ownerPubkey: mesh.ownerPubkey,
-      rootKey: mesh.rootKey,
-    })
-    .from(mesh)
-    .where(and(eq(mesh.id, inv.meshId), isNull(mesh.archivedAt)))
-    .limit(1);
-  if (!m) return { ok: false, status: 404, body: { error: "not_found" } };
-  if (!m.ownerPubkey || !m.rootKey) {
-    return { ok: false, status: 400, body: { error: "malformed" } };
-  }
-
-  // 4. v2 signature verification when applicable.
-  //    Always compute the canonical on the fly so the response can echo it.
-  const expiresAtUnix = Math.floor(inv.expiresAt.getTime() / 1000);
-  const canonical = canonicalInviteV2({
-    mesh_id: inv.meshId,
-    invite_id: inv.id,
-    expires_at: expiresAtUnix,
-    role: inv.role as "admin" | "member",
-    owner_pubkey: m.ownerPubkey,
-  });
-
-  if (inv.version === 2 && inv.capabilityV2) {
-    // Parse capability + verify.
-    let storedCanonical: string | undefined;
-    let signatureHex: string | undefined;
-    try {
-      const parsed = JSON.parse(inv.capabilityV2) as {
-        canonical?: string;
-        signature?: string;
-      };
-      storedCanonical = parsed.canonical;
-      signatureHex = parsed.signature;
-    } catch {
-      return { ok: false, status: 400, body: { error: "malformed" } };
-    }
-    if (!storedCanonical || !signatureHex) {
-      return { ok: false, status: 400, body: { error: "malformed" } };
-    }
-    // Broker-recomputed canonical must match the signed bytes exactly.
-    if (storedCanonical !== canonical) {
-      return { ok: false, status: 400, body: { error: "bad_signature" } };
-    }
-    const sigOk = await verifyInviteV2({
-      canonical: storedCanonical,
-      signatureHex,
-      ownerPubkeyHex: m.ownerPubkey,
-    });
-    if (!sigOk) {
-      return { ok: false, status: 400, body: { error: "bad_signature" } };
-    }
-  }
-  // v1 rows: skip signature verification (legacy path during migration).
-
-  // 5. Atomic consume: increment used_count iff still under max_uses.
-  //    Mirrors the invariant enforced for v1 joins in broker.joinMesh().
-  const [claimed] = await db
-    .update(inviteTable)
-    .set({
-      usedCount: sql`${inviteTable.usedCount} + 1`,
-      claimedByPubkey: recipientPk,
-    })
-    .where(
-      and(
-        eq(inviteTable.id, inv.id),
-        lt(inviteTable.usedCount, inv.maxUses),
-      ),
-    )
-    .returning({ id: inviteTable.id });
-  if (!claimed) {
-    return { ok: false, status: 410, body: { error: "exhausted" } };
-  }
-
-  // 6. Create a member row for the claimant. The peerPubkey column holds
-  //    the claimant's signing identity; for v2 the recipient hasn't
-  //    necessarily connected over WS yet, so we use the x25519 pubkey as
-  //    a placeholder for the pre-claim phase. This matches the spec's
-  //    "one recipient = one root-key-delivery capability" invariant.
-  const preset = (inv.preset as {
-    displayName?: string;
-    roleTag?: string;
-    groups?: Array<{ name: string; role?: string }>;
-    messageMode?: string;
-  } | null) ?? {};
-  const displayName =
-    preset.displayName ?? params.displayName ?? `member-${recipientPk.slice(0, 8)}`;
-  const [row] = await db
-    .insert(meshMember)
-    .values({
-      meshId: inv.meshId,
-      peerPubkey: recipientPk,
-      displayName,
-      role: inv.role,
-      roleTag: preset.roleTag ?? null,
-      defaultGroups: preset.groups ?? [],
-      messageMode: preset.messageMode ?? "push",
-    })
-    .returning({ id: meshMember.id });
-  if (!row) {
-    return { ok: false, status: 400, body: { error: "malformed" } };
-  }
-
-  // 7. Seal the mesh root_key to the recipient's x25519 pubkey.
-  let sealed: string;
-  try {
-    sealed = await sealRootKeyToRecipient({
-      rootKeyBase64url: m.rootKey,
-      recipientX25519PubkeyBase64url: recipientPk,
-    });
-  } catch {
-    return { ok: false, status: 400, body: { error: "malformed" } };
-  }
-
-  return {
-    ok: true,
-    status: 200,
-    body: {
-      sealed_root_key: sealed,
-      mesh_id: inv.meshId,
-      member_id: row.id,
-      owner_pubkey: m.ownerPubkey,
-      canonical_v2: canonical,
-    },
-  };
-}
+// NOTE: canonical `claimInviteV2Core` + `InviteClaimV2Result` live in
+// `./crypto.ts`. Re-exported here for backward-compat imports and
+// tests that pulled from index.ts. The previous duplicate in this
+// file had diverged from the crypto.ts copy and was deleted on
+// 2026-04-15 (Codex review finding).
+export { type InviteClaimV2Result } from "./crypto";
+export { claimInviteV2Core };
 
 function handleInviteClaimV2Post(
   req: IncomingMessage,
@@ -1197,6 +1052,19 @@ function handleInviteClaimV2Post(
         writeJson(res, 400, { error: "malformed" });
         return;
       }
+      // Feature-flag: the v2 claim flow inserts a member row with
+      // peerPubkey=<x25519 base64url>, but hello requires ed25519 hex.
+      // Result: claimed invites can never complete the WS handshake.
+      // Keep the endpoint behind an env flag until the two-step binding
+      // (send x25519 for seal, bind ed25519 on first hello) lands. Spec:
+      // .artifacts/specs/2026-04-15-invite-v2-cli-migration.md.
+      if (process.env.BROKER_INVITE_V2_ENABLED !== "1") {
+        writeJson(res, 501, {
+          error: "invite_v2_disabled",
+          detail: "v2 claim flow is behind BROKER_INVITE_V2_ENABLED=1 until the ed25519 binding step ships",
+        });
+        return;
+      }
       const result = await claimInviteV2Core({
         code,
         recipientX25519PubkeyBase64url: payload.recipient_x25519_pubkey,
@@ -1221,11 +1089,14 @@ function handleInviteClaimV2Post(
   });
 }
 
-function handleUploadPost(
+async function handleUploadPost(
   req: IncomingMessage,
   res: ServerResponse,
   started: number,
-): void {
+): Promise<void> {
+  const auth = await requireCliAuth(req, res);
+  if (!auth) return;
+
   const meshId = req.headers["x-mesh-id"] as string | undefined;
   const memberId = req.headers["x-member-id"] as string | undefined;
   const fileName = req.headers["x-file-name"] as string | undefined;
@@ -1241,6 +1112,25 @@ function handleUploadPost(
       ok: false,
       error: "X-Mesh-Id, X-Member-Id, and X-File-Name headers required",
     });
+    return;
+  }
+
+  // Verify the caller is actually a member of the mesh they claim, AND
+  // that the X-Member-Id they sent belongs to them. Previously we trusted
+  // both headers blindly — anyone could upload as anyone.
+  try {
+    const [m] = await db
+      .select({ id: meshMember.id, userId: meshMember.userId, revokedAt: meshMember.revokedAt })
+      .from(meshMember)
+      .where(eq(meshMember.id, memberId))
+      .limit(1);
+    if (!m || m.revokedAt || m.userId !== auth.userId) {
+      writeJson(res, 403, { ok: false, error: "member does not belong to authenticated user" });
+      return;
+    }
+  } catch (e) {
+    writeJson(res, 500, { ok: false, error: "auth check failed" });
+    log.error("upload-auth", { err: e instanceof Error ? e.message : String(e) });
     return;
   }
 
@@ -1675,7 +1565,30 @@ async function restorePeerState(
 async function handleHello(
   ws: WebSocket,
   hello: Extract<WSClientMessage, { type: "hello" }>,
-): Promise<{ presenceId: string; memberDisplayName: string } | null> {
+): Promise<{
+  presenceId: string;
+  memberDisplayName: string;
+  memberProfile?: unknown;
+  meshPolicy?: Record<string, unknown>;
+  restored?: boolean;
+  lastSummary?: string;
+  lastSeenAt?: string;
+  restoredGroups?: Array<{ name: string; role?: string }>;
+  restoredStats?: unknown;
+} | null> {
+  // Validate sessionPubkey shape — it becomes a routable identity in
+  // listPeers/drainForMember, so arbitrary strings let a client claim
+  // nonsense pubkeys. Required-if-present: empty is allowed (falls back
+  // to memberPubkey), but if present must be 64 lower-case hex.
+  if (hello.sessionPubkey != null && hello.sessionPubkey !== "") {
+    if (typeof hello.sessionPubkey !== "string" || !/^[0-9a-f]{64}$/.test(hello.sessionPubkey)) {
+      metrics.connectionsRejected.inc({ reason: "bad_session_pubkey" });
+      sendError(ws, "bad_session_pubkey", "sessionPubkey must be 64 lowercase hex chars");
+      ws.close(1008, "bad_session_pubkey");
+      return null;
+    }
+  }
+
   // Capacity check BEFORE touching DB.
   const existing = connectionsPerMesh.get(hello.meshId) ?? 0;
   if (existing >= env.MAX_CONNECTIONS_PER_MESH) {
@@ -1845,17 +1758,20 @@ async function handleSend(
     (isGroupTargetEarly && msg.targetSpec === "@all");
   const isDirectEarly = !isGroupTargetEarly && !isBroadcastEarly && msg.targetSpec !== "*";
   if (isDirectEarly) {
-    let hasRecipient = false;
-    for (const [pid, peer] of connections) {
+    // Identify candidate recipient connections — anyone in the mesh whose
+    // member or session pubkey matches the target. Then check grants to
+    // see if at least one of them has granted the sender `dm`. Without
+    // this check, blocked DMs get queued and sit in the DB forever
+    // (multicast marks delivered on queue; direct relies on drain-or-push).
+    const candidateMemberIds: string[] = [];
+    for (const [, peer] of connections) {
       if (peer.meshId !== conn.meshId) continue;
       if (peer.ws === conn.ws) continue;
       if (peer.memberPubkey === msg.targetSpec || peer.sessionPubkey === msg.targetSpec) {
-        hasRecipient = true;
-        break;
+        candidateMemberIds.push(peer.memberId);
       }
-      void pid;
     }
-    if (!hasRecipient) {
+    if (candidateMemberIds.length === 0) {
       metrics.messagesRejectedTotal.inc({ reason: "no_recipient" });
       const errAck: WSServerMessage = {
         type: "ack",
@@ -1863,6 +1779,34 @@ async function handleSend(
         messageId: "",
         queued: false,
         error: `no connected peer for target (not online, or targetSpec is your own key without another session)`,
+      };
+      conn.ws.send(JSON.stringify(errAck));
+      return;
+    }
+
+    // Load grants for the candidate recipient members and pick the first
+    // that allows `dm` from the sender's stable memberPubkey. If none
+    // allow it, reject pre-queue so the DB stays clean.
+    const DEFAULT_CAPS_DM = ["read", "dm", "broadcast", "state-read"] as const;
+    const grantRows = await db
+      .select({ id: meshMember.id, peerGrants: meshMember.peerGrants })
+      .from(meshMember)
+      .where(and(eq(meshMember.meshId, conn.meshId), inArray(meshMember.id, candidateMemberIds)));
+    const senderKey = conn.memberPubkey;
+    const anyAllows = grantRows.some((row) => {
+      const grants = (row.peerGrants as Record<string, string[]>) ?? {};
+      const entry = grants[senderKey];
+      if (entry === undefined) return (DEFAULT_CAPS_DM as readonly string[]).includes("dm");
+      return entry.includes("dm");
+    });
+    if (!anyAllows) {
+      metrics.messagesDroppedByGrantTotal?.inc?.({ cap: "dm" });
+      const errAck: WSServerMessage = {
+        type: "ack",
+        id: msg.id ?? "",
+        messageId: "",
+        queued: false,
+        error: "blocked by recipient grants (sender lacks dm capability)",
       };
       conn.ws.send(JSON.stringify(errAck));
       return;
@@ -1921,11 +1865,16 @@ async function handleSend(
 
   // Per-peer grant enforcement — load recipient grant maps once per send.
   // See .artifacts/specs/2026-04-15-per-peer-capabilities.md.
+  //
+  // We look up grants by BOTH the sender's stable member pubkey AND their
+  // ephemeral session pubkey, because CLI clients historically wrote grant
+  // entries keyed on session pubkey (from listPeers which preferred
+  // session key). Member key is preferred; session is a fall-through for
+  // compatibility with older clients until they migrate.
   const DEFAULT_CAPS = ["read", "dm", "broadcast", "state-read"] as const;
   const capNeeded: "dm" | "broadcast" = isMulticast ? "broadcast" : "dm";
-  const senderPubkey = conn.memberPubkey; // stable member key (survives session rotation)
-  // Fetch grant maps for all connected peers in this mesh in one query.
-  // Small (bounded by concurrent connections per mesh); acceptable per send.
+  const senderMemberKey = conn.memberPubkey;
+  const senderSessionKey = conn.sessionPubkey ?? null;
   const grantRows = await db
     .select({ id: meshMember.id, peerGrants: meshMember.peerGrants })
     .from(meshMember)
@@ -1935,10 +1884,14 @@ async function handleSend(
   );
   function allowed(recipientMemberId: string): boolean {
     const grants = grantsByMemberId.get(recipientMemberId);
-    if (!grants) return DEFAULT_CAPS.includes(capNeeded);
-    const entry = grants[senderPubkey];
-    if (entry === undefined) return DEFAULT_CAPS.includes(capNeeded);
-    return entry.includes(capNeeded);
+    if (!grants) return (DEFAULT_CAPS as readonly string[]).includes(capNeeded);
+    const memberEntry = grants[senderMemberKey];
+    if (memberEntry !== undefined) return memberEntry.includes(capNeeded);
+    if (senderSessionKey) {
+      const sessionEntry = grants[senderSessionKey];
+      if (sessionEntry !== undefined) return sessionEntry.includes(capNeeded);
+    }
+    return (DEFAULT_CAPS as readonly string[]).includes(capNeeded);
   }
 
   for (const [pid, peer] of connections) {
@@ -2154,6 +2107,7 @@ function handleConnection(ws: WebSocket): void {
               const pc = connByPubkey.get(p.pubkey);
               return {
                 pubkey: p.pubkey,
+                memberPubkey: p.memberPubkey,
                 displayName: p.displayName,
                 status: p.status as "idle" | "working" | "dnd",
                 summary: p.summary,
@@ -3907,7 +3861,8 @@ function handleConnection(ws: WebSocket): void {
             }
             throw dupErr;
           }
-          const webhookUrl = `https://ic.claudemesh.com/hook/${conn.meshId}/${webhookSecret}`;
+          const brokerPublicUrl = process.env.BROKER_PUBLIC_URL ?? "https://ic.claudemesh.com";
+          const webhookUrl = `${brokerPublicUrl.replace(/\/$/, "")}/hook/${conn.meshId}/${webhookSecret}`;
           sendToPeer(presenceId, {
             type: "webhook_ack",
             name: cw.name,
@@ -3928,11 +3883,12 @@ function handleConnection(ws: WebSocket): void {
             })
             .from(meshWebhook)
             .where(and(eq(meshWebhook.meshId, conn.meshId), eq(meshWebhook.active, true)));
+          const brokerPublicUrlList = process.env.BROKER_PUBLIC_URL ?? "https://ic.claudemesh.com";
           sendToPeer(presenceId, {
             type: "webhook_list",
             webhooks: whRows.map((r) => ({
               name: r.name,
-              url: `https://ic.claudemesh.com/hook/${conn.meshId}/${r.secret}`,
+              url: `${brokerPublicUrlList.replace(/\/$/, "")}/hook/${conn.meshId}/${r.secret}`,
               active: r.active,
               createdAt: r.createdAt.toISOString(),
             })),
@@ -4253,6 +4209,14 @@ function handleConnection(ws: WebSocket): void {
       if (conn) {
         void audit(conn.meshId, "peer_left", conn.memberId, conn.displayName, {});
       }
+      // Clean up URL watches owned by this peer — the interval was
+      // happily fetching forever after the peer disconnected.
+      for (const [watchId, watch] of urlWatches) {
+        if (watch.presenceId === presenceId) {
+          clearInterval(watch.timer);
+          urlWatches.delete(watchId);
+        }
+      }
       // Clean up stream subscriptions for this peer
       for (const [key, subs] of streamSubscriptions) {
         subs.delete(presenceId);
@@ -4483,7 +4447,10 @@ async function main(): Promise<void> {
   pingInterval.unref();
 
   // GC rate-limit buckets periodically.
-  const rlSweep = setInterval(() => hookRateLimit.sweep(), 5 * 60_000);
+  const rlSweep = setInterval(() => {
+    hookRateLimit.sweep();
+    sendRateLimit.sweep();
+  }, 5 * 60_000);
   rlSweep.unref();
 
   // Queue depth gauge refresh (fires the metric; cheap COUNT query).
@@ -4624,7 +4591,7 @@ async function main(): Promise<void> {
           .where(and(eq(telegramBridge.chatId, BigInt(chatId) as any), eq(telegramBridge.meshId, meshId)));
       },
       tgBotToken,
-      "wss://ic.claudemesh.com/ws",
+      process.env.BROKER_WS_URL ?? "wss://ic.claudemesh.com/ws",
       // lookupMeshesByEmail: find user's meshes, create a bridge-specific member with fresh keypair
       async (email) => {
         const users = await db.select({ id: user.id, name: user.name }).from(user).where(eq(user.email, email)).limit(1);
@@ -4784,6 +4751,52 @@ async function hashToken(token: string): Promise<string> {
   const data = new TextEncoder().encode(token);
   const hash = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Verify the caller holds a valid CLI session token and return the
+ * authenticated user_id. Used by every authenticated /cli/... route
+ * to replace the former pattern of trusting body.user_id blindly.
+ *
+ * Returns null (and writes 401) on missing/invalid/revoked tokens.
+ * Callers must `return` immediately after a null response.
+ */
+async function requireCliAuth(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<{ userId: string; sessionId: string } | null> {
+  const header = req.headers["authorization"];
+  if (!header || typeof header !== "string" || !header.startsWith("Bearer ")) {
+    writeJson(res, 401, { error: "missing_bearer_token" });
+    return null;
+  }
+  const token = header.slice("Bearer ".length).trim();
+  if (!token) {
+    writeJson(res, 401, { error: "empty_bearer_token" });
+    return null;
+  }
+  try {
+    const hash = await hashToken(token);
+    const [session] = await db
+      .select({ id: cliSessionTable.id, userId: cliSessionTable.userId, revokedAt: cliSessionTable.revokedAt })
+      .from(cliSessionTable)
+      .where(eq(cliSessionTable.tokenHash, hash))
+      .limit(1);
+    if (!session || session.revokedAt) {
+      writeJson(res, 401, { error: "invalid_or_revoked_token" });
+      return null;
+    }
+    // Touch last-seen so operators can see stale sessions.
+    db.update(cliSessionTable)
+      .set({ lastSeenAt: new Date() })
+      .where(eq(cliSessionTable.id, session.id))
+      .catch(() => { /* non-fatal */ });
+    return { userId: session.userId, sessionId: session.id };
+  } catch (e) {
+    log.error("auth", { err: e instanceof Error ? e.message : String(e) });
+    writeJson(res, 500, { error: "auth_check_failed" });
+    return null;
+  }
 }
 
 /** POST /cli/device-code — create a new device code. */
@@ -4959,13 +4972,9 @@ async function handleDeviceCodeApprove(req: IncomingMessage, code: string, res: 
 /** GET /cli/sessions?user_id=... — list CLI sessions for a user. */
 /** GET /cli/meshes?user_id=... — list all meshes for a user with member counts. */
 async function handleCliMeshesList(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
-  const url = new URL(req.url!, "http://localhost");
-  const userId = url.searchParams.get("user_id");
-
-  if (!userId) {
-    writeJson(res, 400, { error: "user_id required" });
-    return;
-  }
+  const auth = await requireCliAuth(req, res);
+  if (!auth) return;
+  const userId = auth.userId;
 
   try {
     // Find meshes via two paths:
@@ -5168,7 +5177,10 @@ import { meshPermission } from "@turbostarter/db/schema/mesh";
  * for a specific peer = blocked. Explicit null = reset to defaults.
  */
 async function handleCliMeshGrants(req: IncomingMessage, slug: string, res: ServerResponse, started: number): Promise<void> {
-  let body: { user_id: string; grants: Record<string, string[] | null> };
+  const auth = await requireCliAuth(req, res);
+  if (!auth) return;
+
+  let body: { grants: Record<string, string[] | null> };
   try {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -5177,8 +5189,8 @@ async function handleCliMeshGrants(req: IncomingMessage, slug: string, res: Serv
     writeJson(res, 400, { error: "Invalid body" });
     return;
   }
-  if (!body.user_id || !body.grants) {
-    writeJson(res, 400, { error: "user_id and grants required" });
+  if (!body.grants) {
+    writeJson(res, 400, { error: "grants required" });
     return;
   }
   try {
@@ -5186,7 +5198,7 @@ async function handleCliMeshGrants(req: IncomingMessage, slug: string, res: Serv
     if (!m) { writeJson(res, 404, { error: "Mesh not found" }); return; }
     // Find the caller's member row.
     const [member] = await db.select().from(meshMember)
-      .where(and(eq(meshMember.meshId, m.id), eq(meshMember.userId, body.user_id), isNull(meshMember.revokedAt)))
+      .where(and(eq(meshMember.meshId, m.id), eq(meshMember.userId, auth.userId), isNull(meshMember.revokedAt)))
       .limit(1);
     if (!member) {
       writeJson(res, 403, { error: "Not a member of this mesh" });
@@ -5209,7 +5221,10 @@ async function handleCliMeshGrants(req: IncomingMessage, slug: string, res: Serv
 
 /** POST /cli/mesh/:slug/invite — generate an invite for a mesh. */
 async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: ServerResponse, started: number): Promise<void> {
-  let body: { user_id: string; email?: string; expires_in?: string; role?: string };
+  const auth = await requireCliAuth(req, res);
+  if (!auth) return;
+
+  let body: { email?: string; expires_in?: string; role?: string };
   try {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -5219,15 +5234,10 @@ async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: Serv
     return;
   }
 
-  if (!body.user_id) {
-    writeJson(res, 400, { error: "user_id required" });
-    return;
-  }
-
   try {
     const [m] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
     if (!m) { writeJson(res, 404, { error: "Mesh not found" }); return; }
-    if (m.ownerUserId !== body.user_id) {
+    if (m.ownerUserId !== auth.userId) {
       writeJson(res, 403, { error: "Only the owner can invite (for now)" });
       return;
     }
@@ -5280,7 +5290,7 @@ async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: Serv
           maxUses: 1,
           role,
           expiresAt,
-          createdBy: body.user_id,
+          createdBy: auth.userId,
           version: 2,
         }).returning({ id: inviteTable.id });
         inviteId = rows[0]!.id;
@@ -5349,7 +5359,10 @@ async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: Serv
 }
 
 async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, started: number): Promise<void> {
-  let body: { user_id: string; name: string; pubkey?: string; slug?: string; template?: string; description?: string };
+  const auth = await requireCliAuth(req, res);
+  if (!auth) return;
+
+  let body: { name: string; pubkey?: string; slug?: string; template?: string; description?: string };
   try {
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -5359,8 +5372,8 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
     return;
   }
 
-  if (!body.user_id || !body.name) {
-    writeJson(res, 400, { error: "user_id and name required" });
+  if (!body.name) {
+    writeJson(res, 400, { error: "name required" });
     return;
   }
 
@@ -5395,7 +5408,7 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
     // Create mesh — use raw SQL to avoid Drizzle default-column issues
     await db.execute(sql`
       INSERT INTO mesh.mesh (id, name, slug, owner_user_id, owner_pubkey, owner_secret_key, root_key)
-      VALUES (${meshId}, ${body.name}, ${slug}, ${body.user_id}, ${ownerPubkey}, ${ownerSecretKey}, ${rootKey})
+      VALUES (${meshId}, ${body.name}, ${slug}, ${auth.userId}, ${ownerPubkey}, ${ownerSecretKey}, ${rootKey})
     `);
 
     // Create owner member.
@@ -5410,11 +5423,11 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
     const memberId = generateId();
     await db.execute(sql`
       INSERT INTO mesh.member (id, mesh_id, user_id, peer_pubkey, display_name, role)
-      VALUES (${memberId}, ${meshId}, ${body.user_id}, ${body.pubkey}, ${body.name + "-owner"}, ${"admin"})
+      VALUES (${memberId}, ${meshId}, ${auth.userId}, ${body.pubkey}, ${body.name + "-owner"}, ${"admin"})
     `);
 
     writeJson(res, 200, { id: meshId, slug, name: body.name, member_id: memberId });
-    log.info("mesh-create", { route: "POST /cli/mesh/create", slug, user_id: body.user_id, latency_ms: Date.now() - started });
+    log.info("mesh-create", { route: "POST /cli/mesh/create", slug, user_id: auth.userId, latency_ms: Date.now() - started });
   } catch (e) {
     log.error("mesh-create", { error: e instanceof Error ? e.message : String(e) });
     writeJson(res, 500, { error: "Failed to create mesh" });
@@ -5423,37 +5436,22 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
 
 /** DELETE /cli/mesh/:slug — delete a mesh (owner only). */
 async function handleMeshDelete(req: IncomingMessage, slug: string, res: ServerResponse, started: number): Promise<void> {
-  let body: { user_id: string };
-  try {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) chunks.push(chunk as Buffer);
-    body = JSON.parse(Buffer.concat(chunks).toString()) as typeof body;
-  } catch {
-    writeJson(res, 400, { error: "Invalid body" });
-    return;
-  }
-
-  if (!body.user_id) {
-    writeJson(res, 400, { error: "user_id required" });
-    return;
-  }
+  const auth = await requireCliAuth(req, res);
+  if (!auth) return;
 
   try {
-    // Find mesh by slug
     const [m] = await db.select().from(mesh).where(eq(mesh.slug, slug)).limit(1);
     if (!m) { writeJson(res, 404, { error: "Mesh not found" }); return; }
 
-    // Only owner can delete
-    if (m.ownerUserId !== body.user_id) {
+    if (m.ownerUserId !== auth.userId) {
       writeJson(res, 403, { error: "Only the mesh owner can delete it" });
       return;
     }
 
-    // Soft delete (archive)
     await db.update(mesh).set({ archivedAt: new Date() }).where(eq(mesh.id, m.id));
 
     writeJson(res, 200, { ok: true, deleted: slug });
-    log.info("mesh-delete", { route: "DELETE /cli/mesh/:slug", slug, user_id: body.user_id, latency_ms: Date.now() - started });
+    log.info("mesh-delete", { route: "DELETE /cli/mesh/:slug", slug, user_id: auth.userId, latency_ms: Date.now() - started });
   } catch (e) {
     log.error("mesh-delete", { error: e instanceof Error ? e.message : String(e) });
     writeJson(res, 500, { error: "Failed to delete mesh" });

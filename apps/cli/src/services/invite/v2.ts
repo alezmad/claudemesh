@@ -86,9 +86,23 @@ export async function claimInviteV2(opts: {
     s.base64_variants.URLSAFE_NO_PADDING,
   );
 
-  const base = opts.appBaseUrl.replace(/\/$/, "");
+  // Claim can be routed either through the web app's `/api/public/invites/:code/claim`
+  // (which proxies to the broker) or directly against the broker's
+  // `/invites/:code/claim`. Default to the broker direct path because it
+  // removes one hop and avoids depending on the web app being healthy.
+  // Override with CLAUDEMESH_CLAIM_URL for self-hosters / tests.
   const code = encodeURIComponent(opts.code);
-  const url = `${base}/api/public/invites/${code}/claim`;
+  const override = process.env.CLAUDEMESH_CLAIM_URL;
+  let url: string;
+  if (override) {
+    url = override.replace(/\{code\}/g, code);
+  } else {
+    // Derive broker HTTP base from opts.appBaseUrl or a standard guess.
+    const brokerBase =
+      process.env.CLAUDEMESH_BROKER_HTTP ??
+      "https://ic.claudemesh.com";
+    url = `${brokerBase.replace(/\/$/, "")}/invites/${code}/claim`;
+  }
 
   let res: Response;
   try {

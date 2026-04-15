@@ -64,7 +64,12 @@ export type Priority = "now" | "next" | "low";
 export type ConnStatus = "connecting" | "open" | "closed" | "reconnecting";
 
 export interface PeerInfo {
+  /** Routing key — session pubkey if present, otherwise member pubkey. */
   pubkey: string;
+  /** Stable member pubkey (mesh.member.peer_pubkey). Preferred for grants,
+   * safety numbers, audit, and anything that needs identity stability
+   * across reconnects. */
+  memberPubkey?: string;
   displayName: string;
   status: string;
   summary: string | null;
@@ -138,6 +143,13 @@ export class BrokerClient {
   private outbound: Array<() => void> = []; // closures that send once ws is open
   private pushHandlers = new Set<PushHandler>();
   private pushBuffer: InboundPush[] = [];
+  /**
+   * Serialization chain for inbound push handling. Each incoming push
+   * appends to this promise so decrypt+enqueue happens in arrival order.
+   * Without it, a fast decrypt could land in pushBuffer before a slow
+   * earlier one — observable as reordered messages to consumers.
+   */
+  private pushChain: Promise<void> = Promise.resolve();
   private listPeersResolvers = new Map<string, { resolve: (peers: PeerInfo[]) => void; timer: NodeJS.Timeout }>();
   private stateResolvers = new Map<string, { resolve: (result: { key: string; value: unknown; updatedBy: string; updatedAt: string } | null) => void; timer: NodeJS.Timeout }>();
   private stateListResolvers = new Map<string, { resolve: (entries: Array<{ key: string; value: unknown; updatedBy: string; updatedAt: string }>) => void; timer: NodeJS.Timeout }>();
@@ -1639,9 +1651,10 @@ export class BrokerClient {
       const nonce = String(msg.nonce ?? "");
       const ciphertext = String(msg.ciphertext ?? "");
       const senderPubkey = String(msg.senderPubkey ?? "");
-      // Decrypt asynchronously, then enqueue. Ordering within the
-      // buffer is preserved by awaiting before push.
-      void (async (): Promise<void> => {
+      // Serialize through pushChain so decrypt+enqueue preserves arrival
+      // order. Previously each inbound push ran in an independent async
+      // task and fast decrypts could overtake slow ones.
+      this.pushChain = this.pushChain.then(async (): Promise<void> => {
         // System messages (peer_joined, watch_triggered, mcp_deployed, etc.)
         // have senderPubkey="system" with empty nonce/ciphertext — skip decryption.
         const isSystem = msg.subtype === "system" || senderPubkey === "system";
@@ -1739,7 +1752,9 @@ export class BrokerClient {
             /* handler errors are not the transport's problem */
           }
         }
-      })();
+      }).catch((e) => {
+        this.debug(`push handler chain error: ${e instanceof Error ? e.message : e}`);
+      });
       return;
     }
     if (msg.type === "state_result") {
@@ -2194,14 +2209,25 @@ export class BrokerClient {
   }
 
   private scheduleReconnect(): void {
+    // Guard: if a reconnect is already scheduled don't pile on another
+    // timer — stacked close events used to schedule multiple concurrent
+    // reconnects which caused reconnect storms against the broker.
+    if (this.reconnectTimer) {
+      this.debug("reconnect already scheduled — skipping");
+      return;
+    }
     this.setConnStatus("reconnecting");
-    const delay =
+    const base =
       BACKOFF_CAPS[Math.min(this.reconnectAttempt, BACKOFF_CAPS.length - 1)]!;
+    // Full jitter: uniform [0, base]. Prevents thundering herd when the
+    // broker restarts and every client reconnects on the same tick.
+    const delay = Math.floor(Math.random() * base);
     this.reconnectAttempt += 1;
     this.debug(
-      `reconnect in ${delay}ms (attempt ${this.reconnectAttempt})`,
+      `reconnect in ${delay}ms (attempt ${this.reconnectAttempt}, base ${base}ms)`,
     );
     this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       if (this.closed) return;
       this.connect().catch((e) => {
         this.debug(`reconnect failed: ${e instanceof Error ? e.message : e}`);
