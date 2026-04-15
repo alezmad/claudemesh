@@ -5143,7 +5143,7 @@ async function handleCliMeshInvite(req: IncomingMessage, slug: string, res: Serv
           const { MeshInvitation } = await import("./emails/mesh-invitation");
           const React = await import("react");
           const subject = `You're invited to join "${m.name}" on claudemesh`;
-          const element = React.createElement(MeshInvitation, { meshName: m.name, inviteUrl: url, expiresAt: expiresAt.toISOString(), appBaseUrl: baseUrl });
+          const element = React.createElement(MeshInvitation, { meshName: m.name, inviteUrl: url, token, expiresAt: expiresAt.toISOString(), appBaseUrl: baseUrl });
           const html = await render(element);
           const text = await render(element, { plainText: true });
           const res = process.env.POSTMARK_API_KEY

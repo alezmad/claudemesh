@@ -5,8 +5,9 @@ interface Props {
   token: string;
 }
 
-const LAUNCH_CMD = (token: string) => `claudemesh launch --name YourName --join ${token}`;
-const JOIN_CMD = (token: string) => `claudemesh join ${token}`;
+const LAUNCH_CMD = (token: string) => `claudemesh launch --join ${token}`;
+const INSTALL_AND_LAUNCH = (token: string) =>
+  `npm i -g claudemesh-cli && claudemesh launch --join ${token}`;
 const INSTALL_CMD = "npm i -g claudemesh-cli";
 
 export const InstallToggle = ({ token }: Props) => {
@@ -97,71 +98,39 @@ export const InstallToggle = ({ token }: Props) => {
     );
   }
 
-  const launchCmd = LAUNCH_CMD(token);
+  const oneLiner = INSTALL_AND_LAUNCH(token);
   return (
     <div className="space-y-4">
-      <ol className="space-y-3">
-        <li className="rounded-[var(--cm-radius-md)] border border-[var(--cm-border)] bg-[var(--cm-bg-elevated)] p-5">
-          <div
-            className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[var(--cm-clay)]"
+      <div className="rounded-[var(--cm-radius-md)] border border-[var(--cm-clay)]/40 bg-[var(--cm-bg-elevated)] p-5">
+        <div
+          className="mb-2 text-[11px] uppercase tracking-[0.18em] text-[var(--cm-clay)]"
+          style={{ fontFamily: "var(--cm-font-mono)" }}
+        >
+          install + launch — one command
+        </div>
+        <div className="flex items-center gap-2">
+          <code
+            className="flex-1 overflow-x-auto rounded-[var(--cm-radius-xs)] bg-[var(--cm-bg)] p-3 text-sm text-[var(--cm-fg)]"
             style={{ fontFamily: "var(--cm-font-mono)" }}
           >
-            <span className="rounded-full bg-[var(--cm-clay)]/20 px-1.5">1</span>
-            install the CLI
-          </div>
-          <div className="flex items-center gap-2">
-            <code
-              className="flex-1 overflow-x-auto rounded-[var(--cm-radius-xs)] bg-[var(--cm-bg)] p-3 text-sm text-[var(--cm-fg)]"
-              style={{ fontFamily: "var(--cm-font-mono)" }}
-            >
-              {INSTALL_CMD}
-            </code>
-            <button
-              onClick={() => copy(INSTALL_CMD, "install")}
-              className="rounded-[var(--cm-radius-xs)] border border-[var(--cm-border)] px-3 py-3 text-sm text-[var(--cm-fg-secondary)] transition-colors hover:border-[var(--cm-fg)] hover:text-[var(--cm-fg)]"
-              style={{ fontFamily: "var(--cm-font-sans)" }}
-            >
-              {copiedKey === "install" ? "Copied ✓" : "Copy"}
-            </button>
-          </div>
-          <p
-            className="mt-2 text-xs text-[var(--cm-fg-tertiary)]"
-            style={{ fontFamily: "var(--cm-font-serif)" }}
+            {oneLiner}
+          </code>
+          <button
+            onClick={() => copy(oneLiner, "one")}
+            className="rounded-[var(--cm-radius-xs)] bg-[var(--cm-clay)] px-4 py-3 text-sm font-medium text-[var(--cm-fg)] transition-colors hover:bg-[var(--cm-clay-hover)]"
+            style={{ fontFamily: "var(--cm-font-sans)" }}
           >
-            Requires Node.js 20+.
-          </p>
-        </li>
-        <li className="rounded-[var(--cm-radius-md)] border border-[var(--cm-clay)]/40 bg-[var(--cm-bg-elevated)] p-5">
-          <div
-            className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.18em] text-[var(--cm-clay)]"
-            style={{ fontFamily: "var(--cm-font-mono)" }}
-          >
-            <span className="rounded-full bg-[var(--cm-clay)]/20 px-1.5">2</span>
-            join + launch
-          </div>
-          <div className="flex items-center gap-2">
-            <code
-              className="flex-1 overflow-x-auto rounded-[var(--cm-radius-xs)] bg-[var(--cm-bg)] p-3 text-sm text-[var(--cm-fg)]"
-              style={{ fontFamily: "var(--cm-font-mono)" }}
-            >
-              {launchCmd}
-            </code>
-            <button
-              onClick={() => copy(launchCmd, "join")}
-              className="rounded-[var(--cm-radius-xs)] bg-[var(--cm-clay)] px-3 py-3 text-sm font-medium text-[var(--cm-fg)] transition-colors hover:bg-[var(--cm-clay-hover)]"
-              style={{ fontFamily: "var(--cm-font-sans)" }}
-            >
-              {copiedKey === "join" ? "Copied ✓" : "Copy"}
-            </button>
-          </div>
-          <p
-            className="mt-2 text-xs text-[var(--cm-fg-tertiary)]"
-            style={{ fontFamily: "var(--cm-font-serif)" }}
-          >
-            Joins the mesh and launches Claude Code in one step.
-          </p>
-        </li>
-      </ol>
+            {copiedKey === "one" ? "Copied ✓" : "Copy"}
+          </button>
+        </div>
+        <p
+          className="mt-2 text-xs text-[var(--cm-fg-tertiary)]"
+          style={{ fontFamily: "var(--cm-font-serif)" }}
+        >
+          Requires Node.js 20+. Your display name defaults to <code style={{ fontFamily: "var(--cm-font-mono)" }}>$USER</code> — override with{" "}
+          <code style={{ fontFamily: "var(--cm-font-mono)" }}>--name YourName</code>.
+        </p>
+      </div>
       <button
         onClick={() => setHasCli("unknown")}
         className="text-xs text-[var(--cm-fg-tertiary)] underline underline-offset-4 hover:text-[var(--cm-fg)]"
