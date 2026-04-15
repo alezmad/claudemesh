@@ -5314,12 +5314,19 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
       VALUES (${meshId}, ${body.name}, ${slug}, ${body.user_id}, ${ownerPubkey}, ${ownerSecretKey}, ${rootKey})
     `);
 
-    // Create owner member
+    // Create owner member.
+    // Reject "pending" — older CLIs sent no pubkey and the broker stored the
+    // literal string, which then made every subsequent hello fail the pubkey
+    // membership check silently. If the caller didn't send a pubkey, refuse
+    // the create rather than store a poison row.
+    if (!body.pubkey || !/^[0-9a-f]{64}$/i.test(body.pubkey)) {
+      writeJson(res, 400, { error: "pubkey required (64 hex chars)" });
+      return;
+    }
     const memberId = generateId();
-    const peerPubkey = body.pubkey ?? "pending";
     await db.execute(sql`
       INSERT INTO mesh.member (id, mesh_id, user_id, peer_pubkey, display_name, role)
-      VALUES (${memberId}, ${meshId}, ${body.user_id}, ${peerPubkey}, ${body.name + "-owner"}, ${"admin"})
+      VALUES (${memberId}, ${meshId}, ${body.user_id}, ${body.pubkey}, ${body.name + "-owner"}, ${"admin"})
     `);
 
     writeJson(res, 200, { id: meshId, slug, name: body.name, member_id: memberId });
