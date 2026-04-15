@@ -1,0 +1,90 @@
+# claudemesh-cli
+
+Peer mesh for Claude Code sessions. Connect multiple Claude Code instances into a shared mesh with real-time messaging, shared state, memory, file sharing, and 79 MCP tools.
+
+## Install
+
+```bash
+npm i -g claudemesh-cli
+```
+
+## Quick start
+
+```bash
+claudemesh register        # create account
+claudemesh new "my-team"   # create a mesh
+claudemesh invite           # generate invite link
+claudemesh                  # start a session
+```
+
+## Commands
+
+```
+USAGE
+  claudemesh                 start a session (creates one if needed)
+  claudemesh <url>           join a mesh from an invite link
+  claudemesh new             create a new mesh
+  claudemesh invite [email]  generate an invite
+  claudemesh list            see your meshes
+  claudemesh rename <name>   rename the current mesh
+  claudemesh leave [mesh]    leave a mesh
+  claudemesh peers           see who's online
+
+  claudemesh send <to> <msg> send a message
+  claudemesh inbox           drain pending messages
+  claudemesh state ...       get, set, or list shared state
+  claudemesh remember <text> store a memory
+  claudemesh recall <query>  search memories
+  claudemesh remind ...      schedule a reminder
+  claudemesh profile         view or edit your profile
+
+  claudemesh doctor          diagnose issues
+  claudemesh whoami          show current identity
+  claudemesh status          check broker connectivity
+
+  claudemesh register        create account
+  claudemesh login           sign in via browser
+  claudemesh logout          sign out
+
+  claudemesh install         register MCP server + hooks
+  claudemesh uninstall       remove MCP server + hooks
+```
+
+## Architecture
+
+```
+src/
+├── entrypoints/     CLI + MCP stdio entry points
+├── cli/             argv parsing, output formatters, signal handling
+├── commands/        one verb per file (29 commands)
+├── services/        17 feature-folders with facade pattern
+│   ├── auth/        device-code OAuth, token storage
+│   ├── broker/      WebSocket client (2200 lines), reconnect, crypto
+│   ├── crypto/      Ed25519, NaCl crypto_box, AES-GCM file encryption
+│   ├── config/      ~/.claudemesh/config.json with atomic writes
+│   ├── mesh/        CRUD, join, resolve target
+│   ├── invite/      generate, parse, claim (v1 + v2 formats)
+│   ├── api/         typed HTTP client for claudemesh.com
+│   ├── health/      6 diagnostic checks
+│   └── ...          device, clipboard, spawn, telemetry, i18n, logger
+├── mcp/             MCP server with 79 tools across 21 families
+├── ui/              TUI: styles, spinner, welcome wizard, launch flow
+├── constants/       exit codes, paths, URLs, timings
+├── types/           API, mesh, peer interfaces
+├── utils/           levenshtein, slug, URL, format, semver, retry
+├── locales/         English strings (i18n ready)
+└── templates/       5 mesh templates
+```
+
+## Development
+
+```bash
+pnpm install
+bun run dev          # hot-reload
+bun run build        # production build
+bun run typecheck    # tsc --noEmit
+```
+
+## License
+
+MIT
