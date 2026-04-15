@@ -2001,6 +2001,10 @@ function handleConnection(ws: WebSocket): void {
           for (const [pid, peer] of connections) {
             if (pid === presenceId) continue;
             if (peer.meshId !== joinedConn.meshId) continue;
+            // Don't spam the user's own other sessions about themselves —
+            // multiple Claude Code instances from one laptop all share the
+            // same memberPubkey, so they're the same human identity.
+            if (peer.memberPubkey === joinedConn.memberPubkey) continue;
             sendToPeer(pid, joinMsg);
           }
           // Restore persistent MCP servers owned by this member
@@ -4162,6 +4166,9 @@ function handleConnection(ws: WebSocket): void {
         };
         for (const [pid, peer] of connections) {
           if (peer.meshId !== conn.meshId) continue;
+          // Don't tell the user's own other sessions they "left" when one
+          // of their Claude Code instances closes. Same pubkey = same user.
+          if (peer.memberPubkey === conn.memberPubkey) continue;
           sendToPeer(pid, leaveMsg);
         }
       }
