@@ -43,8 +43,6 @@ jobs:
           bun-version: "1.2"
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --ignore-scripts
