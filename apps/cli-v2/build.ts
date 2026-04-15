@@ -3,6 +3,11 @@ import { gzipSync } from "node:zlib";
 
 const MAX_GZIPPED_BYTES = 1.2 * 1024 * 1024; // 1.2 MB
 
+// Inject the version from package.json at build time so VERSION can never
+// drift from what's published. Bun's `define` is a source-text replacement,
+// equivalent to `--define` in esbuild / a webpack DefinePlugin.
+const pkgVersion = ((await Bun.file("package.json").json()) as { version: string }).version;
+
 const result = await Bun.build({
   entrypoints: [
     "src/entrypoints/cli.ts",
@@ -13,6 +18,9 @@ const result = await Bun.build({
   format: "esm",
   splitting: false,
   sourcemap: "external",
+  define: {
+    __CLAUDEMESH_VERSION__: JSON.stringify(pkgVersion),
+  },
   external: [
     "libsodium-wrappers",
     "ws",

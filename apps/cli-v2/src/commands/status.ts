@@ -10,6 +10,7 @@ import { statSync, existsSync } from "node:fs";
 import WebSocket from "ws";
 import { readConfig, getConfigPath } from "~/services/config/facade.js";
 import { VERSION } from "~/constants/urls.js";
+import { render } from "~/ui/render.js";
 
 interface MeshStatus {
   slug: string;
@@ -17,10 +18,12 @@ interface MeshStatus {
   pubkey: string;
   reachable: boolean;
   error?: string;
+  latencyMs?: number;
 }
 
-async function probeBroker(url: string, timeoutMs = 4000): Promise<{ ok: boolean; error?: string }> {
+async function probeBroker(url: string, timeoutMs = 4000): Promise<{ ok: boolean; error?: string; latencyMs?: number }> {
   return new Promise((resolve) => {
+    const started = Date.now();
     const ws = new WebSocket(url);
     const timer = setTimeout(() => {
       try { ws.terminate(); } catch { /* noop */ }
@@ -28,8 +31,9 @@ async function probeBroker(url: string, timeoutMs = 4000): Promise<{ ok: boolean
     }, timeoutMs);
     ws.on("open", () => {
       clearTimeout(timer);
+      const latency = Date.now() - started;
       try { ws.close(); } catch { /* noop */ }
-      resolve({ ok: true });
+      resolve({ ok: true, latencyMs: latency });
     });
     ws.on("error", (err) => {
       clearTimeout(timer);
@@ -39,65 +43,59 @@ async function probeBroker(url: string, timeoutMs = 4000): Promise<{ ok: boolean
 }
 
 export async function runStatus(): Promise<void> {
-  const useColor =
-    !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
-  const dim = (s: string): string => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
-  const green = (s: string): string => (useColor ? `\x1b[32m${s}\x1b[39m` : s);
-  const red = (s: string): string => (useColor ? `\x1b[31m${s}\x1b[39m` : s);
-
-  console.log(`claudemesh status  (v${VERSION})`);
-  console.log("─".repeat(60));
+  render.section(`status (v${VERSION})`);
 
   const configPath = getConfigPath();
-  let configPerms = "missing";
+  let configPermsNote = "missing";
   if (existsSync(configPath)) {
-    const st = statSync(configPath);
-    const mode = (st.mode & 0o777).toString(8).padStart(4, "0");
-    configPerms = mode === "0600" ? `${mode} ✓` : `${mode} ⚠ (expected 0600)`;
+    const mode = (statSync(configPath).mode & 0o777).toString(8).padStart(4, "0");
+    configPermsNote = mode === "0600" ? `${mode}` : `${mode} — expected 0600`;
   }
-  console.log(`Config:     ${configPath} (${configPerms})`);
+  render.kv([["config", configPath], ["perms", configPermsNote]]);
 
   const config = readConfig();
   if (config.meshes.length === 0) {
-    console.log("");
-    console.log(dim("No meshes joined. Run `claudemesh join <invite-url>` to get started."));
+    render.blank();
+    render.info("No meshes joined.");
+    render.hint("claudemesh <invite-url>    # join + launch");
     process.exit(0);
   }
 
-  console.log("");
-  console.log(`Meshes (${config.meshes.length}):`);
+  render.blank();
+  render.heading(`meshes (${config.meshes.length})`);
 
   const results: MeshStatus[] = [];
   for (const m of config.meshes) {
-    process.stdout.write(`  ${m.slug.padEnd(20)} probing ${m.brokerUrl}… `);
     const probe = await probeBroker(m.brokerUrl);
-    results.push({
+    const entry: MeshStatus = {
       slug: m.slug,
       brokerUrl: m.brokerUrl,
       pubkey: m.pubkey,
       reachable: probe.ok,
       error: probe.error,
-    });
+      latencyMs: probe.latencyMs,
+    };
+    results.push(entry);
     if (probe.ok) {
-      console.log(green("reachable"));
+      render.ok(`${m.slug}`, `${probe.latencyMs}ms → ${m.brokerUrl}`);
     } else {
-      console.log(red(`unreachable (${probe.error})`));
+      render.err(`${m.slug}`, `unreachable (${probe.error})`);
     }
   }
 
-  console.log("");
+  render.blank();
   for (const r of results) {
-    console.log(dim(`  ${r.slug}: pubkey ${r.pubkey.slice(0, 16)}…`));
+    render.kv([[r.slug, `${r.pubkey.slice(0, 16)}…`]]);
   }
 
   const allOk = results.every((r) => r.reachable);
-  console.log("");
+  render.blank();
   if (allOk) {
-    console.log(green("All meshes reachable."));
+    render.ok("all meshes reachable");
     process.exit(0);
   } else {
     const broken = results.filter((r) => !r.reachable).length;
-    console.log(red(`${broken} of ${results.length} mesh(es) unreachable.`));
+    render.err(`${broken} of ${results.length} mesh(es) unreachable`);
     process.exit(1);
   }
 }

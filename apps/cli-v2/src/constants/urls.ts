@@ -5,7 +5,11 @@ export const URLS = {
   NPM_REGISTRY: "https://registry.npmjs.org/claudemesh-cli",
 } as const;
 
-export const VERSION = "1.0.0-alpha.27";
+// Injected at build time from package.json#version via `bun build --define`
+// (see build.ts). Falls back to a dev sentinel when running from source.
+declare const __CLAUDEMESH_VERSION__: string;
+export const VERSION: string =
+  typeof __CLAUDEMESH_VERSION__ !== "undefined" ? __CLAUDEMESH_VERSION__ : "0.0.0-dev";
 
 export const env = {
   CLAUDEMESH_BROKER_URL: URLS.BROKER,

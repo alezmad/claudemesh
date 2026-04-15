@@ -6,6 +6,8 @@
 
 import { withMesh } from "./connect.js";
 import { readConfig } from "~/services/config/facade.js";
+import { render } from "~/ui/render.js";
+import { bold, dim, green, yellow } from "~/ui/styles.js";
 
 export interface PeersFlags {
   mesh?: string;
@@ -13,22 +15,12 @@ export interface PeersFlags {
 }
 
 export async function runPeers(flags: PeersFlags): Promise<void> {
-  const useColor =
-    !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
-  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
-  const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
-  const green = (s: string) => (useColor ? `\x1b[32m${s}\x1b[39m` : s);
-  const yellow = (s: string) => (useColor ? `\x1b[33m${s}\x1b[39m` : s);
-
   const config = readConfig();
-
-  // If --mesh specified, show only that one. Otherwise show all.
-  const slugs = flags.mesh
-    ? [flags.mesh]
-    : config.meshes.map(m => m.slug);
+  const slugs = flags.mesh ? [flags.mesh] : config.meshes.map((m) => m.slug);
 
   if (slugs.length === 0) {
-    console.error("No meshes joined. Run `claudemesh join <url>` first.");
+    render.err("No meshes joined.");
+    render.hint("claudemesh <invite-url>    # join + launch");
     process.exit(1);
   }
 
@@ -44,39 +36,39 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
           return;
         }
 
-        console.log(bold(`Peers on ${mesh.slug}`) + dim(` (${peers.length})`));
-        console.log("");
+        render.section(`peers on ${mesh.slug} (${peers.length})`);
 
         if (peers.length === 0) {
-          console.log(dim("  No peers connected."));
-        } else {
-          for (const p of peers) {
-            const groups = p.groups.length
-              ? " [" + p.groups.map((g: { name: string; role?: string }) =>
-                  `@${g.name}${g.role ? `:${g.role}` : ""}`).join(", ") + "]"
-              : "";
-            const statusIcon = p.status === "working" ? yellow("●") : green("●");
-            const name = bold(p.displayName);
-            const meta: string[] = [];
-            if (p.peerType) meta.push(p.peerType);
-            if (p.channel) meta.push(p.channel);
-            if (p.model) meta.push(p.model);
-            const metaStr = meta.length ? dim(` (${meta.join(", ")})`) : "";
-            const cwdStr = p.cwd ? dim(`  cwd: ${p.cwd}`) : "";
-            const summary = p.summary ? dim(`  ${p.summary}`) : "";
-            console.log(`  ${statusIcon} ${name}${groups}${metaStr}${summary}`);
-            if (cwdStr) console.log(`    ${cwdStr}`);
-          }
+          render.info(dim("  (no peers connected)"));
+          return;
         }
-        console.log("");
+
+        for (const p of peers) {
+          const groups = p.groups.length
+            ? " [" +
+              p.groups
+                .map((g: { name: string; role?: string }) => `@${g.name}${g.role ? `:${g.role}` : ""}`)
+                .join(", ") +
+              "]"
+            : "";
+          const statusDot = p.status === "working" ? yellow("●") : green("●");
+          const name = bold(p.displayName);
+          const meta: string[] = [];
+          if (p.peerType) meta.push(p.peerType);
+          if (p.channel) meta.push(p.channel);
+          if (p.model) meta.push(p.model);
+          const metaStr = meta.length ? dim(` (${meta.join(", ")})`) : "";
+          const summary = p.summary ? dim(`  — ${p.summary}`) : "";
+          render.info(`${statusDot} ${name}${groups}${metaStr}${summary}`);
+          if (p.cwd) render.info(dim(`   cwd: ${p.cwd}`));
+        }
       });
     } catch (e) {
-      console.error(dim(`  Could not connect to ${slug}: ${e instanceof Error ? e.message : String(e)}`));
-      console.log("");
+      render.err(`${slug}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
   if (flags.json) {
-    console.log(JSON.stringify(slugs.length === 1 ? allJson[0]?.peers : allJson, null, 2));
+    process.stdout.write(JSON.stringify(slugs.length === 1 ? allJson[0]?.peers : allJson, null, 2) + "\n");
   }
 }
