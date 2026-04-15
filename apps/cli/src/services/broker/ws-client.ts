@@ -1670,11 +1670,17 @@ export class BrokerClient {
             plaintext = `[${event}]`;
           }
         } else if (senderPubkey && nonce && ciphertext) {
-          plaintext = await decryptDirect(
-            { nonce, ciphertext },
-            senderPubkey,
-            this.sessionSecretKey ?? this.mesh.secretKey,
-          );
+          // Try the session secret first (per-connection ephemeral key), then
+          // fall back to the mesh member secret (stable identity). Senders
+          // may encrypt to either our session pubkey OR our member pubkey
+          // depending on how the target was resolved; we must match both.
+          const envelope = { nonce, ciphertext };
+          if (this.sessionSecretKey) {
+            plaintext = await decryptDirect(envelope, senderPubkey, this.sessionSecretKey);
+          }
+          if (plaintext === null) {
+            plaintext = await decryptDirect(envelope, senderPubkey, this.mesh.secretKey);
+          }
         }
         // Legacy/broadcast path: no senderPubkey means the message
         // was not crypto_box'd, so base64 UTF-8 unwrap is correct.
