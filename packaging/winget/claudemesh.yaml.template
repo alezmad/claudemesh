@@ -1,0 +1,31 @@
+# winget manifest template for claudemesh.
+# Submit via PR to microsoft/winget-pkgs after each non-prerelease cli-v* tag.
+# The release-cli workflow can automate this with a wingetcreate step.
+
+PackageIdentifier: Claudemesh.Claudemesh
+PackageVersion: 1.0.0
+PackageName: Claudemesh
+Publisher: Alejandro Gutierrez
+License: MIT
+LicenseUrl: https://github.com/alezmad/claudemesh/blob/main/LICENSE
+ShortDescription: Peer mesh for Claude Code sessions
+Description: |-
+  Claudemesh connects multiple Claude Code sessions into a peer mesh.
+  End-to-end encrypted, keys stay on your machine. Invite, share state,
+  verify safety numbers, back up encrypted configs.
+Moniker: claudemesh
+Tags:
+  - claude
+  - cli
+  - mesh
+  - ai
+  - developer-tools
+Installers:
+  - Architecture: x64
+    InstallerType: portable
+    InstallerUrl: https://github.com/alezmad/claudemesh/releases/download/cli-v{{version}}/claudemesh-windows-x64.exe
+    InstallerSha256: REPLACED_BY_CI
+    Commands:
+      - claudemesh
+ManifestType: singleton
+ManifestVersion: 1.6.0

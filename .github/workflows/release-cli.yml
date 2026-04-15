@@ -1,0 +1,112 @@
+name: Release CLI binaries
+
+# Fires on any push of a tag shaped like `cli-v1.2.3` (prerelease `-alpha.N` OK).
+# Builds self-contained `bun build --compile` binaries for darwin/linux/win
+# (x64 + arm64) and attaches them to a GitHub Release. The `install.sh`
+# fallback path curls these when Node isn't available.
+#
+# Publishing to npm is still a manual step (pnpm publish from apps/cli-v2) —
+# this workflow only handles binary distribution.
+
+on:
+  push:
+    tags:
+      - "cli-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build (e.g. cli-v1.0.0-alpha.28)"
+        required: true
+
+permissions:
+  contents: write # to upload release assets
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-x64,   bun_target: bun-darwin-x64,   runner: macos-latest,   ext: "" }
+          - { target: darwin-arm64, bun_target: bun-darwin-arm64, runner: macos-latest,   ext: "" }
+          - { target: linux-x64,    bun_target: bun-linux-x64,    runner: ubuntu-latest,  ext: "" }
+          - { target: linux-arm64,  bun_target: bun-linux-arm64,  runner: ubuntu-latest,  ext: "" }
+          - { target: windows-x64,  bun_target: bun-windows-x64,  runner: windows-latest, ext: ".exe" }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install workspace deps
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Compile binary
+        working-directory: apps/cli-v2
+        shell: bash
+        run: |
+          mkdir -p dist/bin
+          bun build --compile --minify \
+            --target=${{ matrix.bun_target }} \
+            src/entrypoints/cli.ts \
+            --outfile dist/bin/claudemesh-${{ matrix.target }}${{ matrix.ext }}
+
+      - name: Smoke test (non-Windows)
+        if: matrix.target != 'windows-x64'
+        working-directory: apps/cli-v2
+        run: |
+          ./dist/bin/claudemesh-${{ matrix.target }} --version
+          ./dist/bin/claudemesh-${{ matrix.target }} --help | head -5
+
+      - name: Upload artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claudemesh-${{ matrix.target }}
+          path: apps/cli-v2/dist/bin/claudemesh-${{ matrix.target }}${{ matrix.ext }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Stage binaries
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          cd release && sha256sum claudemesh-* > SHA256SUMS
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            release/claudemesh-*
+            release/SHA256SUMS
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  update-homebrew:
+    needs: release
+    runs-on: macos-latest
+    if: github.event_name == 'push' && !contains(github.ref_name, 'alpha')
+    steps:
+      - name: Bump Homebrew tap formula
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          brew tap alezmad/claudemesh || true
+          brew bump-formula-pr --no-browse --no-fork \
+            --tag "${{ github.ref_name }}" \
+            --revision "${{ github.sha }}" \
+            alezmad/claudemesh/claudemesh || echo "formula bump skipped (no tap yet)"
