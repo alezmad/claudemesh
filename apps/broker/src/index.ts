@@ -4448,10 +4448,16 @@ async function recoverScheduledMessages(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  // Run pending migrations before the first connection is accepted.
-  // Exits non-zero on failure so Coolify sees a broken container.
-  const { runMigrationsOnStartup } = await import("./migrate");
-  await runMigrationsOnStartup();
+  // Auto-migrate: skip when BROKER_SKIP_MIGRATE=1 (e.g. when the prod
+  // DB was already manually migrated and the drizzle tracking table is
+  // out of sync). Once drizzle's __drizzle_migrations is caught up,
+  // remove the flag.
+  if (process.env.BROKER_SKIP_MIGRATE !== "1") {
+    const { runMigrationsOnStartup } = await import("./migrate");
+    await runMigrationsOnStartup();
+  } else {
+    console.log("[migrate] skipped (BROKER_SKIP_MIGRATE=1)");
+  }
 
   const wss = new WebSocketServer({
     noServer: true,
