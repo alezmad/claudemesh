@@ -120,6 +120,7 @@ interface PeerConn {
   meshId: string;
   memberId: string;
   memberPubkey: string;
+  sessionId: string;
   sessionPubkey: string | null;
   displayName: string;
   cwd: string;
@@ -1691,6 +1692,19 @@ async function handleHello(
   const initialGroups = helloHasGroups
     ? hello.groups!
     : (saved?.groups?.length ? saved.groups : (member.defaultGroups ?? []));
+  // Session-id dedup: if this session_id already has an active presence,
+  // disconnect the ghost. Happens when a client reconnects after a
+  // network blip or broker restart before the 90s stale sweeper runs.
+  // One Claude Code instance = one session_id = one presence, always.
+  for (const [oldPid, oldConn] of connections) {
+    if (oldConn.meshId === hello.meshId && oldConn.sessionId === hello.sessionId) {
+      log.info("hello dedup", { old_presence: oldPid, session_id: hello.sessionId });
+      try { oldConn.ws.close(1000, "session_replaced"); } catch { /* already dead */ }
+      connections.delete(oldPid);
+      void disconnectPresence(oldPid);
+    }
+  }
+
   const presenceId = await connectPresence({
     memberId: member.id,
     sessionId: hello.sessionId,
@@ -1706,6 +1720,7 @@ async function handleHello(
     meshId: hello.meshId,
     memberId: member.id,
     memberPubkey: hello.pubkey,
+    sessionId: hello.sessionId,
     sessionPubkey: hello.sessionPubkey ?? null,
     displayName: effectiveDisplayName,
     cwd: hello.cwd,
