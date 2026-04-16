@@ -49,15 +49,12 @@ export async function runMigrationsOnStartup(): Promise<void> {
   const sql = postgres(url, {
     max: 1,
     onnotice: () => { /* quiet */ },
-    // Statement-level safety net in case a long ALTER holds row locks.
-    // 5 min per statement is plenty for schema DDL.
-    statement_timeout: 5 * 60 * 1000,
   });
 
   try {
-    // Set a lock_timeout for this session — PG will refuse to block more
-    // than N ms on any lock acquisition (we only hold one at a time).
-    await sql`SET lock_timeout = ${LOCK_ACQUIRE_TIMEOUT_MS}`;
+    // SET doesn't accept parameterized values ($1) — use unsafe() for
+    // the literal. The value is a hardcoded constant, not user input.
+    await sql.unsafe(`SET lock_timeout = '${LOCK_ACQUIRE_TIMEOUT_MS}ms'`);
 
     // Try to grab the advisory lock; poll if someone else holds it.
     const deadline = Date.now() + LOCK_ACQUIRE_TIMEOUT_MS;
