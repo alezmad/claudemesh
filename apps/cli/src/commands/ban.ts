@@ -19,12 +19,12 @@ export async function runBan(
   if (!meshSlug) { render.err("No mesh joined."); return EXIT.NOT_FOUND; }
 
   return await withMesh({ meshSlug }, async (client) => {
-    const result = await client.sendAndWait({ type: "ban", target }) as { banned?: string; error?: string };
+    const result = await client.sendAndWait({ type: "ban", target }) as { banned?: string; error?: string; message?: string; code?: string };
     if (result?.banned) {
       render.ok(`Banned ${result.banned} from ${meshSlug}. They cannot reconnect until unbanned.`);
       render.hint(`Undo: claudemesh unban ${result.banned} --mesh ${meshSlug}`);
     } else {
-      render.err(result?.error ?? "ban failed");
+      render.err(result?.message ?? result?.error ?? result?.code ?? "ban failed");
     }
     return result?.banned ? EXIT.SUCCESS : EXIT.INTERNAL_ERROR;
   });
@@ -40,11 +40,11 @@ export async function runUnban(
   if (!meshSlug) { render.err("No mesh joined."); return EXIT.NOT_FOUND; }
 
   return await withMesh({ meshSlug }, async (client) => {
-    const result = await client.sendAndWait({ type: "unban", target }) as { unbanned?: string; error?: string };
+    const result = await client.sendAndWait({ type: "unban", target }) as { unbanned?: string; error?: string; message?: string; code?: string };
     if (result?.unbanned) {
       render.ok(`Unbanned ${result.unbanned} from ${meshSlug}. They can rejoin.`);
     } else {
-      render.err(result?.error ?? "unban failed");
+      render.err(result?.message ?? result?.error ?? result?.code ?? "unban failed");
     }
     return result?.unbanned ? EXIT.SUCCESS : EXIT.INTERNAL_ERROR;
   });
