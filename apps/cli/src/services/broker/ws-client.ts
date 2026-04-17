@@ -1408,6 +1408,28 @@ export class BrokerClient {
     this.ws.send(JSON.stringify(payload));
   }
 
+  /**
+   * Public request-response: sends a raw message with a generated _reqId
+   * and resolves when the broker responds with any message containing the
+   * same _reqId. Used by kick/ban/unban/bans CLI commands.
+   */
+  async sendAndWait<T = Record<string, unknown>>(payload: Record<string, unknown>, timeoutMs = 10_000): Promise<T> {
+    const reqId = `rw-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.genericResolvers.delete(reqId);
+        reject(new Error("sendAndWait timeout"));
+      }, timeoutMs);
+      this.genericResolvers.set(reqId, (msg) => {
+        clearTimeout(timer);
+        this.genericResolvers.delete(reqId);
+        resolve(msg as T);
+      });
+      this.sendRaw({ ...payload, _reqId: reqId });
+    });
+  }
+  private genericResolvers = new Map<string, (msg: Record<string, unknown>) => void>();
+
   close(): void {
     this.closed = true;
     this.stopStatsReporting();
@@ -1626,6 +1648,13 @@ export class BrokerClient {
 
   private handleServerMessage(msg: Record<string, unknown>): void {
     const msgReqId = msg._reqId as string | undefined;
+
+    // Generic request-response resolver (kick_ack, ban_ack, unban_ack, etc.)
+    if (msgReqId && this.genericResolvers.has(msgReqId)) {
+      const resolve = this.genericResolvers.get(msgReqId)!;
+      resolve(msg);
+      return;
+    }
 
     if (msg.type === "ack") {
       const pending = this.pendingSends.get(String(msg.id ?? ""));
