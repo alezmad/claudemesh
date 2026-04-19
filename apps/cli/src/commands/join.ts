@@ -111,6 +111,24 @@ export async function runJoin(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  // Short-circuit: if the arg matches a mesh already in local config (slug
+  // or name), we're already joined. Don't go through the invite flow.
+  if (!link.includes("://")) {
+    const existing = readConfig().meshes.find(
+      (m) => m.slug === link || m.name === link,
+    );
+    if (existing) {
+      console.log(`Already in "${existing.slug}" on this machine.`);
+      console.log("");
+      console.log(`Use it in the current directory:`);
+      console.log(`  claudemesh launch --mesh ${existing.slug}`);
+      console.log("");
+      console.log(`Or list peers:`);
+      console.log(`  claudemesh peers --mesh ${existing.slug}`);
+      return;
+    }
+  }
+
   // Try v2 first — short code / `/i/<code>` URL.
   const v2Code = parseV2InviteInput(link);
   if (v2Code) {
