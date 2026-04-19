@@ -69,7 +69,7 @@ export async function withMesh<T>(
   }
 
   const displayName = opts.displayName ?? config.displayName ?? `${hostname()}-${process.pid}`;
-  const client = new BrokerClient(mesh, { displayName });
+  const client = new BrokerClient(mesh, { displayName, quiet: true });
 
   try {
     await client.connect();

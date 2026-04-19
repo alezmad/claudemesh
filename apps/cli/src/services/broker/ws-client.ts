@@ -186,6 +186,8 @@ export class BrokerClient {
       onStatusChange?: (status: ConnStatus) => void;
       displayName?: string;
       debug?: boolean;
+      /** Suppress informational stderr logs like "session restored". Default false. */
+      quiet?: boolean;
     } = {},
   ) {}
 
@@ -297,9 +299,11 @@ export class BrokerClient {
             const groups = msg.restoredGroups
               ? (msg.restoredGroups as Array<{ name: string; role?: string }>).map((g) => g.role ? `@${g.name}:${g.role}` : `@${g.name}`).join(", ")
               : "none";
-            process.stderr.write(
-              `[claudemesh] session restored — last seen ${msg.lastSeenAt ?? "unknown"}, groups: ${groups}\n`,
-            );
+            if (!this.opts.quiet) {
+              process.stderr.write(
+                `[claudemesh] session restored — last seen ${msg.lastSeenAt ?? "unknown"}, groups: ${groups}\n`,
+              );
+            }
             if (msg.restoredStats) {
               const rs = msg.restoredStats as { messagesIn: number; messagesOut: number; toolCalls: number; errors: number };
               this._statsCounters.messagesIn = rs.messagesIn ?? 0;
