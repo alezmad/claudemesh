@@ -61,7 +61,8 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
           if (p.model) meta.push(p.model);
           const metaStr = meta.length ? dim(` (${meta.join(", ")})`) : "";
           const summary = p.summary ? dim(`  — ${p.summary}`) : "";
-          render.info(`${statusDot} ${name}${groups}${metaStr}${summary}`);
+          const pubkeyTag = dim(` · ${p.pubkey.slice(0, 16)}…`);
+          render.info(`${statusDot} ${name}${groups}${metaStr}${pubkeyTag}${summary}`);
           if (p.cwd) render.info(dim(`   cwd: ${p.cwd}`));
         }
       });

@@ -82,8 +82,8 @@ async function resolveClient(to: string): Promise<{
       target = rest;
     }
   }
-  // Pubkey, channel, @group, or broadcast — pass through directly.
-  if (/^[0-9a-f]{64}$/.test(target) || target.startsWith("#") || target.startsWith("@") || target === "*") {
+  // Channel, @group, or broadcast — pass through directly.
+  if (target.startsWith("#") || target.startsWith("@") || target === "*") {
     if (targetClients.length === 1) {
       return { client: targetClients[0]!, targetSpec: target };
     }
@@ -93,27 +93,113 @@ async function resolveClient(to: string): Promise<{
       error: `multiple meshes joined; prefix target with "<mesh-slug>:" (joined: ${clients.map((c) => c.meshSlug).join(", ")})`,
     };
   }
-  // Name-based resolution: query each mesh's peer list for a matching displayName.
+
+  // Hex pubkey or hex prefix — resolve by prefix match across joined meshes.
+  // Accepts anything from 8 hex chars up to the full 64-char key. A full key
+  // also has to match an online peer to be worth routing; we verify by prefix
+  // against each mesh's current peer list.
+  if (/^[0-9a-f]{8,64}$/.test(target)) {
+    const hits: Array<{ mesh: BrokerClient; pubkey: string; displayName: string }> = [];
+    for (const c of targetClients) {
+      const peers = await c.listPeers();
+      for (const p of peers) {
+        if (p.pubkey.startsWith(target)) {
+          hits.push({ mesh: c, pubkey: p.pubkey, displayName: p.displayName });
+        }
+      }
+    }
+    if (hits.length === 1) {
+      return { client: hits[0]!.mesh, targetSpec: hits[0]!.pubkey };
+    }
+    if (hits.length > 1) {
+      const lines = hits
+        .map((h) => `  - ${h.displayName} @ ${h.mesh.meshSlug} · pubkey ${h.pubkey.slice(0, 20)}…`)
+        .join("\n");
+      return {
+        client: null,
+        targetSpec: target,
+        error: `ambiguous pubkey prefix "${target}" matches ${hits.length} peers:\n${lines}\nUse a longer prefix.`,
+      };
+    }
+    // Full 64-char with no live match: still allow send — broker will queue it
+    // for when that peer comes online. Honors the existing queue-for-offline
+    // behaviour without breaking prefix semantics.
+    if (target.length === 64) {
+      if (targetClients.length === 1) {
+        return { client: targetClients[0]!, targetSpec: target };
+      }
+      return {
+        client: null,
+        targetSpec: target,
+        error: `multiple meshes joined; prefix target with "<mesh-slug>:" (joined: ${clients.map((c) => c.meshSlug).join(", ")})`,
+      };
+    }
+    // Short prefix, no match, and not interpretable as a name — surface it.
+    return {
+      client: null,
+      targetSpec: target,
+      error: `no online peer's pubkey starts with "${target}".`,
+    };
+  }
+
+  // Name-based resolution. Exclude the caller's OWN session pubkey so
+  // "send to <my-own-display-name>" routes to the OTHER same-named sessions
+  // (e.g. the same user's laptop on a different repo) instead of bouncing
+  // on the broker's self-send check.
   const nameLower = target.toLowerCase();
-  const candidates: Array<{ mesh: string; peers: Array<{ displayName: string; pubkey: string }> }> = [];
+  const candidates: Array<{ mesh: string; peers: Array<{ displayName: string; pubkey: string; cwd?: string }> }> = [];
+  const exactMatches: Array<{ mesh: BrokerClient; pubkey: string; displayName: string; cwd?: string }> = [];
+  const partialMatches: Array<{ mesh: BrokerClient; pubkey: string; displayName: string; cwd?: string }> = [];
+
   for (const c of targetClients) {
+    const ownSession = c.getSessionPubkey();
     const peers = await c.listPeers();
     candidates.push({ mesh: c.meshSlug, peers });
-    const match = peers.find((p) => p.displayName.toLowerCase() === nameLower);
-    if (match) return { client: c, targetSpec: match.pubkey };
-    // Partial match: if only one peer's name contains the search string.
-    const partials = peers.filter((p) =>
-      p.displayName.toLowerCase().includes(nameLower),
-    );
-    if (partials.length === 1) {
-      process.stderr.write(`[claudemesh] resolved "${target}" → "${partials[0]!.displayName}" (partial match)\n`);
-      return { client: c, targetSpec: partials[0]!.pubkey };
+    for (const p of peers) {
+      if (ownSession && p.pubkey === ownSession) continue; // skip caller's own session
+      const nameLow = p.displayName.toLowerCase();
+      if (nameLow === nameLower) {
+        exactMatches.push({ mesh: c, pubkey: p.pubkey, displayName: p.displayName, cwd: p.cwd });
+      } else if (nameLow.includes(nameLower)) {
+        partialMatches.push({ mesh: c, pubkey: p.pubkey, displayName: p.displayName, cwd: p.cwd });
+      }
     }
   }
+
+  if (exactMatches.length === 1) {
+    return { client: exactMatches[0]!.mesh, targetSpec: exactMatches[0]!.pubkey };
+  }
+  if (exactMatches.length > 1) {
+    const lines = exactMatches
+      .map((m) => `  - ${m.displayName} · pubkey ${m.pubkey.slice(0, 16)}…${m.cwd ? ` · cwd ${m.cwd}` : ""}`)
+      .join("\n");
+    return {
+      client: null,
+      targetSpec: target,
+      error:
+        `"${target}" is ambiguous — ${exactMatches.length} peers share that display name:\n${lines}\n` +
+        `Disambiguate by pubkey prefix (e.g. send to "${exactMatches[0]!.pubkey.slice(0, 12)}…").`,
+    };
+  }
+
+  if (partialMatches.length === 1) {
+    process.stderr.write(
+      `[claudemesh] resolved "${target}" → "${partialMatches[0]!.displayName}" (partial match)\n`,
+    );
+    return { client: partialMatches[0]!.mesh, targetSpec: partialMatches[0]!.pubkey };
+  }
+  if (partialMatches.length > 1) {
+    const lines = partialMatches
+      .map((m) => `  - ${m.displayName} · pubkey ${m.pubkey.slice(0, 16)}…`)
+      .join("\n");
+    return {
+      client: null,
+      targetSpec: target,
+      error: `"${target}" partially matches ${partialMatches.length} peers:\n${lines}\nBe more specific, or use a pubkey prefix.`,
+    };
+  }
+
   // No match — refuse to send rather than silently queue a message for nobody.
-  // (Prior behaviour fell through to "let the broker try" which would queue a
-  // message with targetSpec=<unknown name>, never match any peer, and return
-  // a messageId that looked successful to the caller. Surface the error.)
   const known = candidates.flatMap((c) => c.peers.map((p) => `${c.mesh}/${p.displayName}`));
   return {
     client: null,
@@ -520,7 +606,10 @@ Your message mode is "${messageMode}".
               const hiddenTag = p.visible === false ? " [hidden]" : "";
               const sameKeyCount = pubkeyCounts.get(p.pubkey) ?? 1;
               const sameKeyTag = sameKeyCount > 1 ? ` [shares key with ${sameKeyCount - 1} other session(s)]` : "";
-              return `- ${profileAvatar}**${p.displayName}**${profileTitle} [${p.status}]${localityTag}${hiddenTag}${sameKeyTag}${groupsStr}${metaStr} (${p.pubkey.slice(0, 12)}…)${cwdStr}${summary}`;
+              // pubkey prefix must be long enough for unambiguous routing via
+              // send_message — 16 hex chars = 64 bits of entropy, effectively
+              // unique within any mesh of realistic size.
+              return `- ${profileAvatar}**${p.displayName}**${profileTitle} [${p.status}]${localityTag}${hiddenTag}${sameKeyTag}${groupsStr}${metaStr} (pubkey: ${p.pubkey.slice(0, 16)}…)${cwdStr}${summary}`;
             });
             sections.push(`${header}\n${peerLines.join("\n")}`);
           }
