@@ -164,6 +164,38 @@ export const archiveMyMesh = async ({
   return updated;
 };
 
+/**
+ * Decline an incoming pending invite addressed to this user's email.
+ * Marks the pending_invite row as revoked so it no longer surfaces
+ * in /invites/incoming. The underlying short-code invite is NOT revoked
+ * (inviter may re-send), only this user's copy is dismissed.
+ */
+export const declineIncomingInvite = async ({
+  email,
+  pendingInviteId,
+}: {
+  email: string;
+  pendingInviteId: string;
+}) => {
+  const [updated] = await db
+    .update(pendingInvite)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(pendingInvite.id, pendingInviteId),
+        eq(pendingInvite.email, email),
+        isNull(pendingInvite.acceptedAt),
+        isNull(pendingInvite.revokedAt),
+      ),
+    )
+    .returning({ id: pendingInvite.id });
+
+  if (!updated) {
+    throw new Error("Invitation not found or already resolved.");
+  }
+  return updated;
+};
+
 export const leaveMyMesh = async ({
   userId,
   meshId,

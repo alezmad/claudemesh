@@ -18,7 +18,7 @@ const menu = [
       {
         title: "dashboard",
         href: pathsConfig.dashboard.user.index,
-        icon: Icons.Home,
+        icon: Icons.Atom,
       },
       {
         title: "meshes",

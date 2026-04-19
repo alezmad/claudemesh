@@ -90,6 +90,7 @@ const pathsConfig = {
   dashboard: {
     user: {
       index: DASHBOARD_PREFIX,
+      legacy: `${DASHBOARD_PREFIX}/legacy`,
       ai: `${DASHBOARD_PREFIX}/ai`,
       vocabulary: `${DASHBOARD_PREFIX}/vocabulary`,
       meshes: {

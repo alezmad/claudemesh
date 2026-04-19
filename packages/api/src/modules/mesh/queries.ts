@@ -5,6 +5,7 @@ import {
   desc,
   eq,
   getOrderByFromSort,
+  gt,
   ilike,
   isNull,
   or,
@@ -16,7 +17,9 @@ import {
   mesh,
   meshMember,
   messageQueue,
+  pendingInvite,
   presence,
+  user,
 } from "@turbostarter/db/schema";
 import { db } from "@turbostarter/db/server";
 
@@ -343,6 +346,48 @@ export const getMyExport = async ({ userId }: { userId: string }) => {
     invitesSent,
     auditEvents,
   };
+};
+
+/**
+ * Pending invitations addressed to this user's email. A pending_invite row is
+ * created when someone calls `claudemesh share <email>`; we join it against the
+ * underlying `invite` row to get role + expiry, and against `user` (inviter)
+ * and `mesh` (target) for display. Returned only when unaccepted, unrevoked,
+ * and not expired.
+ */
+export const getMyInvitesIncoming = async ({ email }: { email: string }) => {
+  const now = new Date();
+  return db
+    .select({
+      id: pendingInvite.id,
+      meshId: pendingInvite.meshId,
+      meshName: mesh.name,
+      meshSlug: mesh.slug,
+      code: pendingInvite.code,
+      role: invite.role,
+      expiresAt: invite.expiresAt,
+      sentAt: pendingInvite.sentAt,
+      inviterName: user.name,
+      inviterEmail: user.email,
+      memberCount: sql<number>`(
+        SELECT COUNT(*)::int FROM mesh.member
+        WHERE mesh_id = ${pendingInvite.meshId} AND revoked_at IS NULL
+      )`,
+    })
+    .from(pendingInvite)
+    .leftJoin(mesh, eq(pendingInvite.meshId, mesh.id))
+    .leftJoin(invite, eq(pendingInvite.code, invite.code))
+    .leftJoin(user, eq(pendingInvite.createdBy, user.id))
+    .where(
+      and(
+        eq(pendingInvite.email, email),
+        isNull(pendingInvite.acceptedAt),
+        isNull(pendingInvite.revokedAt),
+        or(isNull(invite.expiresAt), gt(invite.expiresAt, now)),
+      ),
+    )
+    .orderBy(desc(pendingInvite.sentAt))
+    .limit(50);
 };
 
 export const getMyInvitesSent = async ({ userId }: { userId: string }) =>

@@ -15,10 +15,12 @@ import {
   createEmailInvite,
   createMyInvite,
   createMyMesh,
+  declineIncomingInvite,
   leaveMyMesh,
 } from "./mutations";
 import {
   getMyExport,
+  getMyInvitesIncoming,
   getMyInvitesSent,
   getMyMeshById,
   getMyMeshStream,
@@ -149,6 +151,29 @@ export const myRouter = new Hono<Env>()
   .get("/invites", async (c) => {
     const user = c.var.user;
     return c.json({ sent: await getMyInvitesSent({ userId: user.id }) });
+  })
+  .get("/invites/incoming", async (c) => {
+    const user = c.var.user;
+    if (!user.email) return c.json({ incoming: [] });
+    return c.json({
+      incoming: await getMyInvitesIncoming({ email: user.email }),
+    });
+  })
+  .delete("/invites/incoming/:id", async (c) => {
+    const user = c.var.user;
+    if (!user.email) return c.json({ error: "No email on session" }, 400);
+    try {
+      await declineIncomingInvite({
+        email: user.email,
+        pendingInviteId: c.req.param("id"),
+      });
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json(
+        { error: e instanceof Error ? e.message : "Failed to decline." },
+        400,
+      );
+    }
   })
   .get("/export", async (c) => {
     const user = c.var.user;

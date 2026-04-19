@@ -296,3 +296,24 @@ export const getMyInvitesResponseSchema = z.object({
   ),
 });
 export type GetMyInvitesResponse = z.infer<typeof getMyInvitesResponseSchema>;
+
+export const getMyInvitesIncomingResponseSchema = z.object({
+  incoming: z.array(
+    z.object({
+      id: z.string(),
+      meshId: z.string(),
+      meshName: z.string().nullable(),
+      meshSlug: z.string().nullable(),
+      code: z.string(),
+      role: meshRoleEnum.nullable(),
+      expiresAt: z.coerce.date().nullable(),
+      sentAt: z.coerce.date(),
+      inviterName: z.string().nullable(),
+      inviterEmail: z.string().nullable(),
+      memberCount: z.number(),
+    }),
+  ),
+});
+export type GetMyInvitesIncomingResponse = z.infer<
+  typeof getMyInvitesIncomingResponseSchema
+>;

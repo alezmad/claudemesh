@@ -1,0 +1,1001 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Your universe · claudemesh</title>
+
+  <!-- Self-hosted Anthropic fonts pulled from apps/web/public/fonts -->
+  <style>
+    @font-face {
+      font-family: "Anthropic Sans";
+      src: url("../apps/web/public/fonts/AnthropicSans-Roman.woff2") format("woff2");
+      font-weight: 300 800; font-style: normal; font-display: swap;
+    }
+    @font-face {
+      font-family: "Anthropic Sans";
+      src: url("../apps/web/public/fonts/AnthropicSans-Italic.woff2") format("woff2");
+      font-weight: 300 800; font-style: italic; font-display: swap;
+    }
+    @font-face {
+      font-family: "Anthropic Serif";
+      src: url("../apps/web/public/fonts/AnthropicSerif-Roman.woff2") format("woff2");
+      font-weight: 300 800; font-style: normal; font-display: swap;
+    }
+    @font-face {
+      font-family: "Anthropic Serif";
+      src: url("../apps/web/public/fonts/AnthropicSerif-Italic.woff2") format("woff2");
+      font-weight: 300 800; font-style: italic; font-display: swap;
+    }
+    @font-face {
+      font-family: "Anthropic Mono";
+      src: url("../apps/web/public/fonts/AnthropicMono-Roman.woff2") format("woff2");
+      font-weight: 300 800; font-style: normal; font-display: swap;
+    }
+
+    /* ============================================================
+       Tokens — lifted verbatim from apps/web/src/assets/styles/globals.css
+       ============================================================ */
+    :root {
+      --cm-clay:        #d97757;
+      --cm-clay-hover:  #c96442;
+      --cm-fig:         #c46686;
+      --cm-oat:         #e3dacc;
+      --cm-cactus:      #bcd1ca;
+
+      --cm-gray-000:    #ffffff;
+      --cm-gray-050:    #faf9f5;
+      --cm-gray-150:    #f0eee6;
+      --cm-gray-350:    #c2c0b6;
+      --cm-gray-450:    #9c9a92;
+      --cm-gray-800:    #262624;
+      --cm-gray-850:    #1f1e1d;
+      --cm-gray-900:    #141413;
+
+      --cm-bg:          var(--cm-gray-900);
+      --cm-bg-elevated: var(--cm-gray-850);
+      --cm-bg-hover:    var(--cm-gray-800);
+      --cm-fg:          var(--cm-gray-050);
+      --cm-fg-secondary: #c2c0b6;
+      --cm-fg-tertiary:  #87867f;
+      --cm-border:       rgba(217, 119, 87, 0.2);
+      --cm-border-hover: rgba(217, 119, 87, 0.5);
+      --cm-border-soft:  rgba(217, 119, 87, 0.1);
+
+      --cm-font-sans:  "Anthropic Sans", -apple-system, system-ui, Arial, sans-serif;
+      --cm-font-serif: "Anthropic Serif", Georgia, serif;
+      --cm-font-mono:  "Anthropic Mono", ui-monospace, monospace;
+
+      --cm-radius-xs: 0.25rem;
+      --cm-radius-md: 0.5rem;
+      --cm-radius-lg: 1rem;
+
+      --cm-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+      --cm-dur:  300ms;
+      --cm-gutter: 2rem;
+      --cm-max-w: 84rem;
+
+      color-scheme: dark;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      background: var(--cm-bg);
+      color: var(--cm-fg);
+      font-family: var(--cm-font-sans);
+      font-size: 15px;
+      line-height: 1.5;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    /* Faint radial clay backdrop, matching the marketing hero */
+    body::before {
+      content: "";
+      position: fixed; inset: 0; z-index: 0;
+      background:
+        radial-gradient(ellipse 70% 50% at 20% 0%, rgba(217, 119, 87, 0.08), transparent 70%),
+        radial-gradient(ellipse 60% 40% at 85% 20%, rgba(188, 209, 202, 0.04), transparent 70%);
+      pointer-events: none;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    button { font-family: inherit; cursor: pointer; border: 0; background: transparent; color: inherit; }
+
+    .shell {
+      position: relative;
+      z-index: 2;
+      max-width: var(--cm-max-w);
+      margin: 0 auto;
+      padding: 20px 40px 80px;
+    }
+
+    /* ────────────────────────────────────────────────
+       Reveal on load — matches --animate-fade-up
+       ──────────────────────────────────────────────── */
+    @keyframes fade-up {
+      0%   { opacity: 0; translate: 0 16px; filter: blur(4px); }
+      100% { opacity: 1; translate: 0 0;    filter: blur(0);   }
+    }
+    .reveal { animation: fade-up 0.9s var(--cm-ease) forwards; opacity: 0; }
+    .reveal[data-d="1"] { animation-delay: 0.05s; }
+    .reveal[data-d="2"] { animation-delay: 0.18s; }
+    .reveal[data-d="3"] { animation-delay: 0.32s; }
+    .reveal[data-d="4"] { animation-delay: 0.48s; }
+    .reveal[data-d="5"] { animation-delay: 0.66s; }
+
+    /* ────────────────────────────────────────────────
+       Top nav — slim, mirrors marketing site
+       ──────────────────────────────────────────────── */
+    .topnav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 8px 28px;
+      border-bottom: 1px solid var(--cm-border-soft);
+      margin-bottom: 48px;
+    }
+    .topnav .brand {
+      display: inline-flex; align-items: baseline; gap: 12px;
+      font-family: var(--cm-font-serif);
+      font-size: 22px;
+      letter-spacing: -0.01em;
+    }
+    .brand .dot-mark {
+      display: inline-block;
+      width: 10px; height: 10px;
+      border-radius: 3px;
+      background: var(--cm-clay);
+    }
+    .brand em { color: var(--cm-clay); font-style: italic; }
+    .topnav .crumbs {
+      font-family: var(--cm-font-sans);
+      font-size: 13px;
+      color: var(--cm-fg-tertiary);
+    }
+    .topnav .crumbs span + span::before {
+      content: "/"; margin: 0 10px; color: var(--cm-fg-tertiary);
+    }
+    .topnav .user {
+      display: inline-flex; align-items: center; gap: 10px;
+      font-size: 13px;
+      color: var(--cm-fg-secondary);
+    }
+    .user .avatar {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--cm-clay), var(--cm-fig));
+      display: inline-flex; align-items: center; justify-content: center;
+      font-family: var(--cm-font-serif);
+      font-size: 12px;
+      color: var(--cm-gray-050);
+      font-weight: 500;
+    }
+
+    /* ────────────────────────────────────────────────
+       Welcome header — editorial serif
+       ──────────────────────────────────────────────── */
+    .welcome {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 48px;
+      align-items: end;
+      margin-bottom: 64px;
+    }
+    .welcome h1 {
+      font-family: var(--cm-font-serif);
+      font-size: clamp(2.5rem, 1.8rem + 3vw, 4.25rem);
+      font-weight: 400;
+      line-height: 1.02;
+      letter-spacing: -0.02em;
+      color: var(--cm-fg);
+    }
+    .welcome h1 .accent { color: var(--cm-clay); font-style: italic; }
+    .welcome h1 .dim { color: var(--cm-fg-tertiary); font-style: italic; }
+    .welcome .lede {
+      margin-top: 20px;
+      font-family: var(--cm-font-serif);
+      font-size: 19px;
+      line-height: 1.6;
+      color: var(--cm-fg-secondary);
+      max-width: 620px;
+    }
+
+    .right-readout {
+      font-family: var(--cm-font-mono);
+      font-size: 12px;
+      color: var(--cm-fg-tertiary);
+      text-align: right;
+    }
+    .right-readout .n {
+      font-family: var(--cm-font-serif);
+      font-size: 42px;
+      line-height: 1;
+      color: var(--cm-fg);
+      display: block;
+      margin-bottom: 4px;
+      font-variant-numeric: tabular-nums;
+    }
+    .right-readout .n em { color: var(--cm-clay); font-style: italic; font-weight: 400; }
+    .right-readout .line {
+      display: block;
+      margin-top: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+    .right-readout .live-dot {
+      display: inline-block;
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--cm-cactus);
+      margin-right: 8px;
+      box-shadow: 0 0 0 0 rgba(188, 209, 202, 0.6);
+      animation: ring 2s var(--cm-ease) infinite;
+      vertical-align: middle;
+    }
+    @keyframes ring {
+      0%   { box-shadow: 0 0 0 0   rgba(188, 209, 202, 0.6); }
+      70%  { box-shadow: 0 0 0 10px rgba(188, 209, 202, 0); }
+      100% { box-shadow: 0 0 0 0   rgba(188, 209, 202, 0); }
+    }
+
+    /* ────────────────────────────────────────────────
+       Section heads — serif + hairline rule
+       ──────────────────────────────────────────────── */
+    .section-head {
+      display: flex; align-items: baseline; justify-content: space-between;
+      margin-bottom: 24px;
+      gap: 24px;
+    }
+    .section-head h2 {
+      font-family: var(--cm-font-serif);
+      font-weight: 400;
+      font-size: 32px;
+      letter-spacing: -0.01em;
+      color: var(--cm-fg);
+    }
+    .section-head h2 em {
+      color: var(--cm-clay);
+      font-style: italic;
+    }
+    .section-head .meta {
+      font-family: var(--cm-font-mono);
+      font-size: 12px;
+      color: var(--cm-fg-tertiary);
+      letter-spacing: 0.06em;
+    }
+    .section-head .action {
+      font-family: var(--cm-font-sans);
+      font-size: 13px;
+      color: var(--cm-clay);
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 12px;
+      border: 1px solid var(--cm-border);
+      border-radius: var(--cm-radius-xs);
+      background: var(--cm-bg-elevated);
+      transition: border-color var(--cm-dur) var(--cm-ease), background var(--cm-dur) var(--cm-ease);
+    }
+    .section-head .action:hover {
+      border-color: var(--cm-border-hover);
+      background: var(--cm-bg-hover);
+    }
+    .section-head .action.primary {
+      background: var(--cm-clay);
+      color: var(--cm-gray-050);
+      border-color: transparent;
+    }
+    .section-head .action.primary:hover { background: var(--cm-clay-hover); }
+    .section-head .action .arrow {
+      transition: transform var(--cm-dur) var(--cm-ease);
+    }
+    .section-head .action:hover .arrow { transform: translateX(2px); }
+
+    section + section { margin-top: 64px; }
+
+    /* ────────────────────────────────────────────────
+       Invitations — top-priority cards
+       ──────────────────────────────────────────────── */
+    .invites {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 16px;
+    }
+    .invite {
+      position: relative;
+      padding: 24px 26px 22px;
+      border: 1px solid var(--cm-border);
+      border-radius: var(--cm-radius-md);
+      background:
+        linear-gradient(180deg, rgba(196, 102, 134, 0.04), transparent 60%),
+        var(--cm-bg-elevated);
+      overflow: hidden;
+      transition: border-color var(--cm-dur) var(--cm-ease);
+    }
+    .invite::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0;
+      width: 3px; height: 100%;
+      background: var(--cm-fig);
+    }
+    .invite:hover { border-color: var(--cm-border-hover); }
+    .invite .from-row {
+      font-family: var(--cm-font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--cm-fg-tertiary);
+      margin-bottom: 6px;
+    }
+    .invite .from-row .who {
+      color: var(--cm-fig);
+      text-transform: none;
+      font-family: var(--cm-font-sans);
+      letter-spacing: 0;
+      font-size: 13px;
+    }
+    .invite .headline {
+      font-family: var(--cm-font-serif);
+      font-size: 22px;
+      letter-spacing: -0.01em;
+      line-height: 1.15;
+      color: var(--cm-fg);
+      margin-bottom: 4px;
+    }
+    .invite .headline em { font-style: italic; color: var(--cm-clay); }
+    .invite .sub {
+      font-size: 13px;
+      color: var(--cm-fg-secondary);
+      margin-bottom: 16px;
+    }
+    .invite .actions { display: inline-flex; gap: 10px; align-items: center; }
+    .btn {
+      font-family: var(--cm-font-sans);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 8px 16px;
+      border-radius: var(--cm-radius-xs);
+      transition: background var(--cm-dur) var(--cm-ease), border-color var(--cm-dur) var(--cm-ease);
+      border: 1px solid transparent;
+    }
+    .btn-primary { background: var(--cm-clay); color: var(--cm-gray-050); }
+    .btn-primary:hover { background: var(--cm-clay-hover); }
+    .btn-ghost {
+      border-color: var(--cm-border);
+      background: transparent;
+      color: var(--cm-fg-secondary);
+    }
+    .btn-ghost:hover { border-color: var(--cm-border-hover); color: var(--cm-fg); }
+    .invite .expires {
+      margin-left: auto;
+      font-family: var(--cm-font-mono);
+      font-size: 11px;
+      color: var(--cm-fg-tertiary);
+      letter-spacing: 0.04em;
+    }
+    .invite .actions-row {
+      display: flex; align-items: center; gap: 10px;
+    }
+
+    /* ────────────────────────────────────────────────
+       Meshes — hero card + compact grid
+       ──────────────────────────────────────────────── */
+    .meshes-wrap {
+      display: grid;
+      grid-template-columns: 1.65fr 1fr;
+      gap: 16px;
+    }
+    .mesh-card {
+      position: relative;
+      padding: 24px 26px;
+      border: 1px solid var(--cm-border);
+      border-radius: var(--cm-radius-md);
+      background: var(--cm-bg-elevated);
+      transition: border-color var(--cm-dur) var(--cm-ease), background var(--cm-dur) var(--cm-ease);
+      cursor: pointer;
+      display: flex; flex-direction: column;
+    }
+    .mesh-card:hover { border-color: var(--cm-border-hover); background: var(--cm-bg-hover); }
+    .mesh-card.hero {
+      grid-column: 1; grid-row: span 2;
+      padding: 32px 36px;
+    }
+    .mesh-card.hero::after {
+      content: "";
+      position: absolute;
+      right: -40%; top: -40%;
+      width: 80%; height: 120%;
+      background: radial-gradient(ellipse, rgba(217, 119, 87, 0.10), transparent 60%);
+      pointer-events: none;
+    }
+    .mc-head {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+      margin-bottom: 14px;
+    }
+    .mc-name {
+      font-family: var(--cm-font-serif);
+      font-size: 28px;
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      color: var(--cm-fg);
+    }
+    .mesh-card.hero .mc-name { font-size: 42px; }
+    .mc-name em { color: var(--cm-clay); font-style: italic; }
+    .mc-slug {
+      font-family: var(--cm-font-mono);
+      font-size: 12px;
+      color: var(--cm-fg-tertiary);
+      margin-top: 4px;
+    }
+    .mc-role {
+      font-family: var(--cm-font-mono);
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border: 1px solid var(--cm-border);
+      border-radius: var(--cm-radius-xs);
+      color: var(--cm-fg-secondary);
+      white-space: nowrap;
+    }
+    .mc-role.owner { color: var(--cm-clay); border-color: rgba(217, 119, 87, 0.4); }
+    .mc-role.admin { color: var(--cm-cactus); border-color: rgba(188, 209, 202, 0.4); }
+
+    /* Peer strip — each connected peer as a soft dot; hover → name tooltip */
+    .peers-strip {
+      display: flex; align-items: center; gap: 6px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .peer-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 9px 4px 7px;
+      background: var(--cm-bg);
+      border: 1px solid var(--cm-border-soft);
+      border-radius: 99px;
+      font-size: 12px;
+      color: var(--cm-fg-secondary);
+      transition: border-color var(--cm-dur) var(--cm-ease);
+    }
+    .peer-chip:hover { border-color: var(--cm-border-hover); }
+    .peer-chip .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--cm-cactus);
+    }
+    .peer-chip.working .dot {
+      background: var(--cm-clay);
+      box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.5);
+      animation: ring 1.6s var(--cm-ease) infinite;
+    }
+    .peer-chip.dnd .dot { background: var(--cm-fig); }
+    .peer-chip.offline .dot { background: var(--cm-fg-tertiary); }
+    .peer-chip .name {
+      font-family: var(--cm-font-sans);
+      color: var(--cm-fg);
+    }
+    .peer-chip.offline .name { color: var(--cm-fg-tertiary); }
+    .peers-more {
+      font-family: var(--cm-font-mono);
+      font-size: 11px;
+      color: var(--cm-fg-tertiary);
+      padding-left: 4px;
+    }
+
+    /* Stats row, hero-only */
+    .hero-stats {
+      margin-top: auto;
+      padding-top: 20px;
+      border-top: 1px solid var(--cm-border-soft);
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 28px;
+    }
+    .hero-stats .stat .k {
+      font-family: var(--cm-font-mono);
+      font-size: 10.5px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--cm-fg-tertiary);
+      margin-bottom: 6px;
+    }
+    .hero-stats .stat .v {
+      font-family: var(--cm-font-serif);
+      font-size: 26px;
+      font-weight: 400;
+      color: var(--cm-fg);
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.01em;
+    }
+    .hero-stats .stat .v .unit {
+      font-family: var(--cm-font-mono);
+      font-size: 13px;
+      color: var(--cm-fg-tertiary);
+      margin-left: 4px;
+    }
+
+    /* Compact mesh card variant */
+    .mesh-card.compact {
+      min-height: 140px;
+      padding: 20px 22px;
+    }
+    .mesh-card.compact .mc-name { font-size: 22px; }
+    .mesh-card.compact .peers-strip { gap: 4px; }
+    .mesh-card.compact .mc-foot {
+      margin-top: auto;
+      padding-top: 12px;
+      border-top: 1px solid var(--cm-border-soft);
+      display: flex; justify-content: space-between;
+      font-family: var(--cm-font-mono);
+      font-size: 11px;
+      color: var(--cm-fg-tertiary);
+      letter-spacing: 0.04em;
+    }
+    .mc-foot .count-on {
+      color: var(--cm-cactus);
+    }
+    .mc-foot .count-off {
+      color: var(--cm-fg-tertiary);
+    }
+
+    .compact-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+
+    .bottom-row {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    /* ────────────────────────────────────────────────
+       Activity stream — compact, calm
+       ──────────────────────────────────────────────── */
+    .activity {
+      border: 1px solid var(--cm-border-soft);
+      border-radius: var(--cm-radius-md);
+      background: var(--cm-bg-elevated);
+      padding: 8px 4px;
+    }
+    .arow {
+      display: grid;
+      grid-template-columns: 96px 1fr 72px 88px 110px;
+      gap: 18px;
+      align-items: center;
+      padding: 11px 22px;
+      font-family: var(--cm-font-mono);
+      font-size: 12.5px;
+      border-bottom: 1px solid var(--cm-border-soft);
+      animation: fade-up 0.45s var(--cm-ease) forwards;
+      opacity: 0;
+    }
+    .arow:last-child { border-bottom: none; }
+    .arow .ts   { color: var(--cm-fg-tertiary); }
+    .arow .who {
+      font-family: var(--cm-font-sans);
+      color: var(--cm-fg);
+    }
+    .arow .who .from { color: var(--cm-clay); }
+    .arow .who .arr  { color: var(--cm-fg-tertiary); padding: 0 6px; }
+    .arow .who .mesh { color: var(--cm-fg-secondary); font-style: italic; font-family: var(--cm-font-serif); font-size: 14px; }
+    .arow .type {
+      font-size: 10px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 3px 8px;
+      border: 1px solid var(--cm-border);
+      border-radius: var(--cm-radius-xs);
+      color: var(--cm-fg-tertiary);
+      text-align: center;
+      justify-self: start;
+    }
+    .arow .type.bcast { color: var(--cm-clay); border-color: rgba(217, 119, 87, 0.35); }
+    .arow .type.group { color: var(--cm-cactus); border-color: rgba(188, 209, 202, 0.35); }
+    .arow .size  { color: var(--cm-fg-tertiary); text-align: right; font-variant-numeric: tabular-nums; }
+    .arow .hash  { color: var(--cm-fg-tertiary); text-align: right; opacity: 0.7; }
+
+    /* ────────────────────────────────────────────────
+       Footer strip
+       ──────────────────────────────────────────────── */
+    .foot {
+      margin-top: 72px;
+      padding-top: 20px;
+      border-top: 1px solid var(--cm-border-soft);
+      display: flex; justify-content: space-between; align-items: center;
+      font-family: var(--cm-font-mono);
+      font-size: 11px;
+      color: var(--cm-fg-tertiary);
+      letter-spacing: 0.04em;
+    }
+
+    /* ────────────────────────────────────────────────
+       Responsive
+       ──────────────────────────────────────────────── */
+    @media (max-width: 1100px) {
+      .meshes-wrap { grid-template-columns: 1fr; }
+      .mesh-card.hero { grid-column: auto; grid-row: auto; }
+      .bottom-row { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 640px) {
+      .shell { padding: 16px 20px 60px; }
+      .welcome { grid-template-columns: 1fr; gap: 32px; }
+      .right-readout { text-align: left; }
+      .hero-stats { grid-template-columns: 1fr 1fr; gap: 16px; }
+      .bottom-row { grid-template-columns: 1fr; }
+      .arow { grid-template-columns: 72px 1fr 64px; font-size: 11px; }
+      .arow .size, .arow .hash { display: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .reveal, .arow { animation: none; opacity: 1; }
+      .right-readout .live-dot, .peer-chip.working .dot { animation: none; }
+    }
+  </style>
+</head>
+<body class="cm-root">
+  <div class="shell">
+
+    <!-- ── Top nav ── -->
+    <nav class="topnav reveal" data-d="1">
+      <div class="brand">
+        <span class="dot-mark"></span>
+        <span>claude<em>mesh</em></span>
+      </div>
+      <div class="crumbs">
+        <span>Dashboard</span><span>Your universe</span>
+      </div>
+      <div class="user">
+        <span>Mou</span>
+        <span class="avatar">M</span>
+      </div>
+    </nav>
+
+    <!-- ── Welcome ── -->
+    <header class="welcome">
+      <div>
+        <h1 class="reveal" data-d="2">
+          Welcome back, <span class="accent">Mou</span>.<br>
+          <span class="dim">Your universe is</span> active.
+        </h1>
+        <p class="lede reveal" data-d="3">
+          You own or belong to <strong style="color:var(--cm-fg)">11 meshes</strong>, with
+          <strong style="color:var(--cm-fg)">17 peers</strong> online right now — and
+          <strong style="color:var(--cm-clay)">2 invitations</strong> waiting for an answer.
+        </p>
+      </div>
+      <div class="right-readout reveal" data-d="4">
+        <span class="n">17 <em>/ 42</em></span>
+        <span class="line"><span class="live-dot"></span>peers · live now</span>
+        <span class="line" style="margin-top:4px">updated just now</span>
+      </div>
+    </header>
+
+    <!-- ── Invitations ── -->
+    <section class="reveal" data-d="3">
+      <div class="section-head">
+        <h2>Invitations <em>waiting</em></h2>
+        <span class="meta">2 PENDING · EXPIRES IN 7 DAYS</span>
+      </div>
+      <div class="invites">
+
+        <div class="invite">
+          <div class="from-row">From · <span class="who">Nedas Mikelionis</span></div>
+          <h3 class="headline">Join <em>backend-ops</em></h3>
+          <p class="sub">3 members · you&rsquo;d join as <strong>member</strong> · EU-West broker</p>
+          <div class="actions-row">
+            <div class="actions">
+              <button class="btn btn-primary">Accept</button>
+              <button class="btn btn-ghost">Decline</button>
+            </div>
+            <span class="expires">EXPIRES IN 6D 14H</span>
+          </div>
+        </div>
+
+        <div class="invite">
+          <div class="from-row">From · <span class="who">Aleksandra Bakaite</span></div>
+          <h3 class="headline">Join <em>design-review</em></h3>
+          <p class="sub">5 members · you&rsquo;d join as <strong>admin</strong> · EU-West broker</p>
+          <div class="actions-row">
+            <div class="actions">
+              <button class="btn btn-primary">Accept</button>
+              <button class="btn btn-ghost">Decline</button>
+            </div>
+            <span class="expires">EXPIRES IN 2D 8H</span>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── Your meshes ── -->
+    <section class="reveal" data-d="4">
+      <div class="section-head">
+        <h2>Your <em>meshes</em></h2>
+        <button class="action primary">
+          <span>+</span> New mesh
+        </button>
+      </div>
+
+      <div class="meshes-wrap">
+
+        <!-- Hero mesh card -->
+        <div class="mesh-card hero" data-slug="alexis-mou">
+          <div class="mc-head">
+            <div>
+              <div class="mc-name"><em>alexis-mou</em></div>
+              <div class="mc-slug">alexis-mou · id 7e2ad3b1…</div>
+            </div>
+            <span class="mc-role owner">owner · live</span>
+          </div>
+
+          <div class="peers-strip">
+            <span class="peer-chip working"><span class="dot"></span><span class="name">Mou</span></span>
+            <span class="peer-chip"><span class="dot"></span><span class="name">Nedas</span></span>
+            <span class="peer-chip working"><span class="dot"></span><span class="name">Lug-Nut</span></span>
+            <span class="peer-chip"><span class="dot"></span><span class="name">Alexis</span></span>
+            <span class="peer-chip"><span class="dot"></span><span class="name">Roberto</span></span>
+            <span class="peer-chip dnd"><span class="dot"></span><span class="name">Juan</span></span>
+            <span class="peer-chip offline"><span class="dot"></span><span class="name">Kiko</span></span>
+          </div>
+
+          <div class="hero-stats">
+            <div class="stat">
+              <div class="k">Envelopes · session</div>
+              <div class="v" id="statEnv">18,402</div>
+            </div>
+            <div class="stat">
+              <div class="k">Rate · per minute</div>
+              <div class="v" id="statRate">1,024</div>
+            </div>
+            <div class="stat">
+              <div class="k">Latency · p50</div>
+              <div class="v">84<span class="unit">ms</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right-side small cards -->
+        <div class="mesh-card compact" data-slug="flexicar">
+          <div class="mc-head">
+            <div>
+              <div class="mc-name">flexicar</div>
+              <div class="mc-slug">flexicar</div>
+            </div>
+            <span class="mc-role owner">owner</span>
+          </div>
+          <div class="peers-strip">
+            <span class="peer-chip working"><span class="dot"></span><span class="name">Tú</span></span>
+            <span class="peer-chip"><span class="dot"></span><span class="name">Miguel</span></span>
+            <span class="peer-chip"><span class="dot"></span><span class="name">Diego</span></span>
+            <span class="peer-chip offline"><span class="dot"></span><span class="name">Carlos</span></span>
+          </div>
+          <div class="mc-foot">
+            <span class="count-on">3 ONLINE · 4 MEMBERS</span>
+            <span>2D 4H</span>
+          </div>
+        </div>
+
+        <div class="mesh-card compact" data-slug="nedas-mesh">
+          <div class="mc-head">
+            <div>
+              <div class="mc-name">nedas-mesh</div>
+              <div class="mc-slug">nedas-mesh</div>
+            </div>
+            <span class="mc-role admin">admin</span>
+          </div>
+          <div class="peers-strip">
+            <span class="peer-chip working"><span class="dot"></span><span class="name">Nedas</span></span>
+            <span class="peer-chip"><span class="dot"></span><span class="name">Mou</span></span>
+            <span class="peer-chip"><span class="dot"></span><span class="name">Sasha</span></span>
+          </div>
+          <div class="mc-foot">
+            <span class="count-on">3 ONLINE · 3 MEMBERS</span>
+            <span>1D 11H</span>
+          </div>
+        </div>
+
+        <!-- Bottom row of 4 tiny cards -->
+        <div class="bottom-row">
+
+          <div class="mesh-card compact" data-slug="test2">
+            <div class="mc-head">
+              <div>
+                <div class="mc-name">test2</div>
+                <div class="mc-slug">test2</div>
+              </div>
+              <span class="mc-role owner">owner</span>
+            </div>
+            <div class="peers-strip">
+              <span class="peer-chip offline"><span class="dot"></span><span class="name">empty</span></span>
+            </div>
+            <div class="mc-foot">
+              <span class="count-off">0 ONLINE · 4 MEMBERS</span>
+              <span>IDLE</span>
+            </div>
+          </div>
+
+          <div class="mesh-card compact" data-slug="prueba1">
+            <div class="mc-head">
+              <div>
+                <div class="mc-name">prueba1</div>
+                <div class="mc-slug">prueba1</div>
+              </div>
+              <span class="mc-role owner">owner</span>
+            </div>
+            <div class="peers-strip">
+              <span class="peer-chip working"><span class="dot"></span><span class="name">Mou</span></span>
+              <span class="peer-chip"><span class="dot"></span><span class="name">sess-2</span></span>
+              <span class="peer-chip"><span class="dot"></span><span class="name">sess-3</span></span>
+            </div>
+            <div class="mc-foot">
+              <span class="count-on">3 ONLINE · 1 MEMBER</span>
+              <span>14M</span>
+            </div>
+          </div>
+
+          <div class="mesh-card compact" data-slug="minery">
+            <div class="mc-head">
+              <div>
+                <div class="mc-name">minery</div>
+                <div class="mc-slug">minery</div>
+              </div>
+              <span class="mc-role owner">owner</span>
+            </div>
+            <div class="peers-strip">
+              <span class="peer-chip offline"><span class="dot"></span><span class="name">sleeping</span></span>
+            </div>
+            <div class="mc-foot">
+              <span class="count-off">0 ONLINE · 1 MEMBER</span>
+              <span>IDLE · 2D</span>
+            </div>
+          </div>
+
+          <div class="mesh-card compact" data-slug="juan">
+            <div class="mc-head">
+              <div>
+                <div class="mc-name">Juan</div>
+                <div class="mc-slug">juan</div>
+              </div>
+              <span class="mc-role owner">owner</span>
+            </div>
+            <div class="peers-strip">
+              <span class="peer-chip offline"><span class="dot"></span><span class="name">Juan</span></span>
+              <span class="peer-chip offline"><span class="dot"></span><span class="name">sess</span></span>
+            </div>
+            <div class="mc-foot">
+              <span class="count-off">0 ONLINE · 3 MEMBERS</span>
+              <span>IDLE · 4H</span>
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── Recent activity ── -->
+    <section class="reveal" data-d="5">
+      <div class="section-head">
+        <h2>Recent <em>activity</em></h2>
+        <a class="action">
+          Expand to live view <span class="arrow">→</span>
+        </a>
+      </div>
+
+      <div class="activity" id="activity"></div>
+    </section>
+
+    <!-- ── Foot ── -->
+    <div class="foot">
+      <span>claudemesh · your universe · v0.1.0-alpha</span>
+      <span>cipher · nacl-secretbox · audit chain ✓</span>
+    </div>
+
+  </div>
+
+  <script>
+    // ────────────────────────────────────────────────
+    // Compact live activity — prepend new rows every 2s
+    // ────────────────────────────────────────────────
+    const pad = (n) => String(n).padStart(2, "0");
+    const nowStr = () => {
+      const d = new Date();
+      return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+    const peers   = ["Mou", "Nedas", "Lug-Nut", "Alexis", "Roberto", "Juan", "Miguel", "Diego"];
+    const meshes  = ["alexis-mou", "flexicar", "nedas-mesh", "prueba1"];
+    const targets = ["*", "@core", "@ops", "Nedas", "Mou", "Lug-Nut", "Alexis"];
+    const pick = (a) => a[Math.floor(Math.random() * a.length)];
+    const hex  = (n) => {
+      let s = "0x"; const chars = "0123456789abcdef";
+      for (let i = 0; i < n; i++) s += chars[Math.floor(Math.random()*16)];
+      return s;
+    };
+    const size = () => {
+      const k = Math.random();
+      return k < 0.6
+        ? `${Math.floor(Math.random() * 900 + 64)} B`
+        : `${(Math.random() * 4 + 0.5).toFixed(1)} kB`;
+    };
+
+    function makeRow() {
+      const from = pick(peers);
+      let to = pick(targets);
+      if (to === from) to = pick(targets);
+      const typeCls = to.startsWith("@") ? "group" : to === "*" ? "bcast" : "dm";
+      const typeLbl = { dm: "DM", group: "GROUP", bcast: "BCAST" }[typeCls];
+      return {
+        ts: nowStr(),
+        from, to: to === "*" ? "all peers" : to,
+        mesh: pick(meshes),
+        typeCls, typeLbl,
+        size: size(),
+        hash: hex(6),
+      };
+    }
+
+    function render(r) {
+      const row = document.createElement("div");
+      row.className = "arow";
+      row.innerHTML = `
+        <span class="ts">${r.ts}</span>
+        <span class="who"><span class="from">${r.from}</span><span class="arr">→</span>${r.to}&nbsp;&nbsp;<span class="mesh">on ${r.mesh}</span></span>
+        <span class="type ${r.typeCls}">${r.typeLbl}</span>
+        <span class="size">${r.size}</span>
+        <span class="hash">${r.hash}</span>
+      `;
+      return row;
+    }
+
+    const activity = document.getElementById("activity");
+    const MAX = 6;
+    // Seed initial rows with staggered timestamps so it doesn't look empty.
+    const seed = Array.from({ length: MAX }, () => makeRow());
+    seed.forEach((r, i) => {
+      // Back-date so they feel like history
+      const d = new Date(Date.now() - i * 1000 * (i + 3));
+      r.ts = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      activity.appendChild(render(r));
+    });
+
+    setInterval(() => {
+      const row = render(makeRow());
+      activity.insertBefore(row, activity.firstChild);
+      while (activity.children.length > MAX) activity.removeChild(activity.lastChild);
+    }, 2200);
+
+    // Counter drift for envelope count / rate
+    let env = 18402, rate = 1024;
+    const envEl = document.getElementById("statEnv");
+    const rateEl = document.getElementById("statRate");
+    setInterval(() => {
+      env  += Math.floor(Math.random() * 18);
+      rate += Math.floor(Math.random() * 40 - 18);
+      if (rate < 400) rate = 400;
+      envEl.textContent  = env.toLocaleString();
+      rateEl.textContent = rate.toLocaleString();
+    }, 2500);
+
+    // Invite → placeholder optimistic UI
+    document.querySelectorAll(".invite .btn-primary").forEach((b) => {
+      b.addEventListener("click", (e) => {
+        const card = e.target.closest(".invite");
+        card.style.opacity = "0.4";
+        card.style.pointerEvents = "none";
+        b.textContent = "Joining…";
+      });
+    });
+    document.querySelectorAll(".invite .btn-ghost").forEach((b) => {
+      b.addEventListener("click", (e) => {
+        const card = e.target.closest(".invite");
+        card.style.opacity = "0.3";
+        card.style.pointerEvents = "none";
+      });
+    });
+  </script>
+</body>
+</html>
