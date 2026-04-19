@@ -29,7 +29,9 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
   for (const slug of slugs) {
     try {
       await withMesh({ meshSlug: slug }, async (client, mesh) => {
-        const peers = await client.listPeers();
+        const allPeers = await client.listPeers();
+        const selfPubkey = client.getSessionPubkey();
+        const peers = selfPubkey ? allPeers.filter((p) => p.pubkey !== selfPubkey) : allPeers;
 
         if (flags.json) {
           allJson.push({ mesh: mesh.slug, peers });
