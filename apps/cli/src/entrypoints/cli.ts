@@ -30,9 +30,10 @@ Mesh
   claudemesh delete [slug]         delete a mesh (alias: rm)
   claudemesh rename <slug> <name>  rename a mesh
   claudemesh share [email]         share mesh (invite link / send email)
-  claudemesh kick <peer>           disconnect a peer (can reconnect)
-  claudemesh kick --stale 30m      disconnect idle peers (> duration)
-  claudemesh kick --all            disconnect everyone except you
+  claudemesh disconnect <peer>     soft disconnect (peer auto-reconnects)
+  claudemesh kick <peer>           end session (peer must manually rejoin)
+  claudemesh kick --stale 30m      kick peers idle > duration
+  claudemesh kick --all            kick everyone except yourself
   claudemesh ban <peer>            kick + permanently revoke (can't rejoin)
   claudemesh unban <peer>          lift a ban
   claudemesh bans                  list banned members
@@ -139,6 +140,7 @@ async function main(): Promise<void> {
     case "delete": case "rm": { const { deleteMesh } = await import("~/commands/delete-mesh.js"); process.exit(await deleteMesh(positionals[0] ?? "", { yes: !!flags.y || !!flags.yes })); break; }
     case "rename": { const { rename } = await import("~/commands/rename.js"); process.exit(await rename(positionals[0] ?? "", positionals[1] ?? "")); break; }
     case "share": case "invite": { const { invite } = await import("~/commands/invite.js"); process.exit(await invite(positionals[0], { mesh: flags.mesh as string, json: !!flags.json })); break; }
+    case "disconnect": { const { runDisconnect } = await import("~/commands/kick.js"); process.exit(await runDisconnect(positionals[0], { mesh: flags.mesh as string, stale: flags.stale as string, all: !!flags.all })); break; }
     case "kick": { const { runKick } = await import("~/commands/kick.js"); process.exit(await runKick(positionals[0], { mesh: flags.mesh as string, stale: flags.stale as string, all: !!flags.all })); break; }
     case "ban": { const { runBan } = await import("~/commands/ban.js"); process.exit(await runBan(positionals[0], { mesh: flags.mesh as string })); break; }
     case "unban": { const { runUnban } = await import("~/commands/ban.js"); process.exit(await runUnban(positionals[0], { mesh: flags.mesh as string })); break; }

@@ -1669,6 +1669,26 @@ async function handleHello(
   }
   const member = await findMemberByPubkey(hello.meshId, hello.pubkey);
   if (!member) {
+    // Distinguish "revoked" from "never a member" so banned users get
+    // a clear message ("contact admin") instead of generic unauthorized.
+    const [revokedRow] = await db
+      .select({ displayName: meshMember.displayName, revokedAt: meshMember.revokedAt })
+      .from(meshMember)
+      .where(and(eq(meshMember.meshId, hello.meshId), eq(meshMember.peerPubkey, hello.pubkey)))
+      .limit(1);
+    if (revokedRow?.revokedAt) {
+      metrics.connectionsRejected.inc({ reason: "revoked" });
+      const [m] = await db.select({ slug: mesh.slug, name: mesh.name }).from(mesh).where(eq(mesh.id, hello.meshId)).limit(1);
+      const meshLabel = m?.name || m?.slug || hello.meshId;
+      sendError(
+        ws,
+        "revoked",
+        `You've been removed from "${meshLabel}". Contact the mesh owner to rejoin.`,
+      );
+      ws.close(4002, "banned");
+      log.info("hello rejected: revoked", { mesh_id: hello.meshId, display_name: revokedRow.displayName });
+      return null;
+    }
     metrics.connectionsRejected.inc({ reason: "unauthorized" });
     sendError(ws, "unauthorized", "pubkey not found in mesh");
     ws.close(1008, "unauthorized");
@@ -3900,57 +3920,63 @@ function handleConnection(ws: WebSocket): void {
 
         // --- Kick / Ban / Unban ---
 
+        case "disconnect":
         case "kick": {
-          const km = msg as { type: "kick"; target?: string; stale?: number; all?: boolean; _reqId?: string };
-          // Authz: only owner or admin can kick.
+          // disconnect: soft — WS closes with 1000, CLI auto-reconnects.
+          // kick:       hard — WS closes with 4001, CLI exits (no reconnect).
+          // Same target semantics (<name> | --stale <ms> | --all). Only
+          // the close code differs.
+          const isKick = msg.type === "kick";
+          const km = msg as { type: "kick" | "disconnect"; target?: string; stale?: number; all?: boolean; _reqId?: string };
+          const closeCode = isKick ? 4001 : 1000;
+          const closeReason = isKick ? "kicked" : "disconnected";
+          const ackType = isKick ? "kick_ack" : "disconnect_ack";
+
+          // Authz: only owner or admin.
           const [kickMesh] = await db.select({ ownerUserId: mesh.ownerUserId }).from(mesh).where(eq(mesh.id, conn.meshId)).limit(1);
           const [kickMember] = await db.select({ role: meshMember.role, userId: meshMember.userId }).from(meshMember).where(eq(meshMember.id, conn.memberId)).limit(1);
           if (!kickMesh || (kickMesh.ownerUserId !== kickMember?.userId && kickMember?.role !== "admin")) {
-            sendError(ws, "forbidden", "only owner or admin can kick", undefined, km._reqId);
+            sendError(ws, "forbidden", `only owner or admin can ${closeReason}`, undefined, km._reqId);
             break;
           }
 
-          const kicked: string[] = [];
+          const affected: string[] = [];
           const now = Date.now();
 
           if (km.all) {
-            // Kick everyone except caller
             for (const [pid, peer] of connections) {
               if (peer.meshId !== conn.meshId || pid === presenceId) continue;
-              try { peer.ws.close(1000, "kicked"); } catch {}
+              try { peer.ws.close(closeCode, closeReason); } catch {}
               connections.delete(pid);
               void disconnectPresence(pid);
-              kicked.push(peer.displayName || pid);
+              affected.push(peer.displayName || pid);
             }
           } else if (km.stale && typeof km.stale === "number") {
-            // Kick peers idle longer than stale ms
             const cutoff = now - km.stale;
             for (const [pid, peer] of connections) {
               if (peer.meshId !== conn.meshId || pid === presenceId) continue;
-              // Check last_ping_at from DB for accurate staleness
               const [pres] = await db.select({ lastPingAt: presence.lastPingAt }).from(presence).where(eq(presence.id, pid)).limit(1);
               if (pres && pres.lastPingAt && pres.lastPingAt.getTime() < cutoff) {
-                try { peer.ws.close(1000, "kicked_stale"); } catch {}
+                try { peer.ws.close(closeCode, `${closeReason}_stale`); } catch {}
                 connections.delete(pid);
                 void disconnectPresence(pid);
-                kicked.push(peer.displayName || pid);
+                affected.push(peer.displayName || pid);
               }
             }
           } else if (km.target) {
-            // Kick specific peer by name or pubkey
             for (const [pid, peer] of connections) {
               if (peer.meshId !== conn.meshId) continue;
               if (peer.displayName === km.target || peer.memberPubkey === km.target || peer.memberPubkey.startsWith(km.target)) {
-                try { peer.ws.close(1000, "kicked"); } catch {}
+                try { peer.ws.close(closeCode, closeReason); } catch {}
                 connections.delete(pid);
                 void disconnectPresence(pid);
-                kicked.push(peer.displayName || pid);
+                affected.push(peer.displayName || pid);
               }
             }
           }
 
-          conn.ws.send(JSON.stringify({ type: "kick_ack", kicked, _reqId: km._reqId }));
-          log.info("ws kick", { presence_id: presenceId, kicked_count: kicked.length, target: km.target ?? km.stale ?? "all" });
+          conn.ws.send(JSON.stringify({ type: ackType, kicked: affected, affected, _reqId: km._reqId }));
+          log.info(`ws ${closeReason}`, { presence_id: presenceId, count: affected.length, target: km.target ?? km.stale ?? "all" });
           break;
         }
 
@@ -3985,7 +4011,7 @@ function handleConnection(ws: WebSocket): void {
           // Kick all their connections
           for (const [pid, peer] of connections) {
             if (peer.meshId === conn.meshId && peer.memberPubkey === targetMember.peerPubkey) {
-              try { peer.ws.close(1000, "banned"); } catch {}
+              try { peer.ws.close(4002, "banned"); } catch {}
               connections.delete(pid);
               void disconnectPresence(pid);
             }

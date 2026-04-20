@@ -166,6 +166,8 @@ export class BrokerClient {
   private _serviceCatalog: Array<{ name: string; description: string; status: string; tools: Array<{ name: string; description: string; inputSchema: object }>; deployed_by: string }> = [];
   get serviceCatalog() { return this._serviceCatalog; }
   private closed = false;
+  /** Non-null when the broker closed us with a terminal code (4001/4002). */
+  public terminalClose: { code: number; reason: string } | null = null;
   private reconnectAttempt = 0;
   private helloTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -321,10 +323,23 @@ export class BrokerClient {
         this.handleServerMessage(msg);
       };
 
-      const onClose = (): void => {
+      const onClose = (code?: number, reasonBuf?: Buffer): void => {
         if (this.helloTimer) clearTimeout(this.helloTimer);
         this.helloTimer = null;
         if (this.ws === ws) this.ws = null;
+        const reason = reasonBuf?.toString("utf-8") ?? "";
+        // Terminal close codes — broker told us to stay gone.
+        //   4001 = kicked (session ended, user must manually rejoin)
+        //   4002 = banned (member revoked, cannot rejoin until unbanned)
+        if (code === 4001 || code === 4002) {
+          this.closed = true;
+          this.setConnStatus("closed");
+          this.terminalClose = { code, reason };
+          if (this._status !== "open") {
+            reject(new Error(`ws terminal close ${code}: ${reason || "session ended"}`));
+          }
+          return;
+        }
         if (this._status !== "open" && this._status !== "reconnecting") {
           reject(new Error("ws closed before hello_ack"));
         }
@@ -2158,6 +2173,11 @@ export class BrokerClient {
     }
     if (msg.type === "error") {
       this.debug(`broker error: ${msg.code} ${msg.message}`);
+      // Terminal errors from hello — broker will close us next. Capture
+      // so the caller (launch/peers/etc.) can surface a friendly message.
+      if (msg.code === "revoked") {
+        this.terminalClose = { code: 4002, reason: String(msg.message ?? "revoked") };
+      }
       const id = msg.id ? String(msg.id) : null;
       let handledByPendingSend = false;
       if (id) {

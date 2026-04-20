@@ -1,0 +1,158 @@
+HACKATHON — THE DAY-ONE "WOW" SCENARIO
+======================================
+Date: 2026-04-19
+Follow-up to: 2026-04-19-hackathon-proposal.txt
+
+
+THE SHORT ANSWER
+----------------
+
+Yes — it's exactly as simple as run one command, join a mesh, and
+immediately inherit your team's tools, skills, MCPs, and context.
+No config copying. No API key juggling. No "let me send you my
+.mcp.json". Zero setup.
+
+That's the thing that has never existed before: Claude Code sessions
+that share capability at the speed of a chat invite.
+
+
+THE 60-SECOND STORY (rough, but close to real)
+----------------------------------------------
+
+Picture Ana at the hackathon. Her teammate David has been working on
+their project for two days — wired up a Linear MCP, a Figma MCP, a
+custom "brand-asset" skill, shared project context, a few API keys
+in the team vault. She shows up at the table, opens her laptop, has
+never touched the project.
+
+1.  David runs one command:
+      $ claudemesh share ana@team.com
+    She gets a link: https://claudemesh.com/i/5SLJ7F95
+
+2.  Ana runs one command:
+      $ claudemesh https://claudemesh.com/i/5SLJ7F95
+    (No separate install, the CLI self-installs if missing.
+     Takes under 10 seconds.)
+
+3.  Claude Code opens automatically, connected to the mesh. No
+    further setup.
+
+4.  Ana types into Claude Code:
+      "what are we building?"
+
+    Claude — HER local Claude, on HER laptop — answers with the
+    team's current brief, pulled from the mesh's shared context
+    that David set earlier. It knows the repo, the deadline, the
+    stack, who's on the team, what's done, what's open.
+
+5.  Ana says:
+      "pull the latest tickets from Linear"
+
+    Her Claude uses the Linear MCP. Ana never installed it. She has
+    no Linear API key on her machine. The MCP was deployed to the
+    mesh by David on day one; the moment Ana joined, it became
+    callable from her Claude Code as if it were local. Ciphertext
+    routes through the broker, tool calls execute on the peer that
+    owns the integration.
+
+6.  She asks:
+      "generate launch-day assets in our brand"
+
+    Her Claude invokes the /brand-asset skill that David authored
+    two days ago. Skills are portable in the mesh — calling it
+    remotely is indistinguishable from having it installed locally.
+
+7.  She hits a wall on a type error. Instead of pinging David in
+    Slack she types:
+      "ask the mesh"
+
+    Question fans out to every teammate's Claude. Thirty seconds
+    later she has three answers with three different repo contexts,
+    synthesized into one reply, with attributions. This is the
+    fan-out demo from the main proposal.
+
+TOTAL ELAPSED TIME: under 90 seconds from "I don't have anything
+set up" to "my Claude knows our project and can use my team's tools."
+
+
+WHY THIS IS THE HEADLINE
+------------------------
+
+Every other developer tool in 2026 still demands:
+  - install this package
+  - set these env vars
+  - copy this config
+  - get an API key approved
+  - restart your editor
+  - re-index your repo
+
+claudemesh replaces all of that with a single click on an invite
+link. The mesh IS the onboarding.
+
+The shorter way to say it: every Claude Code session you onboard,
+you onboard your team's entire AI toolchain in one shot.
+
+
+WHAT THE USER ACTUALLY SEES
+---------------------------
+
+  Terminal (Ana):
+    $ claudemesh https://claudemesh.com/i/5SLJ7F95
+    ✔ Joined "launch-team" as Ana
+      4 peers online: David, Nedas, Lug-Nut, Juan
+      12 tools available from the mesh
+      3 shared skills
+      context: "launch-day assets — due Friday"
+    ✔ Launching Claude Code…
+
+  Claude Code:
+    > connected to mesh: launch-team
+    > inherited: 12 tools, 3 skills, shared context, 14 memories
+
+  Dashboard (claudemesh.com):
+    Ana's node appears on the live topology. Packets animate along
+    edges as her first message flies. David's screen gets a presence
+    ping: "Ana joined — ready".
+
+That's the wow. Not a pitch deck, not a feature matrix — a literal
+before-and-after experience that takes under two minutes and looks
+impossible to anyone who's ever onboarded a new developer onto a
+project the old way.
+
+
+WHAT WE'RE BUILDING THIS WEEK TO MAKE THIS REAL
+-----------------------------------------------
+
+Most of the primitives exist. The hackathon week is the glue:
+
+  • Tool inheritance — a peer's deployed MCPs become callable from
+    other peers as if installed locally. Today: partially shipped.
+    Hackathon goal: make it automatic, zero-config, visible in the
+    universe dashboard.
+
+  • Skill sharing — same story, for skills (already has an alpha).
+    Hackathon goal: polish, auto-discovery, one-line invoke.
+
+  • Context inheritance — joining a mesh automatically loads the
+    mesh's shared context into the new Claude's session so it
+    "knows what we're working on" from minute one. Today: state
+    exists, auto-pull on join does not.
+
+  • "Ask the mesh" fan-out — the broadcast + synthesize primitive
+    from the main proposal.
+
+  • The onboarding CLI flow — make the invite-link-to-Claude-ready
+    path bulletproof and under 10 seconds on a fresh machine.
+
+
+THE DEMO ARTIFACT
+-----------------
+
+A single 90-second screencast. Split screen: Ana's terminal on the
+left, the claudemesh.com live universe dashboard on the right.
+She joins. Her node appears on the mesh. She asks a question. Tools
+fire. Skills execute. Answer comes back. No text overlays needed —
+the UX itself is the argument.
+
+That's the video that goes at the top of claudemesh.com on demo
+day.

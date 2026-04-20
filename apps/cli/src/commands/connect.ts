@@ -75,6 +75,21 @@ export async function withMesh<T>(
     await client.connect();
     const result = await fn(client, mesh);
     return result;
+  } catch (e) {
+    // Terminal close from the broker (banned / kicked). Give the user
+    // a clear message instead of the low-level ws error.
+    if (client.terminalClose) {
+      const { code, reason } = client.terminalClose;
+      if (code === 4002) {
+        console.error(`\n  ✘ ${reason}\n`);
+      } else if (code === 4001) {
+        console.error(`\n  ✘ Kicked from this mesh. Run \`claudemesh\` to rejoin.\n`);
+      } else {
+        console.error(`\n  ✘ Broker closed connection: ${reason}\n`);
+      }
+      process.exit(1);
+    }
+    throw e;
   } finally {
     client.close();
   }

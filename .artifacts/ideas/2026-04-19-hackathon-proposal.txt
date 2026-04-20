@@ -1,0 +1,147 @@
+HACKATHON PROPOSAL — CLAUDEMESH
+===============================
+Date: 2026-04-19
+Author: Alejandro Gutiérrez
+
+
+THE SHORT ANSWER
+----------------
+
+I'm going with claudemesh — not the Flexicar voice assistant, not a fresh
+blend. claudemesh is already a real product with a real backbone (CLI,
+MCP server, broker, E2E crypto, web dashboard), and what it still lacks
+is the one thing a hackathon is perfect for: a single headline capability
+that makes its existence obvious in ten seconds.
+
+So I'm using the week to push claudemesh from "useful infra for people
+who already get it" → "demo that makes someone say, oh, that's what this
+is for."
+
+
+WHAT'S ALREADY THERE (SO YOU KNOW WHAT I'M BUILDING ON, NOT FROM ZERO)
+----------------------------------------------------------------------
+
+- CLI + MCP server (claudemesh-cli), 40+ alpha releases shipped
+- Broker on wss://ic.claudemesh.com/ws with libsodium E2E encryption —
+  broker routes ciphertext, never reads messages
+- Shared primitives: direct messages, group broadcasts, shared state,
+  memory, file sharing, skill sharing, MCP deployment to the mesh
+- Telegram bridge with a Haiku-4.5 AI layer so you can talk to the mesh
+  from your phone (shipped this week)
+- Web dashboard with per-mesh live panel (peers, envelope stream,
+  audit chain)
+- Brand-new "Universe" dashboard landing (shipped today) — meshes +
+  incoming invitations in one view
+
+
+WHAT I'M BUILDING DURING THE HACKATHON
+---------------------------------------
+
+Headline: AGENT-TO-AGENT DELEGATION WITH LIVE STREAMING
+
+Right now a Claude Code session can SEND a message to another session
+in the mesh. That's primitive-level. What's missing — and what makes
+the whole thing click — is DELEGATION: one Claude hands off a task to
+another, waits for the real answer (not a "sure, I'll do that later"
+acknowledgement), and composes it into its own response, with the
+user watching the whole thing happen live.
+
+Why this is the right hackathon target:
+- It requires NO new physical infrastructure. The broker, the crypto,
+  the transport are all there.
+- It's the unlock that turns claudemesh from "chat for Claudes" into
+  "distributed cognition layer for Claude Code."
+- It's demoable in 60 seconds and the value is self-evident.
+
+
+DAY-BY-DAY PLAN (REALISTIC, NOT ASPIRATIONAL)
+---------------------------------------------
+
+DAY 1 — Protocol + primitive
+  • Design `mesh_delegate(to, task, timeout)` MCP tool — one call from
+    the local Claude, returns the remote Claude's answer synchronously
+    from the caller's perspective
+  • Broker-side: new message type `delegation_request` / `_response`
+    with correlation IDs so responses route back to the originator
+  • Remote Claude receives delegation → runs in a sandboxed subcontext
+    → emits structured response (text + artifacts)
+
+DAY 2 — Live streaming of remote work
+  • While remote Claude works, stream its tool calls + thinking back
+    through the mesh as `delegation_progress` events
+  • Caller's dashboard lights up with "Nedas is reading src/auth.ts…"
+    in real time
+  • The "wow" moment: watching another Claude think, from your terminal
+
+DAY 3 — Multi-peer fan-out
+  • `mesh_ask_all(question)` — broadcast a question to @group, gather
+    answers in parallel, synthesize
+  • This is the Slack-killer: one question, three Claudes with
+    different repo contexts, one merged answer
+  • Add to the universe dashboard: inline "ask your mesh" prompt
+
+DAY 4 — Voice control (stretch, uses my Pipecat/Cartesia background)
+  • Phone → Telegram voice note → AI layer already in place →
+    mesh_delegate or mesh_ask_all fires
+  • "Hey mesh, which of you is closest to the payments bug?" — the
+    mesh answers with the Claude that has the most recent auth.ts edits
+  • Ties the Flexicar voice work into claudemesh without fragmenting
+    the proposal
+
+DAY 5 — Live schematic on the dashboard
+  • Build the animated mesh-topology view from my prototype
+    (SVG nodes + packets in flight) using REAL delegation traffic
+  • When a delegation fires, you literally see a packet fly from one
+    node to another on the dashboard
+  • This is the screenshot/video artifact for the demo day
+
+DAY 6 — Demo recording + narrative
+  • 90-second video: single person, three terminals, one dashboard.
+    Asks a question in terminal 1, two other Claudes answer, dashboard
+    animates, final answer synthesized
+  • Landing page update with the video above the fold
+  • Changelog post
+
+DAY 7 — Buffer, polish, publish alpha
+
+
+WHAT MAKES THIS TAILORED FOR A HACKATHON (NOT JUST ROADMAP WORK)
+-----------------------------------------------------------------
+
+1. Visible. Three terminals + one dashboard = immediately legible.
+2. Ambitious. Going from "pub/sub messaging" to "synchronous distributed
+   delegation" is a real protocol-level step up — it's the difference
+   between email and RPC.
+3. Native to the event. Hackathon judges are the exact target user:
+   people with multiple Claude Code sessions open, wanting them to
+   coordinate. Dogfood-able during the week itself.
+4. Leverages what I already built. I'm not rebuilding the transport,
+   the crypto, the auth, the dashboard shell — just adding the one
+   missing primitive that ties it all together.
+5. Stretch goal (voice) reuses my Flexicar/Pipecat expertise without
+   making the proposal schizophrenic — it's one coherent pitch with a
+   multimodal cherry on top if time allows.
+
+
+WHAT I'M EXPLICITLY NOT DOING
+------------------------------
+
+- Not rewriting the Flexicar assistant as a mesh app. It's a great
+  product, wrong scope for one week.
+- Not building federation (mesh-to-mesh). Powerful but too abstract
+  to demo cleanly.
+- Not building a self-hosted broker. Infra work, no hackathon payoff.
+- Not building a mobile app. Telegram already covers the "mesh from
+  anywhere" story.
+
+
+THE PITCH IN ONE SENTENCE
+-------------------------
+
+By the end of the week, one Claude will delegate a real coding task to
+another Claude running on a different machine, get a real answer back,
+and the whole thing will happen in sixty seconds with the mesh
+topology animating live on claudemesh.com.
+
+That's the demo. Everything else in the week is in service of making
+those sixty seconds watertight.
