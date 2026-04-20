@@ -225,14 +225,14 @@ async function checkNpmLatest(): Promise<Check> {
       return { name: "CLI up-to-date", pass: true, detail: `npm unreachable (${res.status}) — skipped` };
     }
     const body = (await res.json()) as { "dist-tags"?: { alpha?: string; latest?: string } };
-    const latest = body["dist-tags"]?.alpha ?? body["dist-tags"]?.latest;
+    const latest = body["dist-tags"]?.latest ?? body["dist-tags"]?.alpha;
     if (!latest) return { name: "CLI up-to-date", pass: true, detail: "no dist-tag — skipped" };
     const up = latest === VERSION;
     return {
       name: "CLI up-to-date",
       pass: up,
       detail: up ? `latest ${latest}` : `installed ${VERSION} → latest ${latest}`,
-      fix: up ? undefined : "npm i -g claudemesh-cli@alpha",
+      fix: up ? undefined : "npm i -g claudemesh-cli",
     };
   } catch {
     return { name: "CLI up-to-date", pass: true, detail: "npm check skipped" };

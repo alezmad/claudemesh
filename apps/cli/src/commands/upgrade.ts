@@ -1,9 +1,10 @@
 /**
- * `claudemesh upgrade` — self-update the CLI to the latest alpha.
+ * `claudemesh upgrade` — self-update the CLI to the latest release.
  *
  * Strategy:
- *   1. Query npm for the latest @alpha dist-tag.
- *   2. If we're behind, run `npm i -g claudemesh-cli@alpha` via the same
+ *   1. Query npm for the `latest` dist-tag (falls back to `alpha` for
+ *      users who still prefer the prerelease track).
+ *   2. If we're behind, run `npm i -g claudemesh-cli` via the same
  *      npm that installed us (detected from argv[1] path walk).
  *   3. Print before/after versions.
  *
@@ -19,12 +20,14 @@ import { URLS, VERSION } from "~/constants/urls.js";
 import { render } from "~/ui/render.js";
 import { EXIT } from "~/constants/exit-codes.js";
 
-async function latestAlpha(): Promise<string | null> {
+async function latestVersion(): Promise<string | null> {
   try {
     const res = await fetch(URLS.NPM_REGISTRY, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
     const body = (await res.json()) as { "dist-tags"?: { alpha?: string; latest?: string } };
-    return body["dist-tags"]?.alpha ?? body["dist-tags"]?.latest ?? null;
+    // Prefer the stable `latest` dist-tag; fall back to `alpha` for users
+    // on prerelease builds before 1.0 shipped.
+    return body["dist-tags"]?.latest ?? body["dist-tags"]?.alpha ?? null;
   } catch {
     return null;
   }
@@ -55,7 +58,7 @@ export async function runUpgrade(opts: { check?: boolean; yes?: boolean } = {}):
     ["checking", "npm registry…"],
   ]);
 
-  const latest = await latestAlpha();
+  const latest = await latestVersion();
   if (!latest) {
     render.warn("Could not reach npm registry — skipped.");
     return EXIT.SUCCESS;
@@ -79,7 +82,7 @@ export async function runUpgrade(opts: { check?: boolean; yes?: boolean } = {}):
   const { npm, prefix } = findNpm();
   const args = ["install", "-g"];
   if (prefix) args.push("--prefix", prefix);
-  args.push("claudemesh-cli@alpha");
+  args.push("claudemesh-cli");
 
   render.blank();
   render.info(`Updating ${VERSION} → ${latest}…`);
@@ -89,7 +92,7 @@ export async function runUpgrade(opts: { check?: boolean; yes?: boolean } = {}):
   const res = spawnSync(npm, args, { stdio: "inherit" });
   if (res.status !== 0) {
     render.err(`npm exited with status ${res.status}`);
-    render.hint("Try: npm i -g claudemesh-cli@alpha");
+    render.hint("Try: npm i -g claudemesh-cli");
     return EXIT.INTERNAL_ERROR;
   }
 
