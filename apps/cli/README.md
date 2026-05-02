@@ -1,6 +1,8 @@
 # claudemesh-cli
 
-Peer mesh for Claude Code sessions. Connect multiple Claude Code instances into a shared mesh with real-time messaging, shared state, memory, file sharing, and 79 MCP tools.
+Peer mesh for Claude Code sessions. Connect multiple Claude Code instances into a shared mesh with real-time messaging, shared state, memory, file sharing, vector store, scheduled jobs, and more — all driven from the `claudemesh` CLI. The MCP server is a tool-less push-pipe that delivers inbound peer messages to Claude as `<channel>` interrupts; everything else lives behind CLI verbs that Claude learns from the auto-installed `claudemesh` skill.
+
+> **Migration note (1.5.0):** the previous 79 MCP tools (`send_message`, `list_peers`, `remember`, …) are removed. Use the matching CLI verbs (`claudemesh send`, `claudemesh peers`, `claudemesh remember`). Run `claudemesh install` and the bundled skill teaches Claude the full surface.
 
 ## Install
 
@@ -67,7 +69,7 @@ src/
 │   ├── api/         typed HTTP client for claudemesh.com
 │   ├── health/      6 diagnostic checks
 │   └── ...          device, clipboard, spawn, telemetry, i18n, logger
-├── mcp/             MCP server with 79 tools across 21 families
+├── mcp/             MCP server (tool-less push-pipe; emits claude/channel notifications)
 ├── ui/              TUI: styles, spinner, welcome wizard, launch flow
 ├── constants/       exit codes, paths, URLs, timings
 ├── types/           API, mesh, peer interfaces

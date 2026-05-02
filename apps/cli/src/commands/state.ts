@@ -5,6 +5,8 @@
  */
 
 import { withMesh } from "./connect.js";
+import { render } from "~/ui/render.js";
+import { bold, dim } from "~/ui/styles.js";
 
 export interface StateFlags {
   mesh?: string;
@@ -12,14 +14,10 @@ export interface StateFlags {
 }
 
 export async function runStateGet(flags: StateFlags, key: string): Promise<void> {
-  const useColor =
-    !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
-  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
-
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
     const entry = await client.getState(key);
     if (!entry) {
-      console.log(dim(`(not set)`));
+      render.info(dim("(not set)"));
       return;
     }
     if (flags.json) {
@@ -27,13 +25,12 @@ export async function runStateGet(flags: StateFlags, key: string): Promise<void>
       return;
     }
     const val = typeof entry.value === "string" ? entry.value : JSON.stringify(entry.value);
-    console.log(val);
-    console.log(dim(`  set by ${entry.updatedBy} at ${new Date(entry.updatedAt).toLocaleString()}`));
+    render.info(val);
+    render.info(dim(`  set by ${entry.updatedBy} at ${new Date(entry.updatedAt).toLocaleString()}`));
   });
 }
 
 export async function runStateSet(flags: StateFlags, key: string, value: string): Promise<void> {
-  // Try to parse as JSON so numbers/booleans/objects work; fall back to string.
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
@@ -43,16 +40,11 @@ export async function runStateSet(flags: StateFlags, key: string, value: string)
 
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
     await client.setState(key, parsed);
-    console.log(`✓ ${key} = ${JSON.stringify(parsed)}`);
+    render.ok(`${bold(key)} = ${JSON.stringify(parsed)}`);
   });
 }
 
 export async function runStateList(flags: StateFlags): Promise<void> {
-  const useColor =
-    !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
-  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
-  const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
-
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client, mesh) => {
     const entries = await client.listState();
 
@@ -62,14 +54,15 @@ export async function runStateList(flags: StateFlags): Promise<void> {
     }
 
     if (entries.length === 0) {
-      console.log(dim(`No state on mesh "${mesh.slug}".`));
+      render.info(dim(`No state on mesh "${mesh.slug}".`));
       return;
     }
 
+    render.section(`state (${entries.length})`);
     for (const e of entries) {
       const val = typeof e.value === "string" ? e.value : JSON.stringify(e.value);
-      console.log(`${bold(e.key)}: ${val}`);
-      console.log(dim(`  ${e.updatedBy} · ${new Date(e.updatedAt).toLocaleString()}`));
+      process.stdout.write(`  ${bold(e.key)}: ${val}\n`);
+      process.stdout.write(`    ${dim(e.updatedBy + "  ·  " + new Date(e.updatedAt).toLocaleString())}\n`);
     }
   });
 }

@@ -56,6 +56,33 @@ end-to-end crypto backup, per-peer capability grants, self-update.
 
 ---
 
+## v1.5.0 — *shipped*
+
+CLI-first architecture lock-in. The CLI becomes the API; MCP becomes a
+tool-less push-pipe. Spec:
+`.artifacts/specs/2026-05-02-architecture-north-star.md`.
+
+- **Tool-less MCP** — `tools/list` returns `[]`. Inbound peer messages still
+  arrive as `experimental.claude/channel` notifications mid-turn. Bundle size
+  -42% (250 KB → 146 KB).
+- **Resource-noun-verb CLI** — `peer list`, `message send`, `memory recall`,
+  etc. Legacy flat verbs (`peers`, `send`, `remember`) remain as aliases.
+- **Bundled `claudemesh` skill** — installed to `~/.claude/skills/claudemesh/`
+  by `claudemesh install`. Sole CLI-discoverability surface for Claude.
+- **Unix-socket bridge** — CLI invocations dial
+  `~/.claudemesh/sockets/<slug>.sock` to reuse the push-pipe's warm WS
+  (~220 ms warm vs ~600 ms cold).
+- **`--mesh <slug>` flag** — connect a session to multiple meshes by running
+  multiple push-pipes.
+- **Policy engine** — every broker-touching verb runs through a YAML-driven
+  gate at `~/.claudemesh/policy.yaml` (auto-created with sensible defaults).
+  Destructive verbs prompt; non-TTY auto-denies. Audit log at
+  `~/.claudemesh/audit.log`.
+- **`--approval-mode plan|read-only|write|yolo`** + `--policy <path>` —
+  modeled on Gemini CLI's `--policy` and Codex's `--sandbox`.
+
+---
+
 ## v0.2.0 — *next*
 
 The surface layer. The protocol is ready; these are gateways + routing

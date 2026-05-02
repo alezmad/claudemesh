@@ -7,6 +7,8 @@
  */
 
 import { withMesh } from "./connect.js";
+import { render } from "~/ui/render.js";
+import { bold, clay, dim } from "~/ui/styles.js";
 
 export interface RemindFlags {
   mesh?: string;
@@ -35,13 +37,12 @@ function parseDeliverAt(flags: RemindFlags): number | null {
     return Date.now() + ms;
   }
   if (flags.at) {
-    // Try HH:MM first
     const hm = flags.at.match(/^(\d{1,2}):(\d{2})$/);
     if (hm) {
       const now = new Date();
       const target = new Date(now);
       target.setHours(parseInt(hm[1]!, 10), parseInt(hm[2]!, 10), 0, 0);
-      if (target <= now) target.setDate(target.getDate() + 1); // next occurrence
+      if (target <= now) target.setDate(target.getDate() + 1);
       return target.getTime();
     }
     const ts = Date.parse(flags.at);
@@ -54,61 +55,53 @@ export async function runRemind(
   flags: RemindFlags,
   positional: string[],
 ): Promise<void> {
-  const useColor = !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
-  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
-  const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
-
   const action = positional[0];
 
-  // claudemesh remind list
   if (action === "list") {
     await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
       const scheduled = await client.listScheduled();
       if (flags.json) { console.log(JSON.stringify(scheduled, null, 2)); return; }
-      if (scheduled.length === 0) { console.log(dim("No pending reminders.")); return; }
+      if (scheduled.length === 0) { render.info(dim("No pending reminders.")); return; }
+      render.section(`reminders (${scheduled.length})`);
       for (const m of scheduled) {
         const when = new Date(m.deliverAt).toLocaleString();
         const to = m.to === client.getSessionPubkey() ? dim("(self)") : m.to;
-        console.log(`  ${bold(m.id.slice(0, 8))} → ${to} at ${when}`);
-        console.log(`  ${dim(m.message.slice(0, 80))}`);
-        console.log("");
+        process.stdout.write(`  ${bold(m.id.slice(0, 8))} ${dim("→")} ${to} ${dim("at")} ${when}\n`);
+        process.stdout.write(`    ${dim(m.message.slice(0, 80))}\n\n`);
       }
     });
     return;
   }
 
-  // claudemesh remind cancel <id>
   if (action === "cancel") {
     const id = positional[1];
-    if (!id) { console.error("Usage: claudemesh remind cancel <id>"); process.exit(1); }
+    if (!id) { render.err("Usage: claudemesh remind cancel <id>"); process.exit(1); }
     await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
       const ok = await client.cancelScheduled(id);
-      if (ok) console.log(`✓ Cancelled ${id}`);
-      else { console.error(`✗ Not found or already fired: ${id}`); process.exit(1); }
+      if (ok) render.ok(`cancelled ${bold(id.slice(0, 8))}`);
+      else { render.err(`not found or already fired: ${id}`); process.exit(1); }
     });
     return;
   }
 
-  // claudemesh remind <message> --in <duration> | --at <time> | --cron <expr>
   const message = action ?? positional.join(" ");
   if (!message) {
-    console.error("Usage: claudemesh remind <message> --in <duration>");
-    console.error("       claudemesh remind <message> --at <time>");
-    console.error('       claudemesh remind <message> --cron "0 */2 * * *"');
-    console.error("       claudemesh remind list");
-    console.error("       claudemesh remind cancel <id>");
+    render.err("Usage: claudemesh remind <message> --in <duration>");
+    render.info(dim("       claudemesh remind <message> --at <time>"));
+    render.info(dim('       claudemesh remind <message> --cron "0 */2 * * *"'));
+    render.info(dim("       claudemesh remind list"));
+    render.info(dim("       claudemesh remind cancel <id>"));
     process.exit(1);
   }
 
   const isCron = !!flags.cron;
   const deliverAt = isCron ? 0 : parseDeliverAt(flags);
   if (!isCron && deliverAt === null) {
-    console.error('Specify when: --in <duration> (e.g. "2h", "30m"), --at <time> (e.g. "15:00"), or --cron <expression>');
+    render.err('Specify when', 'use --in <duration> (e.g. "2h", "30m"), --at <time> (e.g. "15:00"), or --cron <expression>');
     process.exit(1);
   }
 
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
-    // Determine target: --to flag or self
     let targetSpec: string;
     if (flags.to && flags.to !== "self") {
       if (flags.to.startsWith("@") || flags.to === "*" || /^[0-9a-f]{64}$/i.test(flags.to)) {
@@ -117,7 +110,7 @@ export async function runRemind(
         const peers = await client.listPeers();
         const match = peers.find((p) => p.displayName.toLowerCase() === flags.to!.toLowerCase());
         if (!match) {
-          console.error(`Peer "${flags.to}" not found. Online: ${peers.map((p) => p.displayName).join(", ") || "(none)"}`);
+          render.err(`Peer "${flags.to}" not found`, `online: ${peers.map((p) => p.displayName).join(", ") || "(none)"}`);
           process.exit(1);
         }
         targetSpec = match.pubkey;
@@ -127,16 +120,22 @@ export async function runRemind(
     }
 
     const result = await client.scheduleMessage(targetSpec, message, deliverAt ?? 0, false, flags.cron);
-    if (!result) { console.error("✗ Broker did not acknowledge — check connection"); process.exit(1); }
+    if (!result) { render.err("Broker did not acknowledge — check connection"); process.exit(1); }
 
     if (flags.json) { console.log(JSON.stringify(result)); return; }
     const toLabel = !flags.to || flags.to === "self" ? "yourself" : flags.to;
     if (isCron) {
       const nextFire = new Date(result.deliverAt).toLocaleString();
-      console.log(`✓ Recurring reminder set (${result.scheduledId.slice(0, 8)}): "${message}" → ${toLabel} — cron: ${flags.cron}, next fire: ${nextFire}`);
+      render.ok(
+        `recurring reminder set`,
+        `${result.scheduledId.slice(0, 8)}  ·  ${clay(message)} → ${toLabel}  ·  cron ${flags.cron}  ·  next ${nextFire}`,
+      );
     } else {
       const when = new Date(result.deliverAt).toLocaleString();
-      console.log(`✓ Reminder set (${result.scheduledId.slice(0, 8)}): "${message}" → ${toLabel} at ${when}`);
+      render.ok(
+        `reminder set`,
+        `${result.scheduledId.slice(0, 8)}  ·  ${clay(message)} → ${toLabel} at ${when}`,
+      );
     }
   });
 }

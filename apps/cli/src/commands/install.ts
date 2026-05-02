@@ -30,6 +30,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { readConfig } from "~/services/config/facade.js";
+import { render } from "~/ui/render.js";
+import { bold, clay, dim, yellow } from "~/ui/styles.js";
 
 const MCP_NAME = "claudemesh";
 const CLAUDE_CONFIG = join(homedir(), ".claude.json");
@@ -149,16 +151,78 @@ function bunAvailable(): boolean {
   return res.status === 0;
 }
 
+/** Is this file running from a bundled `dist/` directory? */
+function isBundledFile(p: string): boolean {
+  // Match any file under dist/ — e.g. dist/index.js or dist/entrypoints/cli.js.
+  return /[/\\]dist[/\\]/.test(p);
+}
+
 /** Absolute path to this CLI's entry file. */
 function resolveEntry(): string {
   const here = fileURLToPath(import.meta.url);
-  // When bundled (dist/index.js), this file IS the entry → return self.
-  // When running from source (src/index.ts via bun), walk up to the
-  // dir + resolve index.ts.
-  if (here.endsWith("/dist/index.js") || here.endsWith("\\dist\\index.js")) {
-    return here;
-  }
+  // Bundled: this file IS reachable as the entry; return self.
+  // Source: walk up to apps/cli/src/index.ts (legacy) or fall back.
+  if (isBundledFile(here)) return here;
   return resolve(dirname(here), "..", "index.ts");
+}
+
+/** Find the bundled `skills/` directory at install time. Walks up from
+ * the entry file: dist/entrypoints/cli.js → dist/ → package root → skills/. */
+function resolveBundledSkillsDir(): string | null {
+  const here = fileURLToPath(import.meta.url);
+  // Bundled: <pkg>/dist/entrypoints/cli.js → walk up two levels to <pkg>
+  // Source:  <pkg>/src/commands/install.ts → walk up two levels to <pkg>
+  const pkgRoot = resolve(dirname(here), "..", "..");
+  const skillsDir = join(pkgRoot, "skills");
+  if (existsSync(skillsDir)) return skillsDir;
+  return null;
+}
+
+/** ~/.claude/skills/ — where Claude Code looks for user-scoped skills. */
+const CLAUDE_SKILLS_ROOT = join(homedir(), ".claude", "skills");
+
+/**
+ * Copy bundled skills into ~/.claude/skills/. Idempotent — overwrites
+ * existing files (so updates flow through on `claudemesh install` re-run).
+ * Returns the list of skill names installed.
+ */
+function installSkills(): string[] {
+  const src = resolveBundledSkillsDir();
+  if (!src) return [];
+  // Each subdirectory of skills/ is one skill (matches Claude Code convention).
+  const fs = require("node:fs") as typeof import("node:fs");
+  const installed: string[] = [];
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const srcDir = join(src, entry.name);
+    const dstDir = join(CLAUDE_SKILLS_ROOT, entry.name);
+    mkdirSync(dstDir, { recursive: true });
+    for (const file of fs.readdirSync(srcDir, { withFileTypes: true })) {
+      if (!file.isFile()) continue;
+      copyFileSync(join(srcDir, file.name), join(dstDir, file.name));
+    }
+    installed.push(entry.name);
+  }
+  return installed;
+}
+
+/** Remove claudemesh-shipped skills from ~/.claude/skills/. Returns names removed. */
+function uninstallSkills(): string[] {
+  const src = resolveBundledSkillsDir();
+  if (!src) return [];
+  const fs = require("node:fs") as typeof import("node:fs");
+  const removed: string[] = [];
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const dstDir = join(CLAUDE_SKILLS_ROOT, entry.name);
+    if (existsSync(dstDir)) {
+      try {
+        fs.rmSync(dstDir, { recursive: true, force: true });
+        removed.push(entry.name);
+      } catch { /* best effort */ }
+    }
+  }
+  return removed;
 }
 
 /**
@@ -170,9 +234,7 @@ function resolveEntry(): string {
  *   - Local dev (bun apps/cli/src/index.ts): use `bun <absolute-path>`.
  */
 function buildMcpEntry(entryPath: string): McpEntry {
-  const isBundled = entryPath.endsWith("/dist/index.js") ||
-    entryPath.endsWith("\\dist\\index.js");
-  if (isBundled) {
+  if (isBundledFile(entryPath)) {
     return {
       command: "claudemesh",
       args: ["mcp"],
@@ -374,191 +436,181 @@ function installStatusLine(): { installed: boolean } {
 
 export function runInstall(args: string[] = []): void {
   const skipHooks = args.includes("--no-hooks");
+  const skipSkill = args.includes("--no-skill");
   const wantStatusLine = args.includes("--status-line");
-  console.log("claudemesh install");
-  console.log("------------------");
+  render.section("claudemesh install");
 
   const entry = resolveEntry();
-  const isBundled = entry.endsWith("/dist/index.js") ||
-    entry.endsWith("\\dist\\index.js");
+  const bundled = isBundledFile(entry);
 
-  // Dev mode (running from src/) requires bun on PATH; bundled mode
-  // (npm install -g) just uses node + the claudemesh bin shim.
-  if (!isBundled && !bunAvailable()) {
-    console.error(
-      "✗ `bun` is not on PATH. Install Bun first: https://bun.com",
-    );
+  if (!bundled && !bunAvailable()) {
+    render.err("`bun` is not on PATH.", "Install Bun first: https://bun.com");
     process.exit(1);
   }
   if (!existsSync(entry)) {
-    console.error(`✗ MCP entry not found at ${entry}`);
+    render.err(`MCP entry not found at ${entry}`);
     process.exit(1);
   }
 
   const desired = buildMcpEntry(entry);
   const action = patchMcpServer(desired);
 
-  // Read-back verification.
   const verify = readClaudeConfig();
   const verifyServers = (verify.mcpServers ?? {}) as Record<string, McpEntry>;
   const stored = verifyServers[MCP_NAME];
   if (!stored || !entriesEqual(stored, desired)) {
-    console.error(
-      `✗ post-write verification failed — ${CLAUDE_CONFIG} may be corrupt`,
-    );
+    render.err("post-write verification failed", `${CLAUDE_CONFIG} may be corrupt`);
     process.exit(1);
   }
 
-  // ANSI color helpers — stick to 8-color set so terminals without
-  // truecolor still render. Fall back to plain if NO_COLOR or dumb TERM.
-  const useColor =
-    !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
-  const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
-  const yellow = (s: string) => (useColor ? `\x1b[33m${s}\x1b[39m` : s);
-  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
+  render.ok(`MCP server "${bold(MCP_NAME)}" ${action}`);
+  render.kv([
+    ["config", dim(CLAUDE_CONFIG)],
+    ["command", dim(`${desired.command}${desired.args?.length ? " " + desired.args.join(" ") : ""}`)],
+  ]);
 
-  console.log(`✓ MCP server "${MCP_NAME}" ${action}`);
-  console.log(dim(`  config:  ${CLAUDE_CONFIG}`));
-  console.log(
-    dim(
-      `  command: ${desired.command}${desired.args?.length ? " " + desired.args.join(" ") : ""}`,
-    ),
-  );
-
-  // allowedTools — pre-approve claudemesh MCP tools so peers don't need
-  // --dangerously-skip-permissions just to call mesh tools.
   try {
     const { added, unchanged } = installAllowedTools();
     if (added.length > 0) {
-      console.log(
-        `✓ allowedTools: ${added.length} claudemesh tools pre-approved${unchanged > 0 ? `, ${unchanged} already present` : ""}`,
+      render.ok(
+        `allowedTools: ${added.length} claudemesh tools pre-approved`,
+        unchanged > 0 ? `${unchanged} already present` : undefined,
       );
-      console.log(dim(`  This lets claudemesh tools run without --dangerously-skip-permissions.`));
-      console.log(dim(`  Your existing allowedTools entries were preserved.`));
+      render.info(dim("This lets claudemesh tools run without --dangerously-skip-permissions."));
+      render.info(dim("Your existing allowedTools entries were preserved."));
     } else {
-      console.log(`✓ allowedTools: all ${unchanged} claudemesh tools already pre-approved`);
+      render.ok(`allowedTools: all ${unchanged} claudemesh tools already pre-approved`);
     }
-    console.log(dim(`  config:  ${CLAUDE_SETTINGS}`));
+    render.info(dim(`  config:  ${CLAUDE_SETTINGS}`));
   } catch (e) {
-    console.error(
-      `⚠  allowedTools update failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    render.warn(`allowedTools update failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  // Hooks — status accuracy (Stop/UserPromptSubmit → POST /hook/set-status).
   if (!skipHooks) {
     try {
       const { added, unchanged } = installHooks();
       if (added > 0) {
-        console.log(
-          `✓ Hooks registered (Stop + UserPromptSubmit) → ${added} added, ${unchanged} already present`,
+        render.ok(
+          `Hooks registered (Stop + UserPromptSubmit)`,
+          `${added} added, ${unchanged} already present`,
         );
       } else {
-        console.log(`✓ Hooks already registered (${unchanged} present)`);
+        render.ok(`Hooks already registered`, `${unchanged} present`);
       }
-      console.log(dim(`  config:  ${CLAUDE_SETTINGS}`));
+      render.info(dim(`  config:  ${CLAUDE_SETTINGS}`));
     } catch (e) {
-      console.error(
-        `⚠  hook registration failed: ${e instanceof Error ? e.message : String(e)}`,
-      );
-      console.error(
-        "   (MCP is still installed — hooks just skip. Retry with --no-hooks to suppress.)",
+      render.warn(
+        `hook registration failed: ${e instanceof Error ? e.message : String(e)}`,
+        "MCP is still installed — hooks just skip. Retry with --no-hooks to suppress.",
       );
     }
   } else {
-    console.log(dim("· Hooks skipped (--no-hooks)"));
+    render.info(dim("· Hooks skipped (--no-hooks)"));
   }
 
-  // Opt-in status line (shows mesh + peer count in Claude Code).
+  // Claude skill — discoverability replacement for the (now-empty) MCP
+  // tool surface. Claude reads ~/.claude/skills/claudemesh/SKILL.md on
+  // demand, learns every CLI verb, JSON shape, and gotcha. See spec
+  // 2026-05-02 commitment #6.
+  if (!skipSkill) {
+    try {
+      const installed = installSkills();
+      if (installed.length > 0) {
+        render.ok(
+          `Claude skill${installed.length === 1 ? "" : "s"} installed`,
+          installed.join(", "),
+        );
+        render.info(dim(`  ${join(CLAUDE_SKILLS_ROOT, installed[0]!)}/SKILL.md`));
+      }
+    } catch (e) {
+      render.warn(`skill install failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  } else {
+    render.info(dim("· Skill install skipped (--no-skill)"));
+  }
+
   if (wantStatusLine) {
     try {
       const { installed } = installStatusLine();
       if (installed) {
-        console.log(`✓ Claude Code statusLine → \`claudemesh status-line\``);
-        console.log(dim(`  Shows: ◇ <mesh> · <online>/<total> online · <you>`));
+        render.ok(`Claude Code statusLine → ${clay("claudemesh status-line")}`);
+        render.info(dim("  Shows: ◇ <mesh> · <online>/<total> online · <you>"));
       } else {
-        console.log(dim("· statusLine already set to a custom command — left alone"));
+        render.info(dim("· statusLine already set to a custom command — left alone"));
       }
     } catch (e) {
-      console.error(`⚠  statusLine install failed: ${e instanceof Error ? e.message : String(e)}`);
+      render.warn(`statusLine install failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 
-  // Check if user has any meshes joined — nudge them if not.
   let hasMeshes = false;
   try {
     const meshConfig = readConfig();
     hasMeshes = meshConfig.meshes.length > 0;
-  } catch {
-    // Config missing or corrupt — treat as no meshes.
-  }
+  } catch {}
 
-  console.log("");
-  console.log(yellow(bold("⚠  RESTART CLAUDE CODE")) + yellow(" for MCP tools to appear."));
+  render.blank();
+  render.warn(`${bold("RESTART CLAUDE CODE")} ${yellow("for MCP tools to appear.")}`);
 
   if (!hasMeshes) {
-    console.log("");
-    console.log(yellow("No meshes joined.") + " To connect with peers:");
-    console.log(
-      `  ${bold("claudemesh <invite-url>")}` +
-        dim("   — joins + launches in one step"),
-    );
-    console.log(
-      `  ${dim("Create one at")} ${bold("https://claudemesh.com/dashboard")}`,
-    );
+    render.blank();
+    render.info(`${yellow("No meshes joined.")} To connect with peers:`);
+    render.info(`  ${bold("claudemesh <invite-url>")}${dim("   — joins + launches in one step")}`);
+    render.info(`  ${dim("Create one at")} ${bold("https://claudemesh.com/dashboard")}`);
   } else {
-    console.log("");
-    console.log(
-      `Next: ${bold("claudemesh")}` + dim("   — launch with your joined mesh"),
-    );
+    render.blank();
+    render.info(`Next: ${bold("claudemesh")}${dim("   — launch with your joined mesh")}`);
   }
 
-  console.log("");
-  console.log(dim("Optional:"));
-  console.log(dim(`  claudemesh url-handler install   # click-to-launch from email`));
-  console.log(dim(`  claudemesh install --status-line # live peer count in Claude Code`));
-  console.log(dim(`  claudemesh completions zsh       # shell completions`));
+  render.blank();
+  render.info(dim("Optional:"));
+  render.info(dim(`  claudemesh url-handler install   # click-to-launch from email`));
+  render.info(dim(`  claudemesh install --status-line # live peer count in Claude Code`));
+  render.info(dim(`  claudemesh completions zsh       # shell completions`));
 }
 
 export function runUninstall(): void {
-  console.log("claudemesh uninstall");
-  console.log("--------------------");
+  render.section("claudemesh uninstall");
 
-  // MCP entry — only removes claudemesh, never touches other servers.
   if (removeMcpServer()) {
-    console.log(`✓ MCP server "${MCP_NAME}" removed`);
+    render.ok(`MCP server "${bold(MCP_NAME)}" removed`);
   } else {
-    console.log(`· MCP server "${MCP_NAME}" not present`);
+    render.info(dim(`· MCP server "${MCP_NAME}" not present`));
   }
 
-  // allowedTools
   try {
     const removed = uninstallAllowedTools();
     if (removed > 0) {
-      console.log(`✓ allowedTools: ${removed} claudemesh tools removed`);
+      render.ok(`allowedTools: ${removed} claudemesh tools removed`);
     } else {
-      console.log("· No claudemesh allowedTools to remove");
+      render.info(dim("· No claudemesh allowedTools to remove"));
     }
   } catch (e) {
-    console.error(
-      `⚠  allowedTools removal failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    render.warn(`allowedTools removal failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  // Hooks
   try {
     const removed = uninstallHooks();
     if (removed > 0) {
-      console.log(`✓ Hooks removed (${removed} entries)`);
+      render.ok(`Hooks removed`, `${removed} entries`);
     } else {
-      console.log("· No claudemesh hooks to remove");
+      render.info(dim("· No claudemesh hooks to remove"));
     }
   } catch (e) {
-    console.error(
-      `⚠  hook removal failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
+    render.warn(`hook removal failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  console.log("");
-  console.log("Restart Claude Code to drop the MCP connection + hooks.");
+  try {
+    const removed = uninstallSkills();
+    if (removed.length > 0) {
+      render.ok(`Skill${removed.length === 1 ? "" : "s"} removed`, removed.join(", "));
+    } else {
+      render.info(dim("· No claudemesh skills to remove"));
+    }
+  } catch (e) {
+    render.warn(`skill removal failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  render.blank();
+  render.info("Restart Claude Code to drop the MCP connection + hooks.");
 }

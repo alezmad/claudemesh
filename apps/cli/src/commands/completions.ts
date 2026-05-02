@@ -8,6 +8,7 @@
  */
 
 import { EXIT } from "~/constants/exit-codes.js";
+import { render } from "~/ui/render.js";
 
 const COMMANDS = [
   "create", "new", "join", "add", "launch", "connect", "disconnect",
@@ -102,7 +103,7 @@ complete -c claudemesh -l join -d 'invite url'
 
 export async function runCompletions(shell: string | undefined): Promise<number> {
   if (!shell) {
-    console.error("Usage: claudemesh completions <bash|zsh|fish>");
+    render.err("Usage: claudemesh completions <bash|zsh|fish>");
     return EXIT.INVALID_ARGS;
   }
   switch (shell.toLowerCase()) {
@@ -116,7 +117,7 @@ export async function runCompletions(shell: string | undefined): Promise<number>
       process.stdout.write(fish());
       return EXIT.SUCCESS;
     default:
-      console.error(`Unsupported shell: ${shell}. Use bash, zsh, or fish.`);
+      render.err(`Unsupported shell: ${shell}`, "use bash, zsh, or fish.");
       return EXIT.INVALID_ARGS;
   }
 }

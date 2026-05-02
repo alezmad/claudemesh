@@ -14,13 +14,14 @@ import { withMesh } from "./connect.js";
 import { readConfig } from "~/services/config/facade.js";
 import { EXIT } from "~/constants/exit-codes.js";
 import { createHash } from "node:crypto";
+import { render } from "~/ui/render.js";
+import { bold, clay, dim } from "~/ui/styles.js";
 
 function safetyNumber(myPubkey: string, peerPubkey: string): string {
   const a = Buffer.from(myPubkey, "hex");
   const b = Buffer.from(peerPubkey, "hex");
   const [lo, hi] = Buffer.compare(a, b) < 0 ? [a, b] : [b, a];
   const hash = createHash("sha256").update(lo).update(hi).digest();
-  // Take first 15 bytes, split into 6 groups of 20 bits → 5 decimal digits each.
   const bits: number[] = [];
   for (let i = 0; i < 15; i++) {
     for (let b = 7; b >= 0; b--) {
@@ -40,20 +41,15 @@ export async function runVerify(
   target: string | undefined,
   opts: { mesh?: string; json?: boolean } = {},
 ): Promise<number> {
-  const useColor = !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
-  const bold = (s: string) => (useColor ? `\x1b[1m${s}\x1b[22m` : s);
-  const dim = (s: string) => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
-  const clay = (s: string) => (useColor ? `\x1b[38;2;217;119;87m${s}\x1b[39m` : s);
-
   const config = readConfig();
   const meshSlug = opts.mesh ?? config.meshes[0]?.slug;
   if (!meshSlug) {
-    console.error("  No meshes joined. Run `claudemesh join <url>` first.");
+    render.err("No meshes joined.", "Run `claudemesh join <url>` first.");
     return EXIT.NOT_FOUND;
   }
   const mesh = config.meshes.find((m) => m.slug === meshSlug);
   if (!mesh) {
-    console.error(`  Mesh "${meshSlug}" not found locally.`);
+    render.err(`Mesh "${meshSlug}" not found locally.`);
     return EXIT.NOT_FOUND;
   }
 
@@ -63,7 +59,7 @@ export async function runVerify(
       ? peers.filter((p) => p.displayName === target || p.pubkey === target || p.pubkey.startsWith(target))
       : peers;
     if (targets.length === 0) {
-      console.error(`  No peer matching "${target ?? "(all)"}" on mesh ${meshSlug}.`);
+      render.err(`No peer matching "${target ?? "(all)"}" on mesh ${meshSlug}.`);
       return EXIT.NOT_FOUND;
     }
 
@@ -77,19 +73,16 @@ export async function runVerify(
       return EXIT.SUCCESS;
     }
 
-    console.log("");
-    console.log(`  ${dim("— safety numbers on")} ${bold(meshSlug)}`);
-    console.log("");
+    render.section(`safety numbers on ${meshSlug}`);
     for (const p of targets) {
       const sn = safetyNumber(mesh.pubkey, p.pubkey);
-      console.log(`  ${bold(p.displayName)}`);
-      console.log(`  ${clay(sn)}`);
-      console.log(`  ${dim(`pubkey ${p.pubkey.slice(0, 16)}…`)}`);
-      console.log("");
+      process.stdout.write(`  ${bold(p.displayName)}\n`);
+      process.stdout.write(`  ${clay(sn)}\n`);
+      process.stdout.write(`  ${dim(`pubkey ${p.pubkey.slice(0, 16)}…`)}\n\n`);
     }
-    console.log(dim("  Compare these digits with your peer (phone, in person, not chat)."));
-    console.log(dim("  If they match on both sides, the channel is not being intercepted."));
-    console.log("");
+    render.hint("Compare these digits with your peer (phone, in person — not chat).");
+    render.hint("If they match on both sides, the channel is not being intercepted.");
+    render.blank();
     return EXIT.SUCCESS;
   });
 }

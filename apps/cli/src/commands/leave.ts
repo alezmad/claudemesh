@@ -6,20 +6,24 @@
  */
 
 import { readConfig, writeConfig } from "~/services/config/facade.js";
+import { render } from "~/ui/render.js";
+import { bold, dim } from "~/ui/styles.js";
+import { EXIT } from "~/constants/exit-codes.js";
 
-export function runLeave(args: string[]): void {
+export function runLeave(args: string[]): number {
   const slug = args[0];
   if (!slug) {
-    console.error("Usage: claudemesh leave <slug>");
-    process.exit(1);
+    render.err("Usage: claudemesh leave <slug>");
+    return EXIT.INVALID_ARGS;
   }
   const config = readConfig();
   const before = config.meshes.length;
   config.meshes = config.meshes.filter((m) => m.slug !== slug);
   if (config.meshes.length === before) {
-    console.error(`claudemesh: no joined mesh with slug "${slug}"`);
-    process.exit(1);
+    render.err(`no joined mesh with slug "${slug}"`);
+    return EXIT.NOT_FOUND;
   }
   writeConfig(config);
-  console.log(`Left mesh "${slug}". Remaining: ${config.meshes.length}`);
+  render.ok(`left ${bold(slug)}`, dim(`remaining: ${config.meshes.length}`));
+  return EXIT.SUCCESS;
 }

@@ -6,7 +6,8 @@ import { readConfig, getConfigPath } from "~/services/config/facade.js";
 import { getStoredToken } from "~/services/auth/facade.js";
 import { request } from "~/services/api/facade.js";
 import { URLS } from "~/constants/urls.js";
-import { bold, dim, green, yellow, red } from "~/ui/styles.js";
+import { bold, clay, dim, green, yellow } from "~/ui/styles.js";
+import { render } from "~/ui/render.js";
 
 const BROKER_HTTP = URLS.BROKER.replace("wss://", "https://").replace("ws://", "http://").replace("/ws", "");
 
@@ -45,26 +46,26 @@ export async function runList(): Promise<void> {
   const allSlugs = new Set([...localSlugs, ...serverSlugs]);
 
   if (allSlugs.size === 0) {
-    console.log("\n  No meshes yet.\n");
-    console.log("  Create one:  claudemesh mesh create <name>");
-    console.log("  Join one:    claudemesh mesh add <invite-url>\n");
+    render.section("no meshes yet");
+    render.info(`${dim("create one:")}  ${bold("claudemesh create")} ${clay("<name>")}`);
+    render.info(`${dim("join one:")}    ${bold("claudemesh")} ${clay("<invite-url>")}`);
+    render.blank();
     return;
   }
 
-  console.log("\n  Your meshes:\n");
+  render.section(`your meshes (${allSlugs.size})`);
 
   for (const slug of allSlugs) {
-    const local = config.meshes.find(m => m.slug === slug);
-    const server = serverMeshes.find(m => m.slug === slug);
+    const local = config.meshes.find((m) => m.slug === slug);
+    const server = serverMeshes.find((m) => m.slug === slug);
 
     const name = server?.name ?? local?.name ?? slug;
     const role = server?.role ?? "member";
     const isOwner = server?.is_owner ?? false;
-    const roleLabel = isOwner ? "owner" : role;
+    const roleLabel = isOwner ? clay("owner") : dim(role);
     const memberCount = server?.member_count;
     const activePeers = server?.active_peers ?? 0;
 
-    // Status indicator
     const inLocal = localSlugs.has(slug);
     const inServer = serverSlugs.has(slug);
     let status: string;
@@ -84,14 +85,14 @@ export async function runList(): Promise<void> {
     const memberInfo = memberCount ? dim(`${memberCount} member${memberCount !== 1 ? "s" : ""}`) : "";
     const parts = [roleLabel, memberInfo, status].filter(Boolean);
 
-    console.log(`    ${icon} ${bold(name)}  ${dim(slug)}`);
-    console.log(`      ${parts.join("  ·  ")}`);
+    process.stdout.write(`    ${icon} ${bold(name)}  ${dim(slug)}\n`);
+    process.stdout.write(`      ${parts.join(dim("  ·  "))}\n`);
   }
 
-  console.log("");
-  if (serverMeshes.some(m => !localSlugs.has(m.slug))) {
-    console.log(dim("    ○ = server only — run `claudemesh mesh add` to use locally"));
+  process.stdout.write("\n");
+  if (serverMeshes.some((m) => !localSlugs.has(m.slug))) {
+    render.hint(`${dim("○")}  = server only — run ${bold("claudemesh join")} to use locally`);
   }
-  console.log(dim(`    Config: ${getConfigPath()}`));
-  console.log("");
+  render.hint(`config: ${dim(getConfigPath())}`);
+  render.blank();
 }

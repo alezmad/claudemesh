@@ -7,11 +7,55 @@ import { VERSION } from "~/constants/urls.js";
 import { EXIT } from "~/constants/exit-codes.js";
 import { renderVersion } from "~/cli/output/version.js";
 import { isInviteUrl, normaliseInviteUrl } from "~/utils/url.js";
+import { classifyInvocation } from "~/cli/policy-classify.js";
+import { gate, type ApprovalMode } from "~/services/policy/index.js";
 
 installSignalHandlers();
 installErrorHandlers();
 
 const { command, positionals, flags } = parseArgv(process.argv);
+
+/**
+ * Resolve the coarse approval mode from CLI flags + env.
+ *   --approval-mode <plan|read-only|write|yolo>     explicit
+ *   -y / --yes                                       legacy: yolo
+ *   $CLAUDEMESH_APPROVAL_MODE                        env override
+ *   default                                          'write'
+ */
+function resolveApprovalMode(): ApprovalMode {
+  const raw = (flags["approval-mode"] as string | undefined)
+    ?? process.env.CLAUDEMESH_APPROVAL_MODE
+    ?? null;
+  if (raw === "plan" || raw === "read-only" || raw === "write" || raw === "yolo") return raw;
+  if (flags.y || flags.yes) return "yolo";
+  return "write";
+}
+
+/**
+ * Run the policy gate before dispatching a command. Returns `true` if the
+ * caller should proceed; on `false`, the process should exit non-zero.
+ *
+ * Off-mesh commands (help, login, install...) classify as `null` and skip
+ * the gate entirely — there's no broker to mutate.
+ */
+async function policyGate(): Promise<boolean> {
+  const cls = classifyInvocation(command, positionals);
+  if (!cls) return true;
+  const mode = resolveApprovalMode();
+  const yes = !!flags.y || !!flags.yes || mode === "yolo";
+  const ok = await gate(
+    {
+      resource: cls.resource,
+      verb: cls.verb,
+      mesh: flags.mesh as string | undefined,
+      mode,
+      isWrite: cls.isWrite,
+      yes,
+    },
+    { policyPath: flags.policy as string | undefined },
+  );
+  return ok;
+}
 
 const HELP = `
 claudemesh — peer mesh for Claude Code sessions
@@ -30,24 +74,64 @@ Mesh
   claudemesh delete [slug]         delete a mesh (alias: rm)
   claudemesh rename <slug> <name>  rename a mesh
   claudemesh share [email]         share mesh (invite link / send email)
-  claudemesh disconnect <peer>     soft disconnect (peer auto-reconnects)
-  claudemesh kick <peer>           end session (peer must manually rejoin)
-  claudemesh kick --stale 30m      kick peers idle > duration
-  claudemesh kick --all            kick everyone except yourself
-  claudemesh ban <peer>            kick + permanently revoke (can't rejoin)
-  claudemesh unban <peer>          lift a ban
-  claudemesh bans                  list banned members
 
-Messaging
-  claudemesh peers                 see who's online
-  claudemesh send <to> <msg>       send a message
-  claudemesh inbox                 drain pending messages
+Peer (resource form, recommended)
+  claudemesh peer list             see who's online           (alias: peers)
+  claudemesh peer kick <p>         end session                (alias: kick)
+  claudemesh peer disconnect <p>   soft disconnect            (alias: disconnect)
+  claudemesh peer ban <p>          ban + revoke               (alias: ban)
+  claudemesh peer unban <p>        lift a ban                 (alias: unban)
+  claudemesh peer bans             list banned members        (alias: bans)
+  claudemesh peer verify [p]       safety numbers             (alias: verify)
+
+Message  (resource form)
+  claudemesh message send <to> <m> send a message            (alias: send)
+  claudemesh message inbox         drain pending              (alias: inbox)
+  claudemesh message status <id>   delivery status            (alias: msg-status)
+
+Memory  (resource form)
+  claudemesh memory remember <txt> store a memory            (alias: remember)
+  claudemesh memory recall <q>     search memories            (alias: recall)
+  claudemesh memory forget <id>    remove a memory            (alias: forget)
+
+Profile / presence  (resource form)
+  claudemesh profile               view or edit profile
+  claudemesh profile summary <txt> broadcast summary          (alias: summary)
+  claudemesh profile visible y|n   toggle visibility          (alias: visible)
+  claudemesh profile status set X  set status idle/working/dnd  (alias: status set)
+  claudemesh group join @<name>    join a group (--role X)
+  claudemesh group leave @<name>   leave a group
+
+Schedule  (resource form)
+  claudemesh schedule msg <m>      one-shot or recurring     (alias: remind)
+  claudemesh schedule list         list pending
+  claudemesh schedule cancel <id>  remove a scheduled item
+
+State / mesh introspection
   claudemesh state get|set|list    shared state
-  claudemesh remember <text>       store a memory
-  claudemesh recall <query>        search memories
-  claudemesh remind ...            schedule a reminder
-  claudemesh profile               view or edit your profile
   claudemesh info                  mesh overview
+  claudemesh stats                 per-peer activity counters
+  claudemesh ping                  diagnostic round-trip
+
+Tasks
+  claudemesh task create <title>   create a new task [--assignee --priority --tags]
+  claudemesh task list             list tasks [--status --assignee]
+  claudemesh task claim <id>       claim an unclaimed task
+  claudemesh task complete <id>    mark task done [result]
+
+Platform
+  claudemesh vector store|search|delete|collections    embedding store
+  claudemesh graph query|execute "<cypher>"            graph operations
+  claudemesh context share|get|list                    work-context summaries
+  claudemesh stream create|publish|list                pub/sub event bus
+  claudemesh sql query|execute|schema                  per-mesh SQL
+  claudemesh skill list|get|remove                     mesh-published skills
+  claudemesh vault list|delete                         encrypted secrets
+  claudemesh watch list|remove                         URL change watchers
+  claudemesh webhook list|delete                       outbound HTTP triggers
+  claudemesh file list|status|delete                   shared mesh files
+  claudemesh mesh-mcp list|call|catalog                deployed mesh-MCP servers
+  claudemesh clock set|pause|resume                    mesh logical clock
 
 Auth
   claudemesh login                 sign in (browser or paste token)
@@ -79,13 +163,19 @@ Flags
   --help, -h                       show this help
   --json                           machine-readable output
   --mesh <slug>                    override mesh selection
-  -y, --yes                        skip confirmations
+  --approval-mode <mode>           plan | read-only | write (default) | yolo
+  --policy <path>                  override policy file
+  -y, --yes                        skip confirmations (= --approval-mode yolo)
   -q, --quiet                      suppress non-essential output
 `;
 
 async function main(): Promise<void> {
   if (flags.help || flags.h) { console.log(HELP); process.exit(EXIT.SUCCESS); }
   if (flags.version || flags.V) { console.log(renderVersion()); process.exit(EXIT.SUCCESS); }
+
+  // Policy gate — runs before any broker-touching command. Skipped for help,
+  // version, login/install, list, and other local-only ops via classifier.
+  if (!(await policyGate())) process.exit(EXIT.PERMISSION_DENIED);
 
   // Bare command or invite URL
   if (!command || isInviteUrl(command)) {
@@ -147,8 +237,8 @@ async function main(): Promise<void> {
     case "bans": { const { runBans } = await import("~/commands/ban.js"); process.exit(await runBans({ mesh: flags.mesh as string, json: !!flags.json })); break; }
 
     // Messaging
-    case "peers": { const { runPeers } = await import("~/commands/peers.js"); await runPeers({ mesh: flags.mesh as string, json: !!flags.json }); break; }
-    case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({}, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
+    case "peers": { const { runPeers } = await import("~/commands/peers.js"); await runPeers({ mesh: flags.mesh as string, json: flags.json as boolean | string | undefined }); break; }
+    case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json }, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
     case "inbox": { const { runInbox } = await import("~/commands/inbox.js"); await runInbox({ json: !!flags.json }); break; }
     case "state": {
       const sub = positionals[0];
@@ -158,10 +248,28 @@ async function main(): Promise<void> {
       break;
     }
     case "info": { const { runInfo } = await import("~/commands/info.js"); await runInfo({}); break; }
-    case "remember": { const { remember } = await import("~/commands/remember.js"); process.exit(await remember(positionals.join(" "), { tags: flags.tags as string, json: !!flags.json })); break; }
-    case "recall": { const { recall } = await import("~/commands/recall.js"); process.exit(await recall(positionals.join(" "), { json: !!flags.json })); break; }
+    case "remember": { const { remember } = await import("~/commands/remember.js"); process.exit(await remember(positionals.join(" "), { mesh: flags.mesh as string, tags: flags.tags as string, json: !!flags.json })); break; }
+    case "recall": { const { recall } = await import("~/commands/recall.js"); process.exit(await recall(positionals.join(" "), { mesh: flags.mesh as string, json: !!flags.json })); break; }
+    case "forget": { const { runForget } = await import("~/commands/broker-actions.js"); process.exit(await runForget(positionals[0], { mesh: flags.mesh as string, json: !!flags.json })); break; }
     case "remind": { const { runRemind } = await import("~/commands/remind.js"); await runRemind({ mesh: flags.mesh as string }, positionals); break; }
-    case "profile": { const { runProfile } = await import("~/commands/profile.js"); await runProfile(flags as any); break; }
+    // (profile case moved to resource-aliases block below for sub-command extensibility)
+
+    // Profile / status / visibility / groups (replacing soft-deprecated MCP tools)
+    case "summary": { const { runSummary } = await import("~/commands/broker-actions.js"); process.exit(await runSummary(positionals.join(" "), { mesh: flags.mesh as string, json: !!flags.json })); break; }
+    case "visible": { const { runVisible } = await import("~/commands/broker-actions.js"); process.exit(await runVisible(positionals[0], { mesh: flags.mesh as string, json: !!flags.json })); break; }
+    case "group": {
+      const sub = positionals[0];
+      if (sub === "join") { const { runGroupJoin } = await import("~/commands/broker-actions.js"); process.exit(await runGroupJoin(positionals[1], { mesh: flags.mesh as string, role: flags.role as string, json: !!flags.json })); }
+      else if (sub === "leave") { const { runGroupLeave } = await import("~/commands/broker-actions.js"); process.exit(await runGroupLeave(positionals[1], { mesh: flags.mesh as string, json: !!flags.json })); }
+      else { console.error("Usage: claudemesh group <join|leave> @<name> [--role X]"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+
+    // Mesh diagnostics + tasks
+    case "msg-status": { const { runMsgStatus } = await import("~/commands/broker-actions.js"); process.exit(await runMsgStatus(positionals[0], { mesh: flags.mesh as string, json: !!flags.json })); break; }
+    case "stats": { const { runStats } = await import("~/commands/broker-actions.js"); process.exit(await runStats({ mesh: flags.mesh as string, json: !!flags.json })); break; }
+    case "ping": { const { runPing } = await import("~/commands/broker-actions.js"); process.exit(await runPing({ mesh: flags.mesh as string, json: !!flags.json })); break; }
+    // (clock + task moved to platform-actions block below for sub-command extensibility)
 
     // Auth
     case "login": { const { login } = await import("~/commands/login.js"); process.exit(await login()); break; }
@@ -173,7 +281,18 @@ async function main(): Promise<void> {
     case "install": { const { runInstall } = await import("~/commands/install.js"); runInstall(positionals); break; }
     case "uninstall": { const { uninstall } = await import("~/commands/uninstall.js"); process.exit(await uninstall()); break; }
     case "doctor": { const { runDoctor } = await import("~/commands/doctor.js"); await runDoctor(); break; }
-    case "status": { const { runStatus } = await import("~/commands/status.js"); await runStatus(); break; }
+    case "status": {
+      // `claudemesh status set <state>` → set peer status (idle/working/dnd)
+      // `claudemesh status` (no args) → broker connectivity diagnostic
+      if (positionals[0] === "set") {
+        const { runStatusSet } = await import("~/commands/broker-actions.js");
+        process.exit(await runStatusSet(positionals[1] ?? "", { mesh: flags.mesh as string, json: !!flags.json }));
+      } else {
+        const { runStatus } = await import("~/commands/status.js");
+        await runStatus();
+      }
+      break;
+    }
     case "sync": { const { runSync } = await import("~/commands/sync.js"); await runSync({ force: !!flags.force }); break; }
 
     // Test
@@ -191,6 +310,206 @@ async function main(): Promise<void> {
     case "revoke": { const { runRevoke } = await import("~/commands/grants.js"); process.exit(await runRevoke(positionals[0], positionals.slice(1), { mesh: flags.mesh as string | undefined })); break; }
     case "block": { const { runBlock } = await import("~/commands/grants.js"); process.exit(await runBlock(positionals[0], { mesh: flags.mesh as string | undefined })); break; }
     case "grants": { const { runGrants } = await import("~/commands/grants.js"); process.exit(await runGrants({ mesh: flags.mesh as string | undefined, json: !!flags.json })); break; }
+
+    // ── Resource-model aliases (1.4.0) ─────────────────────────────────
+    // Each `<resource> <verb>` form proxies to the existing legacy verb.
+    // The legacy verbs (`send`, `peers`, `kick`, `remember`, ...) keep
+    // working so old scripts never break. Spec: 2026-05-02 commitment #2.
+
+    case "peer": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: flags.json as boolean | string | undefined };
+      const id = positionals[1] ?? "";
+      if (sub === "list") { const { runPeers } = await import("~/commands/peers.js"); await runPeers(f); }
+      else if (sub === "kick") { const { runKick } = await import("~/commands/kick.js"); process.exit(await runKick(id, { mesh: flags.mesh as string, stale: flags.stale as string, all: !!flags.all })); }
+      else if (sub === "disconnect") { const { runDisconnect } = await import("~/commands/kick.js"); process.exit(await runDisconnect(id, { mesh: flags.mesh as string, stale: flags.stale as string, all: !!flags.all })); }
+      else if (sub === "ban") { const { runBan } = await import("~/commands/ban.js"); process.exit(await runBan(id, { mesh: flags.mesh as string })); }
+      else if (sub === "unban") { const { runUnban } = await import("~/commands/ban.js"); process.exit(await runUnban(id, { mesh: flags.mesh as string })); }
+      else if (sub === "bans") { const { runBans } = await import("~/commands/ban.js"); process.exit(await runBans({ mesh: flags.mesh as string, json: !!flags.json })); }
+      else if (sub === "verify") { const { runVerify } = await import("~/commands/verify.js"); process.exit(await runVerify(id || undefined, { mesh: flags.mesh as string, json: !!flags.json })); }
+      else { console.error("Usage: claudemesh peer <list|kick|disconnect|ban|unban|bans|verify>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+
+    case "message": {
+      const sub = positionals[0];
+      if (sub === "send") { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json }, positionals[1] ?? "", positionals.slice(2).join(" ")); }
+      else if (sub === "inbox") { const { runInbox } = await import("~/commands/inbox.js"); await runInbox({ json: !!flags.json }); }
+      else if (sub === "status") { const { runMsgStatus } = await import("~/commands/broker-actions.js"); process.exit(await runMsgStatus(positionals[1], { mesh: flags.mesh as string, json: !!flags.json })); }
+      else { console.error("Usage: claudemesh message <send|inbox|status>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+
+    case "memory": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "remember") { const { remember } = await import("~/commands/remember.js"); process.exit(await remember(positionals.slice(1).join(" "), { ...f, tags: flags.tags as string })); }
+      else if (sub === "recall") { const { recall } = await import("~/commands/recall.js"); process.exit(await recall(positionals.slice(1).join(" "), f)); }
+      else if (sub === "forget") { const { runForget } = await import("~/commands/broker-actions.js"); process.exit(await runForget(positionals[1], f)); }
+      else { console.error("Usage: claudemesh memory <remember|recall|forget>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+
+    case "profile": {
+      const sub = positionals[0];
+      // `claudemesh profile` (no sub) → existing runProfile (interactive view/edit)
+      // `claudemesh profile summary "x"` → set summary
+      // `claudemesh profile visible true` → set visibility
+      // `claudemesh profile status set <state>` → set peer status
+      if (!sub) { const { runProfile } = await import("~/commands/profile.js"); await runProfile(flags as any); }
+      else if (sub === "summary") { const { runSummary } = await import("~/commands/broker-actions.js"); process.exit(await runSummary(positionals.slice(1).join(" "), { mesh: flags.mesh as string, json: !!flags.json })); }
+      else if (sub === "visible") { const { runVisible } = await import("~/commands/broker-actions.js"); process.exit(await runVisible(positionals[1], { mesh: flags.mesh as string, json: !!flags.json })); }
+      else if (sub === "status") {
+        // `profile status` (no further sub) → diagnostic via runStatus
+        // `profile status set <state>` → set peer status
+        if (positionals[1] === "set") { const { runStatusSet } = await import("~/commands/broker-actions.js"); process.exit(await runStatusSet(positionals[2] ?? "", { mesh: flags.mesh as string, json: !!flags.json })); }
+        else { const { runStatus } = await import("~/commands/status.js"); await runStatus(); }
+      }
+      else { console.error("Usage: claudemesh profile [summary|visible|status]"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+
+    case "schedule": {
+      // Aliases `remind` and its subcommands under a unified `schedule` verb.
+      // The unified `schedule webhook/tool` primitives need broker work and
+      // arrive in a later release — for now `schedule` only covers msg-style.
+      const sub = positionals[0];
+      if (sub === "msg" || sub === "remind" || sub === undefined || sub === "list" || sub === "cancel") {
+        const { runRemind } = await import("~/commands/remind.js");
+        // Translate `schedule msg ...` and bare `schedule list/cancel` into
+        // the legacy remind positional layout.
+        const remindPositionals =
+          sub === "msg"  ? positionals.slice(1)
+          : sub === "remind" ? positionals.slice(1)
+          : positionals; // list / cancel / undefined
+        await runRemind({ mesh: flags.mesh as string, in: flags.in as string, at: flags.at as string, cron: flags.cron as string, to: flags.to as string, json: !!flags.json }, remindPositionals);
+      }
+      else if (sub === "webhook" || sub === "tool") {
+        console.error(`  schedule ${sub} arrives in a later release — broker primitive not yet shipped`);
+        process.exit(EXIT.INVALID_ARGS);
+      }
+      else { console.error("Usage: claudemesh schedule <msg|list|cancel>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+
+    // Platform — vector / graph / context / stream / sql / skill / vault / watch / webhook / file / mesh-mcp
+    case "vector": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "store") { const { runVectorStore } = await import("~/commands/platform-actions.js"); process.exit(await runVectorStore(positionals[1] ?? "", positionals.slice(2).join(" "), { ...f, metadata: flags.metadata as string })); }
+      else if (sub === "search") { const { runVectorSearch } = await import("~/commands/platform-actions.js"); process.exit(await runVectorSearch(positionals[1] ?? "", positionals.slice(2).join(" "), { ...f, limit: flags.limit as string })); }
+      else if (sub === "delete") { const { runVectorDelete } = await import("~/commands/platform-actions.js"); process.exit(await runVectorDelete(positionals[1] ?? "", positionals[2] ?? "", f)); }
+      else if (sub === "collections") { const { runVectorCollections } = await import("~/commands/platform-actions.js"); process.exit(await runVectorCollections(f)); }
+      else { console.error("Usage: claudemesh vector <store|search|delete|collections>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "graph": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "query") { const { runGraphQuery } = await import("~/commands/platform-actions.js"); process.exit(await runGraphQuery(positionals.slice(1).join(" "), f)); }
+      else if (sub === "execute") { const { runGraphExecute } = await import("~/commands/platform-actions.js"); process.exit(await runGraphExecute(positionals.slice(1).join(" "), f)); }
+      else { console.error("Usage: claudemesh graph <query|execute> \"<cypher>\""); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "context": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "share") { const { runContextShare } = await import("~/commands/platform-actions.js"); process.exit(await runContextShare(positionals.slice(1).join(" "), { ...f, files: flags.files as string, findings: flags.findings as string, tags: flags.tags as string })); }
+      else if (sub === "get") { const { runContextGet } = await import("~/commands/platform-actions.js"); process.exit(await runContextGet(positionals.slice(1).join(" "), f)); }
+      else if (sub === "list") { const { runContextList } = await import("~/commands/platform-actions.js"); process.exit(await runContextList(f)); }
+      else { console.error("Usage: claudemesh context <share|get|list>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "stream": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "create") { const { runStreamCreate } = await import("~/commands/platform-actions.js"); process.exit(await runStreamCreate(positionals[1] ?? "", f)); }
+      else if (sub === "publish") { const { runStreamPublish } = await import("~/commands/platform-actions.js"); process.exit(await runStreamPublish(positionals[1] ?? "", positionals.slice(2).join(" "), f)); }
+      else if (sub === "list") { const { runStreamList } = await import("~/commands/platform-actions.js"); process.exit(await runStreamList(f)); }
+      else { console.error("Usage: claudemesh stream <create|publish|list>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "sql": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "query") { const { runSqlQuery } = await import("~/commands/platform-actions.js"); process.exit(await runSqlQuery(positionals.slice(1).join(" "), f)); }
+      else if (sub === "execute") { const { runSqlExecute } = await import("~/commands/platform-actions.js"); process.exit(await runSqlExecute(positionals.slice(1).join(" "), f)); }
+      else if (sub === "schema") { const { runSqlSchema } = await import("~/commands/platform-actions.js"); process.exit(await runSqlSchema(f)); }
+      else { console.error("Usage: claudemesh sql <query|execute|schema>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "skill": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "list") { const { runSkillList } = await import("~/commands/platform-actions.js"); process.exit(await runSkillList({ ...f, query: positionals[1] })); }
+      else if (sub === "get") { const { runSkillGet } = await import("~/commands/platform-actions.js"); process.exit(await runSkillGet(positionals[1] ?? "", f)); }
+      else if (sub === "remove") { const { runSkillRemove } = await import("~/commands/platform-actions.js"); process.exit(await runSkillRemove(positionals[1] ?? "", f)); }
+      else { console.error("Usage: claudemesh skill <list|get|remove>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "vault": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "list") { const { runVaultList } = await import("~/commands/platform-actions.js"); process.exit(await runVaultList(f)); }
+      else if (sub === "delete") { const { runVaultDelete } = await import("~/commands/platform-actions.js"); process.exit(await runVaultDelete(positionals[1] ?? "", f)); }
+      else { console.error("Usage: claudemesh vault <list|delete>  (set/get currently via MCP — needs crypto)"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "watch": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "list") { const { runWatchList } = await import("~/commands/platform-actions.js"); process.exit(await runWatchList(f)); }
+      else if (sub === "remove") { const { runUnwatch } = await import("~/commands/platform-actions.js"); process.exit(await runUnwatch(positionals[1] ?? "", f)); }
+      else { console.error("Usage: claudemesh watch <list|remove>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "webhook": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "list") { const { runWebhookList } = await import("~/commands/platform-actions.js"); process.exit(await runWebhookList(f)); }
+      else if (sub === "delete") { const { runWebhookDelete } = await import("~/commands/platform-actions.js"); process.exit(await runWebhookDelete(positionals[1] ?? "", f)); }
+      else { console.error("Usage: claudemesh webhook <list|delete>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "file": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "list") { const { runFileList } = await import("~/commands/platform-actions.js"); process.exit(await runFileList({ ...f, query: positionals[1] })); }
+      else if (sub === "status") { const { runFileStatus } = await import("~/commands/platform-actions.js"); process.exit(await runFileStatus(positionals[1] ?? "", f)); }
+      else if (sub === "delete") { const { runFileDelete } = await import("~/commands/platform-actions.js"); process.exit(await runFileDelete(positionals[1] ?? "", f)); }
+      else { console.error("Usage: claudemesh file <list|status|delete>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "mesh-mcp": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "list") { const { runMeshMcpList } = await import("~/commands/platform-actions.js"); process.exit(await runMeshMcpList(f)); }
+      else if (sub === "call") { const { runMeshMcpCall } = await import("~/commands/platform-actions.js"); process.exit(await runMeshMcpCall(positionals[1] ?? "", positionals[2] ?? "", positionals.slice(3).join(" "), f)); }
+      else if (sub === "catalog") { const { runMeshMcpCatalog } = await import("~/commands/platform-actions.js"); process.exit(await runMeshMcpCatalog(f)); }
+      else { console.error("Usage: claudemesh mesh-mcp <list|call|catalog>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+    case "clock": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "set") { const { runClockSet } = await import("~/commands/platform-actions.js"); process.exit(await runClockSet(positionals[1] ?? "", f)); }
+      else if (sub === "pause") { const { runClockPause } = await import("~/commands/platform-actions.js"); process.exit(await runClockPause(f)); }
+      else if (sub === "resume") { const { runClockResume } = await import("~/commands/platform-actions.js"); process.exit(await runClockResume(f)); }
+      else { const { runClock } = await import("~/commands/broker-actions.js"); process.exit(await runClock(f)); }
+      break;
+    }
+
+    // task — extends broker-actions.ts (claim/complete) with list/create
+    case "task": {
+      const sub = positionals[0];
+      const f = { mesh: flags.mesh as string, json: !!flags.json };
+      if (sub === "claim") { const { runTaskClaim } = await import("~/commands/broker-actions.js"); process.exit(await runTaskClaim(positionals[1], f)); }
+      else if (sub === "complete") { const { runTaskComplete } = await import("~/commands/broker-actions.js"); process.exit(await runTaskComplete(positionals[1], positionals.slice(2).join(" ") || undefined, f)); }
+      else if (sub === "list") { const { runTaskList } = await import("~/commands/platform-actions.js"); process.exit(await runTaskList({ ...f, status: flags.status as string, assignee: flags.assignee as string })); }
+      else if (sub === "create") { const { runTaskCreate } = await import("~/commands/platform-actions.js"); process.exit(await runTaskCreate(positionals.slice(1).join(" "), { ...f, assignee: flags.assignee as string, priority: flags.priority as string, tags: flags.tags as string })); }
+      else { console.error("Usage: claudemesh task <create|list|claim|complete>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
 
     // Internal
     case "mcp": { const { runMcp } = await import("~/commands/mcp.js"); await runMcp(); break; }

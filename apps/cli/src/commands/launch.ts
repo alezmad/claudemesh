@@ -25,6 +25,7 @@ import type { Config, JoinedMesh, GroupEntry } from "~/services/config/facade.js
 import { startCallbackListener, generatePairingCode } from "~/services/auth/facade.js";
 import { openBrowser } from "~/services/spawn/facade.js";
 import { BrokerClient } from "~/services/broker/facade.js";
+import { render } from "~/ui/render.js";
 
 // Flags as parsed by citty (index.ts is the source of truth for definitions).
 export interface LaunchFlags {
@@ -371,7 +372,7 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
 
   // 1. If --join, run join flow first.
   if (args.joinLink) {
-    console.log("Joining mesh...");
+    render.info(tDim("Joining mesh…"));
     const invite = await parseInviteLink(args.joinLink);
     const keypair = await generateKeypair();
     const displayName = (args.name ?? process.env.USER ?? process.env.USERNAME ?? hostname());
@@ -398,8 +399,9 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     });
     const { writeConfig } = await import("~/services/config/facade.js");
     writeConfig(config);
-    console.log(
-      `✓ Joined "${invite.payload.mesh_slug}"${enroll.alreadyMember ? " (already member)" : ""}`,
+    render.ok(
+      `joined ${tBold(invite.payload.mesh_slug)}`,
+      enroll.alreadyMember ? "already member" : undefined,
     );
   }
 
@@ -483,7 +485,7 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   }
 
   if (config.meshes.length === 0) {
-    console.error("No meshes joined. Run `claudemesh join <url>` or use --join <url>.");
+    render.err("No meshes joined.", "Run `claudemesh join <url>` or use --join <url>.");
     process.exit(1);
   }
 
@@ -492,8 +494,9 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   if (args.meshSlug) {
     const found = config.meshes.find((m) => m.slug === args.meshSlug);
     if (!found) {
-      console.error(
-        `Mesh "${args.meshSlug}" not found. Joined: ${config.meshes.map((m) => m.slug).join(", ")}`,
+      render.err(
+        `Mesh "${args.meshSlug}" not found.`,
+        `Joined: ${config.meshes.map((m) => m.slug).join(", ")}`,
       );
       process.exit(1);
     }
@@ -806,9 +809,9 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   if (result.error) {
     const err = result.error as NodeJS.ErrnoException;
     if (err.code === "ENOENT") {
-      console.error("✗ `claude` not found on PATH. Install Claude Code first.");
+      render.err("`claude` not found on PATH.", "Install Claude Code first.");
     } else {
-      console.error(`✗ failed to launch claude: ${err.message}`);
+      render.err(`failed to launch claude: ${err.message}`);
     }
     process.exit(1);
   }

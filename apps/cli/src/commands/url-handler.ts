@@ -20,6 +20,8 @@ import { existsSync, mkdirSync, writeFileSync, rmSync, chmodSync } from "node:fs
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { EXIT } from "~/constants/exit-codes.js";
+import { render } from "~/ui/render.js";
+import { dim } from "~/ui/styles.js";
 
 function resolveClaudemeshBin(): string {
   // argv[1] points to the running binary; prefer that over $PATH so we
@@ -80,10 +82,9 @@ EOF
   // Re-register with Launch Services so the scheme resolves here.
   const lsreg = spawnSync("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister", ["-f", appDir], { encoding: "utf-8" });
   if (lsreg.status !== 0) {
-    console.log("  ⚠ lsregister returned non-zero; scheme may not activate until Finder rescans.");
+    render.warn("lsregister returned non-zero", "scheme may not activate until Finder rescans.");
   }
-  console.log(`  ✓ Registered claudemesh:// scheme on macOS`);
-  console.log(`    app bundle: ${appDir}`);
+  render.ok("registered claudemesh:// scheme on macOS", dim(appDir));
   return EXIT.SUCCESS;
 }
 
@@ -106,12 +107,11 @@ NoDisplay=true
 
   const xdg1 = spawnSync("xdg-mime", ["default", "claudemesh.desktop", "x-scheme-handler/claudemesh"], { encoding: "utf-8" });
   if (xdg1.status !== 0) {
-    console.log("  ⚠ xdg-mime not available — skipped mime default registration");
+    render.warn("xdg-mime not available — skipped mime default registration");
   }
   const xdg2 = spawnSync("update-desktop-database", [appsDir], { encoding: "utf-8" });
   xdg2.status ?? 0; // best effort
-  console.log(`  ✓ Registered claudemesh:// scheme on Linux`);
-  console.log(`    desktop entry: ${desktopPath}`);
+  render.ok("registered claudemesh:// scheme on Linux", dim(desktopPath));
   return EXIT.SUCCESS;
 }
 
@@ -131,30 +131,30 @@ function installWindows(): number {
   writeFileSync(regPath, lines.join("\r\n"));
   const res = spawnSync("reg.exe", ["import", regPath], { encoding: "utf-8" });
   if (res.status !== 0) {
-    console.log(`  ⚠ reg.exe import failed. Manual: double-click ${regPath}`);
+    render.warn("reg.exe import failed", `manual: double-click ${regPath}`);
     return EXIT.INTERNAL_ERROR;
   }
-  console.log(`  ✓ Registered claudemesh:// scheme on Windows`);
+  render.ok("registered claudemesh:// scheme on Windows");
   return EXIT.SUCCESS;
 }
 
 function uninstallDarwin(): number {
   const appDir = join(homedir(), "Library", "Application Support", "claudemesh", "ClaudemeshHandler.app");
   if (existsSync(appDir)) rmSync(appDir, { recursive: true, force: true });
-  console.log("  ✓ Removed claudemesh:// handler on macOS");
+  render.ok("removed claudemesh:// handler on macOS");
   return EXIT.SUCCESS;
 }
 
 function uninstallLinux(): number {
   const desktopPath = join(homedir(), ".local", "share", "applications", "claudemesh.desktop");
   if (existsSync(desktopPath)) rmSync(desktopPath, { force: true });
-  console.log("  ✓ Removed claudemesh:// handler on Linux");
+  render.ok("removed claudemesh:// handler on Linux");
   return EXIT.SUCCESS;
 }
 
 function uninstallWindows(): number {
   spawnSync("reg.exe", ["delete", "HKCU\\Software\\Classes\\claudemesh", "/f"], { encoding: "utf-8" });
-  console.log("  ✓ Removed claudemesh:// handler on Windows");
+  render.ok("removed claudemesh:// handler on Windows");
   return EXIT.SUCCESS;
 }
 
@@ -170,9 +170,9 @@ export async function runUrlHandler(action: string | undefined): Promise<number>
     if (p === "linux") return uninstallLinux();
     if (p === "win32") return uninstallWindows();
   } else {
-    console.error("Usage: claudemesh url-handler <install|uninstall>");
+    render.err("Usage: claudemesh url-handler <install|uninstall>");
     return EXIT.INVALID_ARGS;
   }
-  console.error(`Unsupported platform: ${p}`);
+  render.err(`Unsupported platform: ${p}`);
   return EXIT.INTERNAL_ERROR;
 }

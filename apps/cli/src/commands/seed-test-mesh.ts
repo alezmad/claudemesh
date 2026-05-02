@@ -10,21 +10,17 @@
  */
 
 import { readConfig, writeConfig } from "~/services/config/facade.js";
+import { render } from "~/ui/render.js";
+import { bold, dim } from "~/ui/styles.js";
 
 export function runSeedTestMesh(args: string[]): void {
   const [brokerUrl, meshId, memberId, pubkey, slug] = args;
   if (!brokerUrl || !meshId || !memberId || !pubkey || !slug) {
-    console.error(
-      "Usage: claudemesh seed-test-mesh <broker-ws-url> <mesh-id> <member-id> <pubkey> <slug>",
-    );
-    console.error("");
-    console.error(
-      'Example: claudemesh seed-test-mesh "ws://localhost:7900/ws" mesh-123 member-abc aaa..aaa smoke-test',
-    );
+    render.err("Usage: claudemesh seed-test-mesh <broker-ws-url> <mesh-id> <member-id> <pubkey> <slug>");
+    render.info(dim('Example: claudemesh seed-test-mesh "ws://localhost:7900/ws" mesh-123 member-abc aaa..aaa smoke-test'));
     process.exit(1);
   }
   const config = readConfig();
-  // Remove any prior entry with same slug (idempotent).
   config.meshes = config.meshes.filter((m) => m.slug !== slug);
   config.meshes.push({
     meshId,
@@ -32,13 +28,11 @@ export function runSeedTestMesh(args: string[]): void {
     slug,
     name: `Test: ${slug}`,
     pubkey,
-    secretKey: "dev-only-stub", // real keypair generated during join in Step 17
+    secretKey: "dev-only-stub",
     brokerUrl,
     joinedAt: new Date().toISOString(),
   });
   writeConfig(config);
-  console.log(`Seeded mesh "${slug}" (${meshId}) into local config.`);
-  console.log(
-    `Run \`claudemesh mcp\` to connect, or register with Claude Code via \`claudemesh install\`.`,
-  );
+  render.ok(`seeded ${bold(slug)}`, dim(meshId));
+  render.hint(`run ${bold("claudemesh mcp")} to connect, or register with Claude Code via ${bold("claudemesh install")}`);
 }

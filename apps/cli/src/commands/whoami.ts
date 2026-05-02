@@ -1,5 +1,6 @@
 import { whoAmI } from "~/services/auth/facade.js";
-import { dim, icons } from "~/ui/styles.js";
+import { render } from "~/ui/render.js";
+import { bold, dim } from "~/ui/styles.js";
 import { EXIT } from "~/constants/exit-codes.js";
 
 export async function whoami(opts: { json?: boolean }): Promise<number> {
@@ -11,16 +12,19 @@ export async function whoami(opts: { json?: boolean }): Promise<number> {
   }
 
   if (!result.signed_in) {
-    console.log(`  Not signed in. Run \`claudemesh login\` to sign in.`);
+    render.err("Not signed in", "Run `claudemesh login` to sign in.");
     return EXIT.AUTH_FAILED;
   }
 
-  console.log(`\n  Signed in as ${result.user!.display_name} (${result.user!.email})`);
-  console.log(`  Token source: ${result.token_source} ${dim("(~/.claudemesh/auth.json)")}`);
-  if (result.meshes) {
-    console.log(`  Meshes: ${result.meshes.owned} owned, ${result.meshes.guest} guest`);
-  }
-  console.log();
+  render.section("whoami");
+  render.kv([
+    ["user", `${bold(result.user!.display_name)} ${dim(`(${result.user!.email})`)}`],
+    ["token", `${result.token_source} ${dim("(~/.claudemesh/auth.json)")}`],
+    ...(result.meshes
+      ? [["meshes", `${result.meshes.owned} owned · ${result.meshes.guest} guest`] as [string, string]]
+      : []),
+  ]);
+  render.blank();
 
   return EXIT.SUCCESS;
 }
