@@ -52,14 +52,50 @@ claudemesh topic history deploys --limit 50              # fetch back-scroll
 claudemesh topic history deploys --before <msg-id>       # paginate older
 claudemesh topic read deploys                            # mark all as read
 
-# Send to a topic — same `send` verb, target starts with #
+# Send to a topic — same `send` verb, target starts with # (WS, v1 plaintext)
 claudemesh send "#deploys" "rolling out 1.5.1 to staging"
+
+# v1.7.0+: live tail in the terminal — backfill last N + then SSE forward.
+# Decrypts v2 messages on render. Runs a 30s re-seal loop while held.
+claudemesh topic tail deploys --limit 50
+
+# v1.8.0+: encrypted REST send (body_version 2). Falls back to v1
+# automatically for legacy unencrypted topics. --plaintext forces v1.
+claudemesh topic post deploys "rolling out, cc @Alexis stay around"
 ```
 
 When to use topics vs groups vs DM:
 - **DM** (`send <peer>`) — 1:1, ephemeral.
 - **Group** (`send "@frontend"`) — addresses everyone in a group; ephemeral; for coordinating teams.
 - **Topic** (`send "#deploys"`) — durable conversation room; for ongoing work threads, incident channels, build-status feeds.
+
+### `member` — mesh roster + online state (v1.7.0)
+
+Distinct from `peer list`: members shows the static roster (every joined member of a mesh, online or not), peers shows the live WS-connected sessions plus REST-active humans.
+
+```bash
+claudemesh member list                                   # everyone, with status dots
+claudemesh member list --online                          # only online
+claudemesh member list --mesh deploys --json
+```
+
+Status glyphs: `●` emerald = idle, `●` clay = working, `●` red = dnd, `○` dim = offline. `bot` tag appears on non-human members.
+
+### `notification` — recent @-mentions (v1.7.0)
+
+Server-side write-time fan-out from `mesh.notification` — one row per recipient per matching `@-mention`. Works for both v1 plaintext and v2 ciphertext (clients send the mention list explicitly on v2).
+
+```bash
+claudemesh notification list                             # last 24h, all mentions of you
+claudemesh notification list --since 2026-05-01T00:00Z   # incremental for polling
+claudemesh notification list --json                      # parseable
+```
+
+### Per-topic encryption (v0.3.0 / CLI 1.8.0)
+
+Topics created on or after CLI 1.8.0 generate a 32-byte XSalsa20-Poly1305 symmetric key sealed for each member via `crypto_box`. The broker holds ciphertext only. `topic post` encrypts; `topic tail` decrypts. The `🔒 v2` glyph in tail output marks ciphertext rounds. v1 plaintext topics keep working unchanged.
+
+When a new member joins an encrypted topic, they get a 404 from `GET /v1/topics/:name/key` until any holder re-seals for them. `topic tail` runs a 30s background loop that does the re-seal automatically while the tail is open. Otherwise the joiner waits for someone with the key to log in.
 
 ### `peer` — read connected peers + admin (kick / ban / verify)
 
