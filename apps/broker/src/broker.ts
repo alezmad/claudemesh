@@ -634,7 +634,7 @@ async function generateTopicKeyBundle(): Promise<{
   senderPubkey: Uint8Array;
   senderPubkeyHex: string;
 }> {
-  const sodium = await import("libsodium-wrappers");
+  const sodium = (await import("libsodium-wrappers")).default;
   await sodium.ready;
   const topicKey = sodium.randombytes_buf(32);
   const sender = sodium.crypto_box_keypair();
@@ -674,7 +674,7 @@ async function sealTopicKeyForMember(args: {
     .where(eq(memberTable.id, args.memberId));
   if (!member) return;
 
-  const sodium = await import("libsodium-wrappers");
+  const sodium = (await import("libsodium-wrappers")).default;
   await sodium.ready;
   let recipientX25519: Uint8Array;
   try {
