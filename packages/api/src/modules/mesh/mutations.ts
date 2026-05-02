@@ -148,12 +148,46 @@ export const createMyMesh = async ({
       rootKey,
     })
     .returning({ id: mesh.id, slug: mesh.slug });
+  if (!created) throw new Error("mesh insert returned no row");
 
-  if (created) {
-    await ensureGeneralTopic(created.id);
+  // Create the owner's peer-identity member row. Mirrors what the broker
+  // does on first WS hello so a web-only user has a valid identity from
+  // t=0 — without this, the topic chat can't issue a dashboard apikey
+  // (issuedByMemberId is a FK), and the owner's "oldest member row in
+  // the mesh" lookup returns null. Fresh ed25519 keypair; secret key is
+  // discarded because web users don't sign anything in v0.2.0 (no DMs,
+  // base64 plaintext on topics). If they later install the CLI, the
+  // broker will mint a separate member row with a CLI-side keypair —
+  // both work for their respective surfaces.
+  const peerKp = s.crypto_sign_keypair();
+  const peerPubkey = s.to_hex(peerKp.publicKey);
+  const [ownerMember] = await db
+    .insert(meshMember)
+    .values({
+      meshId: created.id,
+      peerPubkey,
+      displayName: `${input.name}-owner`,
+      role: "admin",
+      userId,
+      dashboardUserId: userId,
+    })
+    .returning({ id: meshMember.id });
+  if (!ownerMember) throw new Error("owner member insert returned no row");
+
+  // Auto-create #general and subscribe the owner as 'lead'.
+  const generalTopic = await ensureGeneralTopic(created.id);
+  if (generalTopic) {
+    await db
+      .insert(meshTopicMember)
+      .values({
+        topicId: generalTopic.id,
+        memberId: ownerMember.id,
+        role: "lead",
+      })
+      .onConflictDoNothing();
   }
 
-  return created!;
+  return created;
 };
 
 /**
