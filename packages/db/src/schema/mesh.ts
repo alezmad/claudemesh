@@ -1483,3 +1483,79 @@ export const insertMeshTopicMessageSchema =
   createInsertSchema(meshTopicMessage);
 export type SelectMeshTopicMessage = typeof meshTopicMessage.$inferSelect;
 export type InsertMeshTopicMessage = typeof meshTopicMessage.$inferInsert;
+
+/* ────────────────────────────────────────────────────────────────────────
+ * API keys (v0.2.0) — REST + external WS auth.
+ *
+ * Spec: .artifacts/specs/2026-05-02-v0.2.0-scope.md
+ *
+ * REST is the human interface to claudemesh (humans don't have
+ * browser-side ed25519, so they can't do hello-sig auth like agents do).
+ * Same key model serves external scripts, bots, mobile apps, Zapier-style
+ * integrations.
+ *
+ * Auth model: bearer token. Server stores Argon2id hash of the secret;
+ * the secret is shown to the user once at creation and never again.
+ * Capabilities + topic_scopes constrain what the key can do — a CI bot
+ * key gets `["send", "read"]` on `["#deploys"]` only, never the whole mesh.
+ * ──────────────────────────────────────────────────────────────────────── */
+
+export const apiKeyCapabilityEnum = meshSchema.enum("api_key_capability", [
+  "send",        // POST /messages
+  "read",        // GET /messages, /peers, /state
+  "state_write", // POST /state
+  "admin",       // issue/revoke other keys, delete topics, etc.
+]);
+
+export const meshApiKey = meshSchema.table(
+  "api_key",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    /** Human-readable label for the key (shown in CLI list, dashboard UI). */
+    label: text().notNull(),
+    /** Argon2id hash of the secret. The secret itself is never stored. */
+    secretHash: text().notNull(),
+    /** First 8 chars of the secret, plaintext — for display in lists. */
+    secretPrefix: text().notNull(),
+    /** Granted capabilities. Empty = no permissions; key is a stub. */
+    capabilities: jsonb()
+      .$type<Array<"send" | "read" | "state_write" | "admin">>()
+      .notNull()
+      .default([]),
+    /**
+     * Topic-scope whitelist (#topic ids or names). Null = all topics in
+     * the mesh; explicit array = only these. Empty array = nothing —
+     * functionally a disabled key.
+     */
+    topicScopes: jsonb().$type<string[]>(),
+    /** Issuer's member id — for audit trail. Null if issued by a service. */
+    issuedByMemberId: text().references(() => meshMember.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: timestamp().defaultNow().notNull(),
+    lastUsedAt: timestamp(),
+    revokedAt: timestamp(),
+    expiresAt: timestamp(),
+  },
+  (t) => [
+    index("api_key_by_mesh").on(t.meshId),
+    index("api_key_by_prefix").on(t.secretPrefix),
+  ],
+);
+
+export const meshApiKeyRelations = relations(meshApiKey, ({ one }) => ({
+  mesh: one(mesh, { fields: [meshApiKey.meshId], references: [mesh.id] }),
+  issuedBy: one(meshMember, {
+    fields: [meshApiKey.issuedByMemberId],
+    references: [meshMember.id],
+  }),
+}));
+
+export const selectMeshApiKeySchema = createSelectSchema(meshApiKey);
+export const insertMeshApiKeySchema = createInsertSchema(meshApiKey);
+export type SelectMeshApiKey = typeof meshApiKey.$inferSelect;
+export type InsertMeshApiKey = typeof meshApiKey.$inferInsert;

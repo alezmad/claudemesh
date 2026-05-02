@@ -32,6 +32,7 @@ import { db } from "./db";
 import {
   invite as inviteTable,
   mesh,
+  meshApiKey,
   meshFile,
   meshFileAccess,
   meshFileKey,
@@ -780,6 +781,190 @@ export async function markTopicRead(args: {
         eq(meshTopicMember.memberId, args.memberId),
       ),
     );
+}
+
+// --- API keys (v0.2.0) ---
+//
+// Bearer-token auth for REST + external WS. Keys are 32 bytes of CSPRNG
+// rendered as base32, stored as Argon2id hashes. Capabilities + topic
+// scopes are enforced at the route layer in apps/web (REST) and at the
+// hello layer in the broker (external WS, future).
+//
+// Spec: .artifacts/specs/2026-05-02-v0.2.0-scope.md
+
+import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
+
+/** Generate a fresh API key secret. Returns the plaintext (show once),
+ * its prefix (8 chars, displayable), and a SHA-256 hash for storage.
+ * (We use SHA-256 here, not Argon2 — these are random 256-bit secrets,
+ * not low-entropy passwords; brute force isn't a threat. Argon2 is for
+ * humans typing memorable passwords. The trade-off is ~100x faster
+ * verification on the request hot path with no real security loss.)
+ */
+function newApiKeySecret(): { plaintext: string; prefix: string; hash: string } {
+  const bytes = randomBytes(32);
+  const plaintext = "cm_" + bytes.toString("base64url");
+  const prefix = plaintext.slice(0, 11); // "cm_" + 8 chars
+  const hash = createHash("sha256").update(plaintext).digest("hex");
+  return { plaintext, prefix, hash };
+}
+
+/** Issue a new API key. Returns the plaintext secret (show ONCE) plus
+ * the persisted key record. */
+export async function createApiKey(args: {
+  meshId: string;
+  label: string;
+  capabilities: Array<"send" | "read" | "state_write" | "admin">;
+  topicScopes?: string[] | null;
+  issuedByMemberId?: string;
+  expiresAt?: Date;
+}): Promise<{
+  id: string;
+  secret: string;
+  label: string;
+  prefix: string;
+  capabilities: Array<"send" | "read" | "state_write" | "admin">;
+  topicScopes: string[] | null;
+  createdAt: Date;
+}> {
+  const { plaintext, prefix, hash } = newApiKeySecret();
+  const [row] = await db
+    .insert(meshApiKey)
+    .values({
+      meshId: args.meshId,
+      label: args.label,
+      secretHash: hash,
+      secretPrefix: prefix,
+      capabilities: args.capabilities,
+      topicScopes: args.topicScopes ?? null,
+      issuedByMemberId: args.issuedByMemberId ?? null,
+      expiresAt: args.expiresAt,
+    })
+    .returning({
+      id: meshApiKey.id,
+      label: meshApiKey.label,
+      capabilities: meshApiKey.capabilities,
+      topicScopes: meshApiKey.topicScopes,
+      createdAt: meshApiKey.createdAt,
+    });
+  if (!row) throw new Error("failed to create api key");
+  return {
+    id: row.id,
+    secret: plaintext,
+    label: row.label,
+    prefix,
+    capabilities: row.capabilities ?? [],
+    topicScopes: row.topicScopes ?? null,
+    createdAt: row.createdAt,
+  };
+}
+
+/** List API keys for a mesh (without revealing hashes/secrets). */
+export async function listApiKeys(meshId: string): Promise<
+  Array<{
+    id: string;
+    label: string;
+    prefix: string;
+    capabilities: Array<"send" | "read" | "state_write" | "admin">;
+    topicScopes: string[] | null;
+    createdAt: Date;
+    lastUsedAt: Date | null;
+    revokedAt: Date | null;
+    expiresAt: Date | null;
+  }>
+> {
+  const rows = await db
+    .select({
+      id: meshApiKey.id,
+      label: meshApiKey.label,
+      prefix: meshApiKey.secretPrefix,
+      capabilities: meshApiKey.capabilities,
+      topicScopes: meshApiKey.topicScopes,
+      createdAt: meshApiKey.createdAt,
+      lastUsedAt: meshApiKey.lastUsedAt,
+      revokedAt: meshApiKey.revokedAt,
+      expiresAt: meshApiKey.expiresAt,
+    })
+    .from(meshApiKey)
+    .where(eq(meshApiKey.meshId, meshId))
+    .orderBy(desc(meshApiKey.createdAt));
+  return rows.map((r) => ({
+    id: r.id,
+    label: r.label,
+    prefix: r.prefix,
+    capabilities: r.capabilities ?? [],
+    topicScopes: r.topicScopes ?? null,
+    createdAt: r.createdAt,
+    lastUsedAt: r.lastUsedAt,
+    revokedAt: r.revokedAt,
+    expiresAt: r.expiresAt,
+  }));
+}
+
+/** Revoke an API key. Idempotent. */
+export async function revokeApiKey(args: { meshId: string; id: string }): Promise<void> {
+  await db
+    .update(meshApiKey)
+    .set({ revokedAt: new Date() })
+    .where(and(eq(meshApiKey.meshId, args.meshId), eq(meshApiKey.id, args.id)));
+}
+
+/**
+ * Verify an API key secret. Returns the matched key record if the
+ * secret hashes match a non-revoked, non-expired row in the given mesh
+ * (or any mesh, if meshId omitted). Constant-time comparison so timing
+ * leaks don't reveal which keys exist.
+ */
+export async function verifyApiKey(args: {
+  secret: string;
+  meshId?: string;
+}): Promise<{
+  id: string;
+  meshId: string;
+  capabilities: Array<"send" | "read" | "state_write" | "admin">;
+  topicScopes: string[] | null;
+} | null> {
+  if (!args.secret.startsWith("cm_")) return null;
+  const prefix = args.secret.slice(0, 11);
+  const hash = createHash("sha256").update(args.secret).digest("hex");
+  const candidates = await db
+    .select({
+      id: meshApiKey.id,
+      meshId: meshApiKey.meshId,
+      secretHash: meshApiKey.secretHash,
+      capabilities: meshApiKey.capabilities,
+      topicScopes: meshApiKey.topicScopes,
+      revokedAt: meshApiKey.revokedAt,
+      expiresAt: meshApiKey.expiresAt,
+    })
+    .from(meshApiKey)
+    .where(
+      args.meshId
+        ? and(eq(meshApiKey.meshId, args.meshId), eq(meshApiKey.secretPrefix, prefix))
+        : eq(meshApiKey.secretPrefix, prefix),
+    );
+  const now = new Date();
+  for (const c of candidates) {
+    if (c.revokedAt) continue;
+    if (c.expiresAt && c.expiresAt < now) continue;
+    const a = Buffer.from(c.secretHash, "hex");
+    const b = Buffer.from(hash, "hex");
+    if (a.length !== b.length) continue;
+    if (!timingSafeEqual(a, b)) continue;
+    // Update last_used_at lazily — best-effort, don't block on it.
+    void db
+      .update(meshApiKey)
+      .set({ lastUsedAt: now })
+      .where(eq(meshApiKey.id, c.id))
+      .catch(() => {});
+    return {
+      id: c.id,
+      meshId: c.meshId,
+      capabilities: c.capabilities ?? [],
+      topicScopes: c.topicScopes ?? null,
+    };
+  }
+  return null;
 }
 
 // --- Shared state ---
