@@ -180,6 +180,8 @@ export function TopicChatPanel({
     start: number;
     selected: number;
   } | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const seenIdsRef = useRef<Set<string>>(new Set());
@@ -344,11 +346,14 @@ export function TopicChatPanel({
   }, [apiKeySecret, topicName, markRead]);
 
   useEffect(() => {
+    // Don't yank scroll while the user is searching — they're reading
+    // matches, not the live tail.
+    if (searchQuery.trim()) return;
     scrollRef.current?.scrollTo({
       top: scrollRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages.length]);
+  }, [messages.length, searchQuery]);
 
   // Member name lookup for autocomplete. Filtered by case-insensitive
   // prefix match on displayName; shorter names rank higher so e.g. "@al"
@@ -457,6 +462,19 @@ export function TopicChatPanel({
 
   const onlineCount = members.filter((m) => m.online).length;
 
+  // Client-side search over loaded messages. Decodes once per query so
+  // we can filter on plaintext, then highlights matches in render.
+  // Server-side fulltext lands when we move ciphertext to per-topic
+  // keys (v0.3.0) — until then there's no server index to query.
+  const searchTerm = searchQuery.trim().toLowerCase();
+  const filteredMessages = useMemo(() => {
+    if (!searchTerm) return messages;
+    return messages.filter((m) =>
+      decodeIncoming(m.ciphertext).toLowerCase().includes(searchTerm) ||
+      (m.senderName ?? "").toLowerCase().includes(searchTerm),
+    );
+  }, [messages, searchTerm]);
+
   return (
     <div className="flex h-[70vh] flex-col overflow-hidden rounded-[var(--cm-radius-lg)] border border-[var(--cm-border)] bg-[var(--cm-bg)]">
       {/* Header — mono strip, clay-pulse dot, metadata right */}
@@ -470,9 +488,46 @@ export function TopicChatPanel({
             #{topicName}
           </span>
         </div>
-        <span className="text-[10px] text-[var(--cm-fg-tertiary)]">
-          {messages.length} msg · {stateLabel}
-        </span>
+        <div className="flex items-center gap-3">
+          {searchOpen ? (
+            <input
+              autoFocus
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setSearchQuery("");
+                  setSearchOpen(false);
+                }
+              }}
+              placeholder="search…"
+              className="w-44 rounded-[var(--cm-radius-sm)] border border-[var(--cm-border)] bg-[var(--cm-bg)] px-2 py-1 text-[11px] text-[var(--cm-fg)] placeholder:text-[var(--cm-fg-tertiary)] focus:border-[var(--cm-border-hover)] focus:outline-none"
+            />
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              setSearchOpen((o) => {
+                const next = !o;
+                if (!next) setSearchQuery("");
+                return next;
+              });
+            }}
+            className="text-[10px] uppercase tracking-[0.14em] text-[var(--cm-fg-tertiary)] transition-colors hover:text-[var(--cm-fg-secondary)]"
+            title="Toggle search (Esc to close)"
+          >
+            {searchOpen ? "close" : "search"}
+          </button>
+          <span className="text-[10px] text-[var(--cm-fg-tertiary)]">
+            {searchTerm
+              ? `${filteredMessages.length}/${messages.length}`
+              : `${messages.length} msg`}
+            {" · "}
+            {stateLabel}
+          </span>
+        </div>
       </div>
 
       {/* Body — message stream + member sidebar */}
@@ -486,9 +541,16 @@ export function TopicChatPanel({
           >
             no envelopes on this topic yet
           </p>
+        ) : filteredMessages.length === 0 ? (
+          <p
+            className="py-12 text-center text-[11px] text-[var(--cm-fg-tertiary)]"
+            style={monoStyle}
+          >
+            no matches for &ldquo;{searchTerm}&rdquo;
+          </p>
         ) : (
           <ol className="flex flex-col gap-4">
-            {messages.map((m) => (
+            {filteredMessages.map((m) => (
               <li key={m.id} className="flex flex-col gap-1">
                 <div
                   className="flex items-baseline gap-2 text-[10px]"
