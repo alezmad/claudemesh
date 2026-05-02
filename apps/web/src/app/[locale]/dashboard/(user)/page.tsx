@@ -9,11 +9,12 @@ import { db } from "@turbostarter/db/server";
 import {
   mesh,
   meshMember,
+  meshNotification,
   meshTopic,
   meshTopicMember,
   meshTopicMessage,
 } from "@turbostarter/db/schema/mesh";
-import { and, count, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { aliasedTable, and, count, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { appConfig } from "~/config/app";
 import { pathsConfig } from "~/config/paths";
@@ -127,45 +128,42 @@ export default async function UniversePage() {
   }));
 
   // Recent @-mentions of the viewer across every mesh they belong to.
-  // Build a (memberId, regex) pair per mesh and OR them together so we
-  // catch users with different display names in different meshes. The
-  // ciphertext is base64 plaintext in v0.2.0; per-topic encryption in
-  // v0.3.0 will move this scan to a notification table populated at
-  // write time. 7-day window keeps the query bounded.
+  // Reads from mesh.notification, populated at write time by the
+  // POST /v1/messages handler + broker topic-send. Survives v0.3.0
+  // per-topic encryption (the previous regex-on-decoded-ciphertext
+  // approach would not). 7-day window keeps the result bounded.
   const mentionWindow = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const mentionConditions = myMembers.map((m) => {
-    const escaped = m.displayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = `(^|\\s|[^A-Za-z0-9_-])@${escaped}($|[^A-Za-z0-9_-])`;
-    return and(
-      eq(meshTopic.meshId, m.meshId),
-      sql`${meshTopicMessage.senderMemberId} <> ${m.id}`,
-      sql`convert_from(decode(${meshTopicMessage.ciphertext}, 'base64'), 'UTF8') ~* ${pattern}`,
-    );
-  });
-  const mentionRows = mentionConditions.length
+  const senderMember = aliasedTable(meshMember, "sender_member");
+  const mentionRows = myMemberIds.length
     ? await db
         .select({
           id: meshTopicMessage.id,
+          notificationId: meshNotification.id,
           topicId: meshTopicMessage.topicId,
           topicName: meshTopic.name,
           meshId: meshTopic.meshId,
           meshName: mesh.name,
-          senderName: meshMember.displayName,
+          senderName: senderMember.displayName,
           ciphertext: meshTopicMessage.ciphertext,
+          readAt: meshNotification.readAt,
           createdAt: meshTopicMessage.createdAt,
         })
-        .from(meshTopicMessage)
-        .innerJoin(meshTopic, eq(meshTopic.id, meshTopicMessage.topicId))
+        .from(meshNotification)
+        .innerJoin(
+          meshTopicMessage,
+          eq(meshTopicMessage.id, meshNotification.messageId),
+        )
+        .innerJoin(meshTopic, eq(meshTopic.id, meshNotification.topicId))
         .innerJoin(mesh, eq(mesh.id, meshTopic.meshId))
         .innerJoin(
-          meshMember,
-          eq(meshMember.id, meshTopicMessage.senderMemberId),
+          senderMember,
+          eq(senderMember.id, meshNotification.senderMemberId),
         )
         .where(
           and(
+            inArray(meshNotification.recipientMemberId, myMemberIds),
             isNull(meshTopic.archivedAt),
             gt(meshTopicMessage.createdAt, mentionWindow),
-            or(...mentionConditions),
           ),
         )
         .orderBy(desc(meshTopicMessage.createdAt))

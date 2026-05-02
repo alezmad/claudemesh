@@ -31,6 +31,7 @@ import {
   mesh,
   meshApiKey,
   meshMember,
+  meshNotification,
   meshTopic,
   meshTopicMember,
   meshTopicMessage,
@@ -56,7 +57,42 @@ const sendMessageSchema = z.object({
   /** base64 nonce. */
   nonce: z.string().min(1),
   priority: z.enum(["now", "next", "low"]).optional().default("next"),
+  /**
+   * Optional list of `@<displayName>` mentions extracted client-side
+   * from the plaintext. Capped at 16 to bound notification fan-out
+   * (anti-spam). Server intersects with the mesh roster — anything
+   * that doesn't resolve to a member is silently dropped.
+   *
+   * Falls back to a server-side regex on the base64 plaintext when
+   * absent (v0.2.0 messages still ship plaintext). After per-topic
+   * encryption lands the regex path stops working and the client
+   * MUST send this array.
+   */
+  mentions: z.array(z.string().min(1).max(64)).max(16).optional(),
 });
+
+/**
+ * Extract `@<token>` mentions from base64-encoded plaintext. Returns
+ * the lowercased display names found in the body, deduped and capped
+ * at 16. Used as the legacy fallback when the client doesn't send a
+ * `mentions` array on POST /messages.
+ */
+function extractMentionsFromBase64(b64: string): string[] {
+  let text: string;
+  try {
+    text = Buffer.from(b64, "base64").toString("utf-8");
+  } catch {
+    return [];
+  }
+  const found = new Set<string>();
+  const re = /(^|[^A-Za-z0-9_-])@([A-Za-z0-9_-]{1,64})(?=$|[^A-Za-z0-9_-])/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    found.add(m[2]!.toLowerCase());
+    if (found.size >= 16) break;
+  }
+  return [...found];
+}
 
 const historyQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).optional().default(50),
@@ -108,13 +144,19 @@ export const v1Router = new Hono<Env>()
       .limit(1);
     if (!ownerMember) return c.json({ error: "no_mesh_member" }, 500);
 
+    // Sender attribution: prefer the apikey's issuing member (so the
+    // dashboard chat user shows up correctly in /v1/peers and as the
+    // notification sender). Fall back to the oldest mesh member for
+    // legacy keys with no issuer.
+    const senderMemberId = key.issuedByMemberId ?? ownerMember.id;
+
     // Persist to history (topic_message) + ephemeral queue (message_queue).
     // Broker's drain loop picks up the queue entry and pushes to live peers.
     const [historyRow] = await db
       .insert(meshTopicMessage)
       .values({
         topicId: topic.id,
-        senderMemberId: ownerMember.id,
+        senderMemberId,
         nonce: body.nonce,
         ciphertext: body.ciphertext,
       })
@@ -124,7 +166,7 @@ export const v1Router = new Hono<Env>()
       .insert(messageQueue)
       .values({
         meshId: key.meshId,
-        senderMemberId: ownerMember.id,
+        senderMemberId,
         targetSpec: "#" + topic.id,
         priority: body.priority,
         nonce: body.nonce,
@@ -132,11 +174,56 @@ export const v1Router = new Hono<Env>()
       })
       .returning({ id: messageQueue.id });
 
+    // Mention fan-out → notification rows. Client-extracted mentions
+    // win when present (post-encryption clients MUST extract and send);
+    // otherwise we regex the base64 plaintext as a transitional fallback.
+    let mentionTokens = body.mentions?.map((s) => s.toLowerCase().replace(/^@/, ""));
+    if (!mentionTokens || mentionTokens.length === 0) {
+      mentionTokens = extractMentionsFromBase64(body.ciphertext);
+    }
+    let notifications = 0;
+    if (historyRow && mentionTokens.length > 0) {
+      const recipients = await db
+        .select({
+          id: meshMember.id,
+          displayName: meshMember.displayName,
+        })
+        .from(meshMember)
+        .where(
+          and(eq(meshMember.meshId, key.meshId), isNull(meshMember.revokedAt)),
+        );
+      const lowerTokens = new Set(mentionTokens);
+      const targets = recipients
+        .filter(
+          (r) =>
+            lowerTokens.has(r.displayName.toLowerCase()) &&
+            r.id !== senderMemberId,
+        )
+        .slice(0, 32); // hard cap on per-message fan-out
+      if (targets.length > 0) {
+        await db
+          .insert(meshNotification)
+          .values(
+            targets.map((t) => ({
+              meshId: key.meshId,
+              topicId: topic.id,
+              messageId: historyRow.id,
+              recipientMemberId: t.id,
+              senderMemberId,
+              kind: "mention",
+            })),
+          )
+          .onConflictDoNothing();
+        notifications = targets.length;
+      }
+    }
+
     return c.json({
       messageId: queueRow?.id ?? null,
       historyId: historyRow?.id ?? null,
       topic: body.topic,
       topicId: topic.id,
+      notifications,
     });
   })
 
@@ -508,13 +595,14 @@ export const v1Router = new Hono<Env>()
     });
   })
 
-  // GET /v1/notifications — recent @-mentions of the viewer across all
-  // topics in the key's mesh. v0.2.0 plaintext-base64 ciphertext lets
-  // us regex match server-side; in v0.3.0 (per-topic encryption) this
-  // moves to a notification table populated at write time.
+  // GET /v1/notifications — recent @-mentions of the viewer across
+  // all topics in the key's mesh. Reads from mesh.notification, which
+  // is populated at write time by POST /v1/messages and the broker's
+  // topic-send handler. Survives the v0.3.0 per-topic encryption cut
+  // (the regex-on-decoded-ciphertext approach won't).
   //
-  // Query: ?since=<ISO> to incrementally fetch only newer mentions
-  // (e.g. for a polling notification bell). Default: last 24h.
+  // Query: ?since=<ISO> for incremental fetch (polling bells), and
+  // ?unread=1 to filter to read_at IS NULL only.
   .get("/notifications", async (c) => {
     const key = c.var.apiKey;
     requireCapability(key, "read");
@@ -535,56 +623,118 @@ export const v1Router = new Hono<Env>()
     if (Number.isNaN(since.getTime())) {
       return c.json({ error: "invalid_since" }, 400);
     }
+    const unreadOnly = c.req.query("unread") === "1";
 
-    // Postgres regex with case-insensitive match + word boundary on
-    // both sides. Decode the base64 ciphertext (plaintext envelope in
-    // v0.2.0) so we're matching readable text, not the base64 alphabet.
-    const escaped = me.displayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const pattern = `(^|\\s|[^A-Za-z0-9_-])@${escaped}($|[^A-Za-z0-9_-])`;
+    const conditions = [
+      eq(meshNotification.recipientMemberId, key.issuedByMemberId),
+      eq(meshNotification.meshId, key.meshId),
+      gt(meshNotification.createdAt, since),
+    ];
+    if (unreadOnly) conditions.push(isNull(meshNotification.readAt));
 
     const rows = await db
       .select({
         id: meshTopicMessage.id,
+        notificationId: meshNotification.id,
         topicId: meshTopicMessage.topicId,
         topicName: meshTopic.name,
         senderMemberId: meshTopicMessage.senderMemberId,
         senderName: meshMember.displayName,
         senderPubkey: meshMember.peerPubkey,
         ciphertext: meshTopicMessage.ciphertext,
+        kind: meshNotification.kind,
+        readAt: meshNotification.readAt,
         createdAt: meshTopicMessage.createdAt,
       })
-      .from(meshTopicMessage)
-      .innerJoin(meshTopic, eq(meshTopic.id, meshTopicMessage.topicId))
+      .from(meshNotification)
+      .innerJoin(
+        meshTopicMessage,
+        eq(meshTopicMessage.id, meshNotification.messageId),
+      )
+      .innerJoin(meshTopic, eq(meshTopic.id, meshNotification.topicId))
       .innerJoin(
         meshMember,
-        eq(meshMember.id, meshTopicMessage.senderMemberId),
+        eq(meshMember.id, meshNotification.senderMemberId),
       )
-      .where(
-        and(
-          eq(meshTopic.meshId, key.meshId),
-          isNull(meshTopic.archivedAt),
-          gt(meshTopicMessage.createdAt, since),
-          sql`${meshTopicMessage.senderMemberId} <> ${key.issuedByMemberId}`,
-          sql`convert_from(decode(${meshTopicMessage.ciphertext}, 'base64'), 'UTF8') ~* ${pattern}`,
-        ),
-      )
+      .where(and(...conditions))
       .orderBy(desc(meshTopicMessage.createdAt))
       .limit(50);
 
     return c.json({
       notifications: rows.map((r) => ({
         id: r.id,
+        notificationId: r.notificationId,
         topicId: r.topicId,
         topicName: r.topicName,
         senderName: r.senderName,
         senderPubkey: r.senderPubkey,
         ciphertext: r.ciphertext,
+        kind: r.kind,
+        readAt: r.readAt?.toISOString() ?? null,
         createdAt: r.createdAt.toISOString(),
       })),
       since: since.toISOString(),
       mentionedAs: me.displayName,
     });
   })
+
+  // POST /v1/notifications/read — mark notifications read. Body shape:
+  //   { ids: string[] }                — mark these notification ids
+  //   { all: true, before?: ISO }      — mark every unread for this
+  //                                      member up to `before` (or now)
+  // Idempotent. Always 200, even if 0 rows updated.
+  .post(
+    "/notifications/read",
+    validate(
+      "json",
+      z.union([
+        z.object({ ids: z.array(z.string().min(1)).min(1).max(200) }),
+        z.object({ all: z.literal(true), before: z.string().optional() }),
+      ]),
+    ),
+    async (c) => {
+      const key = c.var.apiKey;
+      requireCapability(key, "read");
+      if (!key.issuedByMemberId) {
+        return c.json({ error: "api_key_has_no_issuer" }, 400);
+      }
+
+      const body = c.req.valid("json");
+      const now = new Date();
+
+      if ("ids" in body) {
+        await db
+          .update(meshNotification)
+          .set({ readAt: now })
+          .where(
+            and(
+              eq(meshNotification.recipientMemberId, key.issuedByMemberId),
+              eq(meshNotification.meshId, key.meshId),
+              isNull(meshNotification.readAt),
+              sql`${meshNotification.id} = ANY(${body.ids})`,
+            ),
+          );
+        return c.json({ marked: body.ids.length, readAt: now.toISOString() });
+      }
+
+      const beforeAt = body.before ? new Date(body.before) : now;
+      if (Number.isNaN(beforeAt.getTime())) {
+        return c.json({ error: "invalid_before" }, 400);
+      }
+      await db
+        .update(meshNotification)
+        .set({ readAt: now })
+        .where(
+          and(
+            eq(meshNotification.recipientMemberId, key.issuedByMemberId),
+            eq(meshNotification.meshId, key.meshId),
+            isNull(meshNotification.readAt),
+            sql`${meshNotification.createdAt} <= ${beforeAt}`,
+          ),
+        );
+      return c.json({ marked: "all", before: beforeAt.toISOString() });
+    },
+  )
 
   // GET /v1/peers — connected peers in the key's mesh
   //

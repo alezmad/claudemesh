@@ -414,6 +414,21 @@ export function TopicChatPanel({
     [draft, mentionState],
   );
 
+  // Extract @-mention tokens from the draft body so the server can
+  // populate mesh.notification rows without having to read the
+  // ciphertext (forward-compat with v0.3.0 per-topic encryption).
+  // Capped at 16 to bound notification fan-out.
+  const extractMentions = (text: string): string[] => {
+    const found = new Set<string>();
+    const re = /(^|[^A-Za-z0-9_-])@([A-Za-z0-9_-]{1,64})(?=$|[^A-Za-z0-9_-])/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      found.add(m[2]!.toLowerCase());
+      if (found.size >= 16) break;
+    }
+    return [...found];
+  };
+
   const send = async () => {
     const text = draft.trim();
     if (!text) return;
@@ -421,10 +436,16 @@ export function TopicChatPanel({
     setError(null);
     try {
       const { ciphertext, nonce } = encodeOutgoing(text);
+      const mentions = extractMentions(text);
       const res = await fetch("/api/v1/messages", {
         method: "POST",
         headers,
-        body: JSON.stringify({ topic: topicName, ciphertext, nonce }),
+        body: JSON.stringify({
+          topic: topicName,
+          ciphertext,
+          nonce,
+          ...(mentions.length > 0 ? { mentions } : {}),
+        }),
       });
       if (!res.ok) {
         const body = await res.text().catch(() => "");

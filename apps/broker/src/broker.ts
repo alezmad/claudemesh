@@ -38,7 +38,9 @@ import {
   meshFileKey,
   meshContext,
   meshMember as memberTable,
+  meshMember,
   meshMemory,
+  meshNotification,
   meshState,
   meshService,
   meshSkill,
@@ -694,6 +696,13 @@ export async function appendTopicMessage(args: {
   senderSessionPubkey?: string;
   nonce: string;
   ciphertext: string;
+  /**
+   * Optional client-extracted mention list (lowercased display names
+   * without the leading @). Required once per-topic encryption lands —
+   * the server can't read v0.3.0 ciphertext. Falls back to a regex on
+   * the v0.2.0 base64 plaintext when omitted.
+   */
+  mentions?: string[];
 }): Promise<string> {
   const [row] = await db
     .insert(meshTopicMessage)
@@ -706,7 +715,92 @@ export async function appendTopicMessage(args: {
     })
     .returning({ id: meshTopicMessage.id });
   if (!row) throw new Error("failed to append topic message");
+
+  void fanOutMentions({
+    messageId: row.id,
+    topicId: args.topicId,
+    senderMemberId: args.senderMemberId,
+    ciphertext: args.ciphertext,
+    explicit: args.mentions,
+  }).catch(() => {
+    // Notifications are advisory; don't fail the message write.
+  });
+
   return row.id;
+}
+
+/**
+ * Extract `@<displayName>` tokens from a base64-of-UTF8 plaintext body.
+ * Capped at 16 tokens. Returns lowercased names without the @ prefix.
+ */
+function extractMentionTokens(b64: string): string[] {
+  let text: string;
+  try {
+    text = Buffer.from(b64, "base64").toString("utf-8");
+  } catch {
+    return [];
+  }
+  const found = new Set<string>();
+  const re = /(^|[^A-Za-z0-9_-])@([A-Za-z0-9_-]{1,64})(?=$|[^A-Za-z0-9_-])/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    found.add(m[2]!.toLowerCase());
+    if (found.size >= 16) break;
+  }
+  return [...found];
+}
+
+async function fanOutMentions(args: {
+  messageId: string;
+  topicId: string;
+  senderMemberId: string;
+  ciphertext: string;
+  explicit?: string[];
+}): Promise<void> {
+  let tokens = args.explicit?.map((s) => s.toLowerCase().replace(/^@/, ""));
+  if (!tokens || tokens.length === 0) {
+    tokens = extractMentionTokens(args.ciphertext);
+  }
+  if (tokens.length === 0) return;
+
+  const [topic] = await db
+    .select({ meshId: meshTopic.meshId })
+    .from(meshTopic)
+    .where(eq(meshTopic.id, args.topicId));
+  if (!topic) return;
+
+  const recipients = await db
+    .select({
+      id: meshMember.id,
+      displayName: meshMember.displayName,
+    })
+    .from(meshMember)
+    .where(
+      and(eq(meshMember.meshId, topic.meshId), isNull(meshMember.revokedAt)),
+    );
+  const tokenSet = new Set(tokens);
+  const targets = recipients
+    .filter(
+      (r) =>
+        tokenSet.has(r.displayName.toLowerCase()) &&
+        r.id !== args.senderMemberId,
+    )
+    .slice(0, 32);
+  if (targets.length === 0) return;
+
+  await db
+    .insert(meshNotification)
+    .values(
+      targets.map((t) => ({
+        meshId: topic.meshId,
+        topicId: args.topicId,
+        messageId: args.messageId,
+        recipientMemberId: t.id,
+        senderMemberId: args.senderMemberId,
+        kind: "mention",
+      })),
+    )
+    .onConflictDoNothing();
 }
 
 /**

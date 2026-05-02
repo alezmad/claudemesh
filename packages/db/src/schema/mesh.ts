@@ -1484,6 +1484,89 @@ export const insertMeshTopicMessageSchema =
 export type SelectMeshTopicMessage = typeof meshTopicMessage.$inferSelect;
 export type InsertMeshTopicMessage = typeof meshTopicMessage.$inferInsert;
 
+/**
+ * Per-recipient notifications. v0.3.0 phase 1: server-side mention
+ * extraction at write time replaces the regex-on-decoded-ciphertext
+ * scan in /v1/notifications. Fanned out at POST /v1/messages and the
+ * broker's WS topic_send handler — one row per (recipient, message).
+ *
+ * `kind` is open-ended ("mention" today; future kinds: "reply",
+ * "task_assigned", etc.) so we can extend without a migration.
+ */
+export const meshNotification = meshSchema.table(
+  "notification",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    topicId: text()
+      .references(() => meshTopic.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    messageId: text()
+      .references(() => meshTopicMessage.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    recipientMemberId: text()
+      .references(() => meshMember.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    senderMemberId: text()
+      .references(() => meshMember.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    kind: text().notNull().default("mention"),
+    createdAt: timestamp().defaultNow().notNull(),
+    readAt: timestamp(),
+  },
+  (t) => [
+    uniqueIndex("notification_unique").on(t.messageId, t.recipientMemberId),
+    index("notification_by_recipient").on(t.recipientMemberId, t.createdAt),
+    index("notification_by_mesh").on(t.meshId, t.createdAt),
+  ],
+);
+
+export const meshNotificationRelations = relations(
+  meshNotification,
+  ({ one }) => ({
+    topic: one(meshTopic, {
+      fields: [meshNotification.topicId],
+      references: [meshTopic.id],
+    }),
+    message: one(meshTopicMessage, {
+      fields: [meshNotification.messageId],
+      references: [meshTopicMessage.id],
+    }),
+    recipient: one(meshMember, {
+      fields: [meshNotification.recipientMemberId],
+      references: [meshMember.id],
+    }),
+    sender: one(meshMember, {
+      fields: [meshNotification.senderMemberId],
+      references: [meshMember.id],
+    }),
+  }),
+);
+
+export const selectMeshNotificationSchema =
+  createSelectSchema(meshNotification);
+export const insertMeshNotificationSchema =
+  createInsertSchema(meshNotification);
+export type SelectMeshNotification = typeof meshNotification.$inferSelect;
+export type InsertMeshNotification = typeof meshNotification.$inferInsert;
+
 /* ────────────────────────────────────────────────────────────────────────
  * API keys (v0.2.0) — REST + external WS auth.
  *
