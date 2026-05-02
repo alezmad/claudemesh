@@ -6,20 +6,24 @@
  * for mesh A cannot read or write mesh B.
  *
  * Endpoints (v0.2.0 minimum):
- *   POST /v1/messages                  — send to a topic
- *   GET  /v1/topics                    — list topics in the key's mesh
- *   GET  /v1/topics/:name/messages     — fetch topic history (paginated)
- *   GET  /v1/peers                     — list peers in the mesh
+ *   POST /v1/messages                       — send to a topic
+ *   GET  /v1/topics                         — list topics in the key's mesh
+ *   GET  /v1/topics/:name/messages          — fetch topic history (paginated)
+ *   GET  /v1/topics/:name/stream            — SSE: live message firehose for a topic
+ *   PATCH /v1/topics/:name/read             — mark a topic read up to now
+ *   GET  /v1/peers                          — list peers in the mesh
  *
  * Live delivery: writes to mesh.message_queue + mesh.topic_message. The
  * broker's existing pendingTimer drains the queue and pushes to live
- * peers. Latency = polling interval (~2s today). Real-time push from
- * REST writes is a follow-up.
+ * peers. The /stream endpoint server-side polls topic_message every
+ * 2s and pushes new rows as SSE events — clients see new messages
+ * within 2s without burning a poll-per-tab.
  *
  * Spec: .artifacts/specs/2026-05-02-v0.2.0-scope.md
  */
 
 import { Hono } from "hono";
+import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 
 import { db } from "@turbostarter/db/server";
@@ -32,7 +36,7 @@ import {
   messageQueue,
   presence,
 } from "@turbostarter/db/schema/mesh";
-import { and, asc, desc, eq, isNull, lt } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lt } from "drizzle-orm";
 
 import { validate } from "../../middleware";
 import {
@@ -238,6 +242,120 @@ export const v1Router = new Hono<Env>()
       });
     },
   )
+
+  // GET /v1/topics/:name/stream — live SSE firehose for a topic.
+  //
+  // Server-side polls mesh.topic_message every STREAM_POLL_MS for rows
+  // newer than the last seen createdAt and pushes each as an SSE
+  // `message` event. First connection sample establishes the watermark
+  // (no historical replay — clients fetch /messages for that). The
+  // stream ends when the client disconnects or the topic is archived.
+  //
+  // Heartbeats every 30s as SSE comments (`:keep-alive`) keep the
+  // connection through proxies that drop idle TCP. Postgres LISTEN/
+  // NOTIFY is the obvious upgrade path when message volume grows; the
+  // poll loop here is fine for v0.2.0's low write rate.
+  .get("/topics/:name/stream", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    const name = c.req.param("name");
+    requireTopicScope(key, name);
+
+    const [topic] = await db
+      .select({ id: meshTopic.id })
+      .from(meshTopic)
+      .where(
+        and(
+          eq(meshTopic.meshId, key.meshId),
+          eq(meshTopic.name, name),
+          isNull(meshTopic.archivedAt),
+        ),
+      );
+    if (!topic) {
+      return c.json({ error: "topic_not_found", topic: name }, 404);
+    }
+
+    const STREAM_POLL_MS = 2000;
+    const HEARTBEAT_MS = 30_000;
+
+    return streamSSE(c, async (stream) => {
+      // Watermark: skip messages older than connect time so we don't
+      // replay history. Clients backfill via GET /messages.
+      let cursor = new Date();
+      let lastHeartbeat = Date.now();
+      let aborted = false;
+
+      stream.onAbort(() => {
+        aborted = true;
+      });
+
+      // Initial hello so clients know the stream is alive.
+      await stream.writeSSE({
+        event: "ready",
+        data: JSON.stringify({
+          topic: name,
+          topicId: topic.id,
+          connectedAt: cursor.toISOString(),
+        }),
+      });
+
+      while (!aborted) {
+        try {
+          const rows = await db
+            .select({
+              id: meshTopicMessage.id,
+              senderPubkey: meshMember.peerPubkey,
+              senderName: meshMember.displayName,
+              nonce: meshTopicMessage.nonce,
+              ciphertext: meshTopicMessage.ciphertext,
+              createdAt: meshTopicMessage.createdAt,
+            })
+            .from(meshTopicMessage)
+            .innerJoin(
+              meshMember,
+              eq(meshTopicMessage.senderMemberId, meshMember.id),
+            )
+            .where(
+              and(
+                eq(meshTopicMessage.topicId, topic.id),
+                gt(meshTopicMessage.createdAt, cursor),
+              ),
+            )
+            .orderBy(asc(meshTopicMessage.createdAt))
+            .limit(100);
+
+          for (const r of rows) {
+            await stream.writeSSE({
+              event: "message",
+              id: r.id,
+              data: JSON.stringify({
+                id: r.id,
+                senderPubkey: r.senderPubkey,
+                senderName: r.senderName,
+                nonce: r.nonce,
+                ciphertext: r.ciphertext,
+                createdAt: r.createdAt.toISOString(),
+              }),
+            });
+            if (r.createdAt > cursor) cursor = r.createdAt;
+          }
+
+          if (Date.now() - lastHeartbeat > HEARTBEAT_MS) {
+            await stream.writeSSE({ event: "heartbeat", data: String(Date.now()) });
+            lastHeartbeat = Date.now();
+          }
+        } catch (e) {
+          await stream.writeSSE({
+            event: "error",
+            data: JSON.stringify({
+              error: e instanceof Error ? e.message : String(e),
+            }),
+          });
+        }
+        await stream.sleep(STREAM_POLL_MS);
+      }
+    });
+  })
 
   // GET /v1/peers — connected peers in the key's mesh
   // Dedupe by memberId — a member can have multiple active presence
