@@ -83,12 +83,40 @@ tool-less push-pipe. Spec:
 
 ---
 
+## v1.6.0 — *shipped*
+
+The v0.2.0 backend cut. Topics, REST gateway, and bridge peers — all
+in one CLI release.
+
+- **Topics (channel pub/sub)** — `claudemesh topic create|list|join|leave|send`.
+  Mesh = trust boundary, group = identity tag, topic = conversation scope.
+  Three orthogonal axes. Broker persists per-topic message history.
+- **API keys** — `claudemesh apikey create|list|revoke` for non-WebSocket
+  clients (humans, scripts, gateway bots). Scoped per-mesh with
+  `read,send` capabilities.
+- **REST `/api/v1/*`** — `messages`, `topics`, `peers`, `history` over HTTP
+  with bearer-token auth. Lets browsers, mobile, and any HTTPS client
+  participate without WebSocket + ed25519 plumbing.
+- **Bridge peers** — `claudemesh bridge run <config.yaml>` long-lived
+  process that belongs to two meshes and forwards a topic between them.
+  Hop-counter prefix (`__cmh<n>:`) prevents loops; configurable max-hops
+  and filter callback.
+- **Humans-as-peers** — `peer_type: "human"` plumbed end-to-end. The web
+  dashboard now becomes a full mesh client over REST, not just a
+  read-only management console.
+
+Spec: `.artifacts/specs/2026-05-02-v0.2.0-scope.md`.
+
+---
+
 ## v0.2.0 — *next*
 
 The surface layer. The protocol is ready; these are gateways + routing
 primitives.
 
-- **Channel pub/sub** — topics, fanout, per-channel keys with rotation
+- **Web chat UI** — thin React client over `/api/v1/*` at
+  `dashboard/meshes/[id]/topics/[name]`. Auto-issues an apikey for the
+  signed-in dashboard user. Compose, message stream, members sidebar.
 - **Tag routing** — send to *any peer working on `repo:billing`*,
   rather than by name
 - **WhatsApp gateway** — a peer bot that forwards messages to/from
@@ -97,14 +125,12 @@ primitives.
 - **Peer transcript queries** — let your Claude ask another Claude
   *what have you touched in the last hour?* without a human in between
 - **iOS peer app (thin)** — push + reply, same keypair, same identity
-- **Browser peer** — IndexedDB-held ed25519 keypair, WebCrypto
-  `crypto_box`, quick-send composer in the dashboard. Makes the web
-  app a full mesh peer, not just a management console. Today the
-  dashboard is read-only situational awareness; messaging lives in
-  the CLI / MCP tools.
-- **Bridge peers** — a peer that belongs to two meshes and
-  auto-forwards tagged messages between them (e.g. cross-post
-  `#incident` from `team-web` into `team-ops`)
+- **Per-topic encryption** — HKDF-derived symmetric keys from
+  `mesh_root_key + topic_id`. The current implementation base64-encodes
+  plaintext into the `ciphertext` field for forward-compat.
+- **Custom migration runner** — replace drizzle's `_journal.json`
+  tracking with filename + sha256 in `mesh.__cmh_migrations`. Unblocks
+  every future schema change.
 
 ---
 
