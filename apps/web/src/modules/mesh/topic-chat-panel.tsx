@@ -1,5 +1,6 @@
 "use client";
 
+import type React from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@turbostarter/ui-web/button";
@@ -66,6 +67,38 @@ function decodeIncoming(ciphertext: string): string {
   } catch {
     return "[decode failed]";
   }
+}
+
+/**
+ * Render plaintext with @mentions highlighted in clay. We split on the
+ * mention regex and rebuild as alternating spans so React can reconcile
+ * keys cleanly. URL/markdown parsing is out of scope for v0.2.0.
+ */
+function renderWithMentions(text: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = [];
+  const re = /(^|\s)(@[A-Za-z0-9_-]+)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+  while ((match = re.exec(text)) !== null) {
+    const [, lead, mention] = match;
+    const matchStart = match.index + (lead?.length ?? 0);
+    if (matchStart > lastIndex) {
+      parts.push(
+        <span key={key++}>{text.slice(lastIndex, matchStart)}</span>,
+      );
+    }
+    parts.push(
+      <span key={key++} className="text-[var(--cm-clay)] font-medium">
+        {mention}
+      </span>,
+    );
+    lastIndex = matchStart + (mention?.length ?? 0);
+  }
+  if (lastIndex < text.length) {
+    parts.push(<span key={key++}>{text.slice(lastIndex)}</span>);
+  }
+  return parts;
 }
 
 function fmtTime(iso: string): string {
@@ -142,7 +175,13 @@ export function TopicChatPanel({
     "connecting" | "live" | "reconnecting" | "stopped"
   >("connecting");
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
+  const [mentionState, setMentionState] = useState<{
+    query: string;
+    start: number;
+    selected: number;
+  } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const seenIdsRef = useRef<Set<string>>(new Set());
   const lastMarkReadAtRef = useRef<number>(0);
 
@@ -311,6 +350,65 @@ export function TopicChatPanel({
     });
   }, [messages.length]);
 
+  // Member name lookup for autocomplete. Filtered by case-insensitive
+  // prefix match on displayName; shorter names rank higher so e.g. "@al"
+  // surfaces "Alice" above "Alejandro" if both exist. Capped at 8.
+  const mentionMatches = useMemo(() => {
+    if (!mentionState) return [];
+    const q = mentionState.query.toLowerCase();
+    return members
+      .filter((m) => m.displayName.toLowerCase().startsWith(q))
+      .sort((a, b) => {
+        if (a.online !== b.online) return a.online ? -1 : 1;
+        return a.displayName.length - b.displayName.length;
+      })
+      .slice(0, 8);
+  }, [members, mentionState]);
+
+  // Re-evaluate the @-mention context whenever the textarea changes —
+  // we look at the substring before the cursor and check whether it
+  // ends in `@<word>` with no whitespace between the @ and the cursor.
+  const updateMentionFromCursor = useCallback(
+    (value: string, cursor: number) => {
+      const before = value.slice(0, cursor);
+      const m = before.match(/(^|\s)@([A-Za-z0-9_-]*)$/);
+      if (!m) {
+        setMentionState(null);
+        return;
+      }
+      const query = m[2] ?? "";
+      const start = before.length - query.length - 1; // index of '@'
+      setMentionState((prev) =>
+        prev && prev.start === start && prev.query === query
+          ? prev
+          : { query, start, selected: 0 },
+      );
+    },
+    [],
+  );
+
+  const insertMention = useCallback(
+    (memberName: string) => {
+      if (!mentionState) return;
+      const ta = textareaRef.current;
+      if (!ta) return;
+      const before = draft.slice(0, mentionState.start);
+      const after = draft.slice(ta.selectionStart);
+      const replacement = `@${memberName} `;
+      const next = before + replacement + after;
+      const nextCursor = before.length + replacement.length;
+      setDraft(next);
+      setMentionState(null);
+      // Restore cursor + focus on the next tick — React schedules the
+      // value update, so we can't mutate selection in the same frame.
+      requestAnimationFrame(() => {
+        ta.focus();
+        ta.setSelectionRange(nextCursor, nextCursor);
+      });
+    },
+    [draft, mentionState],
+  );
+
   const send = async () => {
     const text = draft.trim();
     if (!text) return;
@@ -407,7 +505,7 @@ export function TopicChatPanel({
                   </span>
                 </div>
                 <p className="text-[var(--cm-fg)] text-sm leading-relaxed whitespace-pre-wrap break-words">
-                  {decodeIncoming(m.ciphertext)}
+                  {renderWithMentions(decodeIncoming(m.ciphertext))}
                 </p>
               </li>
             ))}
@@ -513,19 +611,137 @@ export function TopicChatPanel({
           </p>
         ) : null}
         <form
-          className="flex gap-2"
+          className="relative flex gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             void send();
           }}
         >
+          {/* @-mention dropdown anchored above the textarea */}
+          {mentionState && mentionMatches.length > 0 ? (
+            <ul
+              className="absolute bottom-full left-0 right-0 z-10 mb-2 max-h-56 overflow-y-auto rounded-[var(--cm-radius-md)] border border-[var(--cm-border)] bg-[var(--cm-bg-elevated)] shadow-lg"
+              style={monoStyle}
+            >
+              {mentionMatches.map((m, i) => {
+                const selected = i === mentionState.selected;
+                return (
+                  <li key={m.memberId}>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => {
+                        // mouseDown (not click) prevents the textarea
+                        // from losing focus before the insert runs.
+                        e.preventDefault();
+                        insertMention(m.displayName);
+                      }}
+                      onMouseEnter={() =>
+                        setMentionState((prev) =>
+                          prev ? { ...prev, selected: i } : prev,
+                        )
+                      }
+                      className={
+                        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] " +
+                        (selected
+                          ? "bg-[var(--cm-bg-hover)]"
+                          : "hover:bg-[var(--cm-bg-hover)]")
+                      }
+                    >
+                      <span
+                        className={
+                          "inline-block h-1.5 w-1.5 shrink-0 rounded-full " +
+                          (m.online
+                            ? m.status === "dnd"
+                              ? "bg-[#c46686]"
+                              : m.status === "working"
+                                ? "bg-[var(--cm-clay)]"
+                                : "bg-emerald-500"
+                            : "bg-[var(--cm-fg-tertiary)]")
+                        }
+                      />
+                      <span className="text-[var(--cm-fg)]">
+                        {m.displayName}
+                      </span>
+                      {!m.isHuman ? (
+                        <span className="text-[8px] uppercase tracking-[0.1em] text-[var(--cm-fg-tertiary)]">
+                          bot
+                        </span>
+                      ) : null}
+                      <span className="ml-auto text-[10px] text-[var(--cm-fg-tertiary)]">
+                        {m.online ? "online" : "offline"}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
           <textarea
+            ref={textareaRef}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              updateMentionFromCursor(
+                e.target.value,
+                e.target.selectionStart ?? e.target.value.length,
+              );
+            }}
+            onKeyUp={(e) => {
+              const t = e.currentTarget;
+              updateMentionFromCursor(t.value, t.selectionStart ?? t.value.length);
+            }}
+            onClick={(e) => {
+              const t = e.currentTarget;
+              updateMentionFromCursor(t.value, t.selectionStart ?? t.value.length);
+            }}
+            onBlur={() => {
+              // Defer so onMouseDown on the dropdown can resolve first.
+              setTimeout(() => setMentionState(null), 100);
+            }}
             placeholder={`message #${topicName}…`}
             rows={1}
             className="flex-1 resize-none rounded-[var(--cm-radius-md)] border border-[var(--cm-border)] bg-[var(--cm-bg)] px-3 py-2 text-sm text-[var(--cm-fg)] placeholder:text-[var(--cm-fg-tertiary)] focus:border-[var(--cm-border-hover)] focus:outline-none"
             onKeyDown={(e) => {
+              // Mention navigation takes priority when the dropdown is up.
+              if (mentionState && mentionMatches.length > 0) {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setMentionState((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          selected: (prev.selected + 1) % mentionMatches.length,
+                        }
+                      : prev,
+                  );
+                  return;
+                }
+                if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setMentionState((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          selected:
+                            (prev.selected - 1 + mentionMatches.length) %
+                            mentionMatches.length,
+                        }
+                      : prev,
+                  );
+                  return;
+                }
+                if (e.key === "Enter" || e.key === "Tab") {
+                  e.preventDefault();
+                  const target = mentionMatches[mentionState.selected];
+                  if (target) insertMention(target.displayName);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMentionState(null);
+                  return;
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 void send();
