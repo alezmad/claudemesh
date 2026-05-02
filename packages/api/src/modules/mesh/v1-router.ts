@@ -811,6 +811,132 @@ export const v1Router = new Hono<Env>()
     });
   })
 
+  // POST /v1/topics/:name/claim-key — bootstrap encryption on a v1 topic.
+  //
+  // Used by the dashboard's first encryption-aware client to convert a
+  // legacy plaintext topic into v0.3.0 ciphertext. The browser:
+  //   1. Generates a fresh 32-byte topic key.
+  //   2. Seals it for itself via crypto_box (its IndexedDB-held secret).
+  //   3. POSTs encryptedKeyPubkey + encryptedKey + nonce here.
+  //
+  // The endpoint is *atomic*: the UPDATE only succeeds when the topic
+  // currently has no encryption key. If a different client claimed
+  // first (race), this returns 409 + the existing senderPubkey so the
+  // loser can fall back to the regular fetch-and-decrypt path.
+  //
+  // Subsequent peers (CLI re-seal loop, browser-side re-seal in a future
+  // patch) seal the same topic key for new joiners — they don't go
+  // through this endpoint.
+  .post(
+    "/topics/:name/claim-key",
+    validate(
+      "json",
+      z.object({
+        encryptedKeyPubkey: z
+          .string()
+          .length(64)
+          .regex(/^[0-9a-f]{64}$/i, "must be 64 lowercase hex chars"),
+        encryptedKey: z.string().min(1).max(4096),
+        nonce: z.string().min(1).max(64),
+      }),
+    ),
+    async (c) => {
+      const key = c.var.apiKey;
+      requireCapability(key, "send");
+      const name = c.req.param("name");
+      requireTopicScope(key, name);
+
+      if (!key.issuedByMemberId) {
+        return c.json({ error: "api_key_has_no_issuer" }, 400);
+      }
+      const body = c.req.valid("json");
+      const newSenderPubkey = body.encryptedKeyPubkey.toLowerCase();
+
+      const [topic] = await db
+        .select({
+          id: meshTopic.id,
+          encryptedKeyPubkey: meshTopic.encryptedKeyPubkey,
+        })
+        .from(meshTopic)
+        .where(
+          and(
+            eq(meshTopic.meshId, key.meshId),
+            eq(meshTopic.name, name),
+            isNull(meshTopic.archivedAt),
+          ),
+        );
+      if (!topic) {
+        return c.json({ error: "topic_not_found", topic: name }, 404);
+      }
+      if (topic.encryptedKeyPubkey) {
+        return c.json(
+          {
+            error: "already_encrypted",
+            topic: name,
+            senderPubkey: topic.encryptedKeyPubkey,
+            hint: "another peer claimed first — fetch /key to receive your sealed copy (re-seal pending)",
+          },
+          409,
+        );
+      }
+
+      // Atomic claim: only set encryptedKeyPubkey if it's still NULL.
+      // Postgres UPDATE ... WHERE encrypted_key_pubkey IS NULL returns
+      // 0 rows on race, which we surface as 409.
+      const updated = await db
+        .update(meshTopic)
+        .set({ encryptedKeyPubkey: newSenderPubkey })
+        .where(
+          and(
+            eq(meshTopic.id, topic.id),
+            isNull(meshTopic.encryptedKeyPubkey),
+          ),
+        )
+        .returning({ id: meshTopic.id });
+      if (updated.length === 0) {
+        // Race lost — re-read so the client gets the winning sender pubkey.
+        const [latest] = await db
+          .select({ encryptedKeyPubkey: meshTopic.encryptedKeyPubkey })
+          .from(meshTopic)
+          .where(eq(meshTopic.id, topic.id));
+        return c.json(
+          {
+            error: "already_encrypted",
+            topic: name,
+            senderPubkey: latest?.encryptedKeyPubkey ?? null,
+          },
+          409,
+        );
+      }
+
+      // Persist the caller's sealed copy. Idempotent on (topic, member).
+      await db
+        .insert(meshTopicMemberKey)
+        .values({
+          topicId: topic.id,
+          memberId: key.issuedByMemberId,
+          encryptedKey: body.encryptedKey,
+          nonce: body.nonce,
+        })
+        .onConflictDoUpdate({
+          target: [meshTopicMemberKey.topicId, meshTopicMemberKey.memberId],
+          set: {
+            encryptedKey: body.encryptedKey,
+            nonce: body.nonce,
+            rotatedAt: new Date(),
+          },
+        });
+
+      return c.json({
+        topic: name,
+        topicId: topic.id,
+        senderPubkey: newSenderPubkey,
+        memberId: key.issuedByMemberId,
+        claimed: true,
+      });
+    },
+  )
+
   // GET /v1/topics/:name/pending-seals — list topic members that don't
   // yet have a sealed copy of the topic key. Members who hold the key
   // poll this and re-seal for any pending recipient via POST /seal.

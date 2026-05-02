@@ -6,10 +6,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@turbostarter/ui-web/button";
 
 import {
+  claimTopicKey,
   decryptMessage,
   encryptMessage,
   getTopicKey,
   registerBrowserPeerPubkey,
+  sealTopicKeyFor,
 } from "~/services/crypto/topic-key";
 
 interface TopicMessage {
@@ -312,6 +314,56 @@ export function TopicChatPanel({
       if (pollTimer) clearTimeout(pollTimer);
     };
   }, [apiKeySecret, topicName]);
+
+  // Browser-side re-seal loop. While we hold the topic key, every 30s
+  // we look for newly-joined topic members who don't yet have a sealed
+  // copy and seal it for them. Mirrors the CLI re-seal path so a topic
+  // claimed-by-browser doesn't go dark for CLI joiners.
+  useEffect(() => {
+    if (!topicKey || keyState !== "ready") return;
+    let cancelled = false;
+    const reseal = async () => {
+      try {
+        const res = await fetch(
+          `/api/v1/topics/${encodeURIComponent(topicName)}/pending-seals`,
+          { headers, cache: "no-store" },
+        );
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          pending: Array<{ memberId: string; pubkey: string; displayName: string }>;
+        };
+        for (const target of json.pending) {
+          if (cancelled) return;
+          const sealed = await sealTopicKeyFor(topicKey, target.pubkey);
+          if (!sealed) continue;
+          try {
+            await fetch(
+              `/api/v1/topics/${encodeURIComponent(topicName)}/seal`,
+              {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                  memberId: target.memberId,
+                  encryptedKey: sealed.encryptedKey,
+                  nonce: sealed.nonce,
+                }),
+              },
+            );
+          } catch {
+            // Another holder likely sealed first — fine to swallow.
+          }
+        }
+      } catch {
+        // Soft-fail; next tick retries.
+      }
+    };
+    void reseal();
+    const t = setInterval(reseal, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [topicKey, keyState, headers, topicName]);
 
   // Decrypt any v2 messages that we haven't decrypted yet. Runs after
   // `messages` updates (history backfill, SSE delivery) and after
@@ -849,6 +901,43 @@ export function TopicChatPanel({
           >
             🔒 end-to-end encrypted (v0.3.0)
           </p>
+        ) : keyState === "topic_unencrypted" ? (
+          <div
+            className="mb-2 flex items-center justify-between gap-3 text-[10px] text-[var(--cm-fg-tertiary)]"
+            style={monoStyle}
+          >
+            <span title="This topic was created before per-topic encryption shipped. Click to generate a key and seal it for everyone going forward.">
+              🔓 plaintext (v1) — encryption not yet enabled
+            </span>
+            <button
+              type="button"
+              className="rounded border border-[var(--cm-border)] px-2 py-0.5 text-[10px] text-[var(--cm-fg-secondary)] hover:bg-[var(--cm-bg-hover)] disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={sending}
+              onClick={async () => {
+                setError(null);
+                const result = await claimTopicKey({ apiKeySecret, topicName });
+                if (result.ok) {
+                  setTopicKey(result.topicKey);
+                  setKeyState("ready");
+                  return;
+                }
+                if (result.error.includes("already_encrypted")) {
+                  // Race lost — refetch via the regular path.
+                  const refetch = await getTopicKey({ apiKeySecret, topicName, fresh: true });
+                  if (refetch.ok && refetch.topicKey) {
+                    setTopicKey(refetch.topicKey);
+                    setKeyState("ready");
+                  } else {
+                    setKeyState(refetch.error === "not_sealed" ? "not_sealed" : "error");
+                  }
+                } else {
+                  setError(`claim failed: ${result.error}`);
+                }
+              }}
+            >
+              enable encryption
+            </button>
+          </div>
         ) : null}
         <form
           className="relative flex gap-2"

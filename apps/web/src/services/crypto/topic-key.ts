@@ -218,3 +218,113 @@ export async function registerBrowserPeerPubkey(
   }
   return (await res.json()) as { memberId: string; pubkey: string; changed: boolean };
 }
+
+/**
+ * Seal the topic key for another member's pubkey. Mirrors the CLI
+ * `sealTopicKeyFor` so a browser holder can re-seal for newcomers
+ * (CLI peers, other browsers) instead of the topic going dark when
+ * the only holder is a browser session.
+ *
+ * Returns null if the recipient pubkey is malformed (junk in the DB
+ * or a pre-encryption legacy member).
+ */
+export async function sealTopicKeyFor(
+  topicKey: Uint8Array,
+  recipientPubkeyHex: string,
+): Promise<{ encryptedKey: string; nonce: string } | null> {
+  try {
+    await sodium.ready;
+    const identity = await getBrowserIdentity();
+    const recipientX25519 = sodium.crypto_sign_ed25519_pk_to_curve25519(
+      sodium.from_hex(recipientPubkeyHex),
+    );
+    const nonceBytes = sodium.randombytes_buf(sodium.crypto_box_NONCEBYTES);
+    const cipher = sodium.crypto_box_easy(
+      topicKey,
+      nonceBytes,
+      recipientX25519,
+      identity.xSec,
+    );
+    // Wire format mirrors the CLI: <32-byte sender x25519 pubkey> || cipher.
+    const blob = new Uint8Array(32 + cipher.length);
+    blob.set(identity.xPub, 0);
+    blob.set(cipher, 32);
+    return {
+      encryptedKey: sodium.to_base64(blob, sodium.base64_variants.ORIGINAL),
+      nonce: sodium.to_base64(nonceBytes, sodium.base64_variants.ORIGINAL),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Bootstrap encryption on a v1 topic. Generates a fresh 32-byte topic
+ * key, seals it for the calling browser via crypto_box, and POSTs to
+ * `/v1/topics/:name/claim-key`. The endpoint is atomic (only succeeds
+ * if the topic's encrypted_key_pubkey is currently NULL); 409 means
+ * another peer beat us to the claim and we should fall back to the
+ * regular fetch path.
+ *
+ * Returns the new in-memory topic key on success so the caller can
+ * use it immediately without a follow-up `getTopicKey` round-trip.
+ */
+export async function claimTopicKey(args: {
+  apiKeySecret: string;
+  topicName: string;
+}): Promise<{ ok: true; topicKey: Uint8Array } | { ok: false; error: string; senderPubkey?: string }> {
+  await sodium.ready;
+  const identity = await getBrowserIdentity();
+
+  // Fresh symmetric key — 32 bytes for crypto_secretbox.
+  const topicKey = sodium.randombytes_buf(sodium.crypto_secretbox_KEYBYTES);
+
+  // Seal it for ourselves with our x25519 keypair. Wire format:
+  //   <32 bytes browser-x25519-pubkey> || crypto_box(topicKey, ...)
+  // matches what the broker writes for creator-seal in broker.ts.
+  const nonceBytes = sodium.randombytes_buf(sodium.crypto_box_NONCEBYTES);
+  const cipher = sodium.crypto_box_easy(
+    topicKey,
+    nonceBytes,
+    identity.xPub,
+    identity.xSec,
+  );
+  const blob = new Uint8Array(32 + cipher.length);
+  blob.set(identity.xPub, 0);
+  blob.set(cipher, 32);
+
+  const res = await fetch(
+    `/api/v1/topics/${encodeURIComponent(args.topicName)}/claim-key`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${args.apiKeySecret}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        // The senderPubkey stored on the topic row is the ED25519
+        // (we use it to seal subsequent re-seals); the per-member
+        // wire format embeds the sender's x25519 pubkey inline. Use
+        // the ed25519 here because that's what the broker schema
+        // expects (see topic.encrypted_key_pubkey docstring).
+        encryptedKeyPubkey: identity.edPubHex,
+        encryptedKey: sodium.to_base64(blob, sodium.base64_variants.ORIGINAL),
+        nonce: sodium.to_base64(nonceBytes, sodium.base64_variants.ORIGINAL),
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    let detail: string;
+    let senderPubkey: string | undefined;
+    try {
+      const j = (await res.json()) as { error?: string; senderPubkey?: string };
+      detail = j.error ?? `HTTP ${res.status}`;
+      senderPubkey = j.senderPubkey;
+    } catch {
+      detail = `HTTP ${res.status}`;
+    }
+    return { ok: false, error: detail, ...(senderPubkey ? { senderPubkey } : {}) };
+  }
+  return { ok: true, topicKey };
+}
