@@ -123,6 +123,7 @@ Topic  (conversation scope, v0.2.0)
   claudemesh topic tail <topic>    live SSE tail [--limit --forward-only]
   claudemesh topic post <t> <msg>  encrypted REST post (v0.3.0 v2) [--reply-to <id>]
   claudemesh send "#topic" "msg"   send to a topic (WS path, v1 plaintext)
+  claudemesh me                    cross-mesh workspace overview (v0.4.0)
   claudemesh member list           mesh roster with online state [--online]
   claudemesh notification list     recent @-mentions of you [--since <ISO>]
 
@@ -667,6 +668,25 @@ async function main(): Promise<void> {
         process.exit(await runNotificationList(f));
       } else {
         console.error("Usage: claudemesh notification list [--since <ISO>]");
+        process.exit(EXIT.INVALID_ARGS);
+      }
+      break;
+    }
+
+    // me — cross-mesh workspace overview (v0.4.0)
+    case "me": {
+      const sub = positionals[0];
+      const f = {
+        mesh: flags.mesh as string,
+        json: !!flags.json,
+      };
+      if (!sub || sub === "workspace" || sub === "overview") {
+        const { runMe } = await import("~/commands/me.js");
+        process.exit(await runMe(f));
+      } else {
+        console.error(
+          "Usage: claudemesh me  (cross-mesh overview; future: me topics, me notifications, me activity)",
+        );
         process.exit(EXIT.INVALID_ARGS);
       }
       break;
