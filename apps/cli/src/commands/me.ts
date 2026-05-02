@@ -109,3 +109,106 @@ export async function runMe(flags: MeFlags): Promise<number> {
     },
   );
 }
+
+interface WorkspaceTopic {
+  topicId: string;
+  name: string;
+  description: string | null;
+  visibility: string;
+  createdAt: string;
+  meshId: string;
+  meshSlug: string;
+  meshName: string;
+  memberId: string;
+  unread: number;
+  lastMessageAt: string | null;
+}
+
+interface WorkspaceTopicsResponse {
+  topics: WorkspaceTopic[];
+  totals: { topics: number; unread: number };
+}
+
+export interface MeTopicsFlags extends MeFlags {
+  unread?: boolean;
+}
+
+export async function runMeTopics(flags: MeTopicsFlags): Promise<number> {
+  return withRestKey(
+    {
+      meshSlug: flags.mesh ?? null,
+      purpose: "workspace-topics",
+      capabilities: ["read"],
+    },
+    async ({ secret }) => {
+      const ws = await request<WorkspaceTopicsResponse>({
+        path: "/api/v1/me/topics",
+        token: secret,
+      });
+
+      const visible = flags.unread
+        ? ws.topics.filter((t) => t.unread > 0)
+        : ws.topics;
+
+      if (flags.json) {
+        console.log(
+          JSON.stringify(
+            { topics: visible, totals: ws.totals },
+            null,
+            2,
+          ),
+        );
+        return EXIT.SUCCESS;
+      }
+
+      render.section(
+        `${clay("topics")} — ${ws.totals.topics} across all meshes  ${dim(
+          ws.totals.unread > 0
+            ? `· ${ws.totals.unread} unread`
+            : "· all read",
+        )}`,
+      );
+
+      if (visible.length === 0) {
+        process.stdout.write(
+          dim(
+            flags.unread
+              ? "  no unread topics\n"
+              : "  no topics — run `claudemesh topic create #general`\n",
+          ),
+        );
+        return EXIT.SUCCESS;
+      }
+
+      const slugWidth = Math.max(...visible.map((t) => t.meshSlug.length), 6);
+      const nameWidth = Math.max(...visible.map((t) => t.name.length), 8);
+
+      for (const t of visible) {
+        const slug = dim(t.meshSlug.padEnd(slugWidth));
+        const name = cyan(t.name.padEnd(nameWidth));
+        const unread =
+          t.unread > 0
+            ? yellow(`${t.unread} unread`.padStart(10))
+            : dim("·".padStart(10));
+        const last = t.lastMessageAt
+          ? dim(formatRelativeTime(t.lastMessageAt))
+          : dim("never");
+        process.stdout.write(`  ${slug}  ${name}  ${unread}  ${last}\n`);
+      }
+      return EXIT.SUCCESS;
+    },
+  );
+}
+
+function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  const sec = Math.max(0, Math.floor((now - then) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86_400) return `${Math.floor(sec / 3600)}h ago`;
+  if (sec < 86_400 * 30) return `${Math.floor(sec / 86_400)}d ago`;
+  if (sec < 86_400 * 365)
+    return `${Math.floor(sec / (86_400 * 30))}mo ago`;
+  return `${Math.floor(sec / (86_400 * 365))}y ago`;
+}

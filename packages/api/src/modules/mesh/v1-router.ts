@@ -496,6 +496,154 @@ export const v1Router = new Hono<Env>()
     });
   })
 
+  // GET /v1/me/topics — cross-mesh topic list for the caller's user.
+  //
+  // For each topic across every mesh the user belongs to, returns
+  // mesh context + unread count (vs that user's `topic_member.last_read_at`
+  // in that mesh) + last-message timestamp. Sorted by lastMessageAt
+  // desc so the most-active topics surface first — the natural "what
+  // should I read" view.
+  .get("/me/topics", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+    const [issuer] = await db
+      .select({ userId: meshMember.userId })
+      .from(meshMember)
+      .where(eq(meshMember.id, key.issuedByMemberId));
+    if (!issuer?.userId) {
+      return c.json({ error: "issuer_member_has_no_user" }, 400);
+    }
+
+    const memberships = await db
+      .select({
+        memberId: meshMember.id,
+        meshId: meshMember.meshId,
+        meshSlug: mesh.slug,
+        meshName: mesh.name,
+      })
+      .from(meshMember)
+      .innerJoin(mesh, eq(mesh.id, meshMember.meshId))
+      .where(
+        and(
+          eq(meshMember.userId, issuer.userId),
+          isNull(meshMember.revokedAt),
+          isNull(mesh.archivedAt),
+        ),
+      );
+
+    if (memberships.length === 0) {
+      return c.json({ topics: [], totals: { topics: 0, unread: 0 } });
+    }
+
+    const meshIds = memberships.map((m) => m.meshId);
+    const memberByMeshId = new Map(memberships.map((m) => [m.meshId, m]));
+
+    const topics = await db
+      .select({
+        id: meshTopic.id,
+        meshId: meshTopic.meshId,
+        name: meshTopic.name,
+        description: meshTopic.description,
+        visibility: meshTopic.visibility,
+        createdAt: meshTopic.createdAt,
+      })
+      .from(meshTopic)
+      .where(
+        and(inArray(meshTopic.meshId, meshIds), isNull(meshTopic.archivedAt)),
+      )
+      .orderBy(asc(meshTopic.name));
+
+    if (topics.length === 0) {
+      return c.json({ topics: [], totals: { topics: 0, unread: 0 } });
+    }
+
+    const topicIds = topics.map((t) => t.id);
+    const myMemberIds = memberships.map((m) => m.memberId);
+
+    // Last message timestamp per topic.
+    const lastMessages = await db
+      .select({
+        topicId: meshTopicMessage.topicId,
+        lastAt: sql<Date>`max(${meshTopicMessage.createdAt})`,
+      })
+      .from(meshTopicMessage)
+      .where(inArray(meshTopicMessage.topicId, topicIds))
+      .groupBy(meshTopicMessage.topicId);
+    const lastByTopic = new Map(
+      lastMessages.map((r) => [r.topicId, r.lastAt]),
+    );
+
+    // Unread count per topic — compares topic_message.created_at against
+    // the user's own member row's last_read_at in that mesh's topic.
+    // A message authored by the user themselves doesn't count as unread.
+    const unreadCounts = await db
+      .select({
+        topicId: meshTopicMessage.topicId,
+        unread: count(meshTopicMessage.id),
+      })
+      .from(meshTopicMessage)
+      .leftJoin(
+        meshTopicMember,
+        and(
+          eq(meshTopicMember.topicId, meshTopicMessage.topicId),
+          inArray(meshTopicMember.memberId, myMemberIds),
+        ),
+      )
+      .where(
+        and(
+          inArray(meshTopicMessage.topicId, topicIds),
+          sql`${meshTopicMessage.createdAt} > COALESCE(${meshTopicMember.lastReadAt}, '1970-01-01'::timestamp)`,
+          sql`${meshTopicMessage.senderMemberId} NOT IN (${sql.join(
+            myMemberIds.map((id) => sql`${id}`),
+            sql`, `,
+          )})`,
+        ),
+      )
+      .groupBy(meshTopicMessage.topicId);
+    const unreadByTopic = new Map(
+      unreadCounts.map((r) => [r.topicId, Number(r.unread)]),
+    );
+
+    const items = topics.map((t) => {
+      const m = memberByMeshId.get(t.meshId)!;
+      const lastAt = lastByTopic.get(t.id);
+      return {
+        topicId: t.id,
+        name: t.name,
+        description: t.description,
+        visibility: t.visibility,
+        createdAt: t.createdAt.toISOString(),
+        meshId: t.meshId,
+        meshSlug: m.meshSlug,
+        meshName: m.meshName,
+        memberId: m.memberId,
+        unread: unreadByTopic.get(t.id) ?? 0,
+        lastMessageAt: lastAt ? new Date(lastAt).toISOString() : null,
+      };
+    });
+
+    // Sort by lastMessageAt desc, with never-posted topics last (alphabetical).
+    items.sort((a, b) => {
+      if (a.lastMessageAt && b.lastMessageAt) {
+        return b.lastMessageAt.localeCompare(a.lastMessageAt);
+      }
+      if (a.lastMessageAt) return -1;
+      if (b.lastMessageAt) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return c.json({
+      topics: items,
+      totals: {
+        topics: items.length,
+        unread: items.reduce((a, t) => a + t.unread, 0),
+      },
+    });
+  })
+
   // GET /v1/topics — list topics in the key's mesh
   // Includes per-topic unread counts when the key has an issuing member
   // (i.e. dashboard keys; CLI-minted keys also carry it). Counts are

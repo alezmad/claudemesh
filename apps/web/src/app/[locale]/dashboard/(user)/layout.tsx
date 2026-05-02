@@ -26,6 +26,11 @@ const menu = [
         icon: Icons.Share,
       },
       {
+        title: "topics",
+        href: pathsConfig.dashboard.user.topics,
+        icon: Icons.MessageSquare,
+      },
+      {
         title: "invites",
         href: pathsConfig.dashboard.user.invites,
         icon: Icons.Link,

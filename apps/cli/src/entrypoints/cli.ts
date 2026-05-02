@@ -124,6 +124,7 @@ Topic  (conversation scope, v0.2.0)
   claudemesh topic post <t> <msg>  encrypted REST post (v0.3.0 v2) [--reply-to <id>]
   claudemesh send "#topic" "msg"   send to a topic (WS path, v1 plaintext)
   claudemesh me                    cross-mesh workspace overview (v0.4.0)
+  claudemesh me topics             cross-mesh topic list [--unread]
   claudemesh member list           mesh roster with online state [--online]
   claudemesh notification list     recent @-mentions of you [--since <ISO>]
 
@@ -683,9 +684,14 @@ async function main(): Promise<void> {
       if (!sub || sub === "workspace" || sub === "overview") {
         const { runMe } = await import("~/commands/me.js");
         process.exit(await runMe(f));
+      } else if (sub === "topics") {
+        const { runMeTopics } = await import("~/commands/me.js");
+        process.exit(await runMeTopics({ ...f, unread: !!flags.unread }));
       } else {
         console.error(
-          "Usage: claudemesh me  (cross-mesh overview; future: me topics, me notifications, me activity)",
+          "Usage: claudemesh me            (cross-mesh overview)\n" +
+            "       claudemesh me topics     (cross-mesh topic list)\n" +
+            "       claudemesh me topics --unread  (only unread topics)",
         );
         process.exit(EXIT.INVALID_ARGS);
       }

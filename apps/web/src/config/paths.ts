@@ -103,6 +103,7 @@ const pathsConfig = {
         topic: (id: string, name: string) =>
           `${DASHBOARD_PREFIX}/meshes/${id}/topics/${encodeURIComponent(name)}`,
       },
+      topics: `${DASHBOARD_PREFIX}/topics`,
       invites: `${DASHBOARD_PREFIX}/invites`,
       settings: {
         index: `${DASHBOARD_PREFIX}/settings`,
