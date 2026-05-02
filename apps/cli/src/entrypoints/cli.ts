@@ -9,6 +9,7 @@ import { renderVersion } from "~/cli/output/version.js";
 import { isInviteUrl, normaliseInviteUrl } from "~/utils/url.js";
 import { classifyInvocation } from "~/cli/policy-classify.js";
 import { gate, type ApprovalMode } from "~/services/policy/index.js";
+import { bold, clay, cyan, dim, orange } from "~/ui/styles.js";
 
 installSignalHandlers();
 installErrorHandlers();
@@ -192,8 +193,59 @@ Flags
   -q, --quiet                      suppress non-essential output
 `;
 
+/**
+ * Apply color treatment to the HELP block for terminal readability.
+ *
+ * Strategy is line-based and intentionally conservative:
+ * - Section header lines (the title-case categories like `Mesh`,
+ *   `Topic`, `Auth`, `USAGE`) get bold + accent.
+ * - Each verb row (`  claudemesh <verb> ...`) gets the command tinted
+ *   cyan up to the second whitespace gap (separating the syntax from
+ *   the description), and any trailing `(alias: ...)` parenthetical
+ *   dimmed so it reads as secondary metadata.
+ * - The header (program name + version) gets the brand orange.
+ *
+ * Falls through to plain output when stdout is not a TTY or NO_COLOR
+ * is set — the underlying style helpers already gate on that.
+ */
+function colorizeHelp(raw: string): string {
+  const lines = raw.split("\n");
+  const SECTION_HEADER_RE = /^([A-Z][A-Za-z0-9 /+-]*?)(\s*\(.*\))?$/;
+  const VERB_ROW_RE = /^(\s{2})(claudemesh[^\s]*(?:\s+[^\s]+)*?)(\s{2,})(.*)$/;
+  const ALIAS_RE = /(\(alias[^)]*\))/g;
+  const out: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("claudemesh —")) {
+      out.push(orange(line));
+      continue;
+    }
+    if (line.trim() === "") {
+      out.push(line);
+      continue;
+    }
+    // Section header: a line with no leading spaces that isn't a verb.
+    if (!line.startsWith(" ") && SECTION_HEADER_RE.test(line)) {
+      const m = line.match(SECTION_HEADER_RE)!;
+      const head = bold(clay(m[1]!));
+      const meta = m[2] ? dim(m[2]) : "";
+      out.push(head + meta);
+      continue;
+    }
+    // Verb row: tint the syntax, dim the alias parenthetical.
+    const verbMatch = line.match(VERB_ROW_RE);
+    if (verbMatch) {
+      const [, indent, syntax, gap, rest] = verbMatch;
+      const dimmedRest = rest!.replace(ALIAS_RE, (m) => dim(m));
+      out.push(`${indent}${cyan(syntax!)}${gap}${dimmedRest}`);
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 async function main(): Promise<void> {
-  if (flags.help || flags.h) { console.log(HELP); process.exit(EXIT.SUCCESS); }
+  if (flags.help || flags.h) { console.log(colorizeHelp(HELP)); process.exit(EXIT.SUCCESS); }
   if (flags.version || flags.V) { console.log(renderVersion()); process.exit(EXIT.SUCCESS); }
 
   // Policy gate — runs before any broker-touching command. Skipped for help,

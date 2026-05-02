@@ -234,6 +234,16 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   `message_id`, `reply_to_id` so the recipient has everything needed
   to thread a reply without a follow-up query. *Shipped 2026-05-02 in
   CLI v1.9.0.*
+- **v0.4.0 — workspace view (per-user superset)** — virtual layer
+  that aggregates reads across the meshes a user has joined while
+  keeping writes mesh-scoped. New verbs: `claudemesh me`, `me topics`,
+  `me notifications`, `me activity`, `me search`. Default-aggregation
+  rule for existing read verbs (`notification list`, `topic list`,
+  `task list`, `state list`, `memory recall`) when no `--mesh` is
+  passed. Mirror REST surface at `/v1/me/*`. Pure client-side
+  projection — zero broker / protocol changes; per-mesh trust
+  boundaries preserved. Spec at
+  `.artifacts/specs/2026-05-02-workspace-view.md`.
 - **v0.3.2 — multi-session DM routing + broadcast self-loopback** —
   fixes two production bugs: (1) replies via `claudemesh send
   <from_id>` rejected with "no connected peer" when the sender's
