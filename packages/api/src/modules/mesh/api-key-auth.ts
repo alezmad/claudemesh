@@ -22,6 +22,13 @@ export type ApiKeyCapability = "send" | "read" | "state_write" | "admin";
 export interface AuthedApiKey {
   id: string;
   meshId: string;
+  /**
+   * The mesh member that minted this key. Dashboard keys carry the
+   * owner's member id; CLI-minted keys carry the issuing peer. Endpoints
+   * that attribute a side-effect to a member (e.g. PATCH /read,
+   * presence ping) read this field instead of the api key id.
+   */
+  issuedByMemberId: string | null;
   capabilities: ApiKeyCapability[];
   topicScopes: string[] | null;
 }
@@ -37,6 +44,7 @@ async function verifyBearer(secret: string): Promise<AuthedApiKey | null> {
       secretHash: meshApiKey.secretHash,
       capabilities: meshApiKey.capabilities,
       topicScopes: meshApiKey.topicScopes,
+      issuedByMemberId: meshApiKey.issuedByMemberId,
       revokedAt: meshApiKey.revokedAt,
       expiresAt: meshApiKey.expiresAt,
     })
@@ -58,6 +66,7 @@ async function verifyBearer(secret: string): Promise<AuthedApiKey | null> {
     return {
       id: c.id,
       meshId: c.meshId,
+      issuedByMemberId: c.issuedByMemberId ?? null,
       capabilities: (c.capabilities ?? []) as ApiKeyCapability[],
       topicScopes: c.topicScopes ?? null,
     };

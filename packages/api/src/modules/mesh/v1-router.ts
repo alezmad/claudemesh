@@ -36,7 +36,7 @@ import {
   messageQueue,
   presence,
 } from "@turbostarter/db/schema/mesh";
-import { and, asc, desc, eq, gt, isNull, lt } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
 
 import { validate } from "../../middleware";
 import {
@@ -140,6 +140,11 @@ export const v1Router = new Hono<Env>()
   })
 
   // GET /v1/topics — list topics in the key's mesh
+  // Includes per-topic unread counts when the key has an issuing member
+  // (i.e. dashboard keys; CLI-minted keys also carry it). Counts are
+  // computed against topic_member.last_read_at; if no membership row
+  // exists for this member, the topic counts as 0 unread (member is
+  // not subscribed — surfacing the topic without nagging them).
   .get("/topics", async (c) => {
     const key = c.var.apiKey;
     requireCapability(key, "read");
@@ -157,6 +162,38 @@ export const v1Router = new Hono<Env>()
     const filtered = key.topicScopes
       ? rows.filter((r) => key.topicScopes!.includes(r.name))
       : rows;
+
+    // Build an unread-count map keyed by topic id. Only meaningful when
+    // we know whose last_read_at to compare against.
+    const unreadByTopic = new Map<string, number>();
+    if (key.issuedByMemberId && filtered.length > 0) {
+      const topicIds = filtered.map((t) => t.id);
+      const counts = await db
+        .select({
+          topicId: meshTopicMessage.topicId,
+          unread: count(meshTopicMessage.id),
+        })
+        .from(meshTopicMessage)
+        .leftJoin(
+          meshTopicMember,
+          and(
+            eq(meshTopicMember.topicId, meshTopicMessage.topicId),
+            eq(meshTopicMember.memberId, key.issuedByMemberId),
+          ),
+        )
+        .where(
+          and(
+            sql`${meshTopicMessage.topicId} = ANY(${topicIds})`,
+            sql`${meshTopicMessage.createdAt} > COALESCE(${meshTopicMember.lastReadAt}, '1970-01-01'::timestamp)`,
+            sql`${meshTopicMessage.senderMemberId} <> ${key.issuedByMemberId}`,
+          ),
+        )
+        .groupBy(meshTopicMessage.topicId);
+      for (const row of counts) {
+        unreadByTopic.set(row.topicId, Number(row.unread));
+      }
+    }
+
     return c.json({
       topics: filtered.map((t) => ({
         id: t.id,
@@ -164,7 +201,57 @@ export const v1Router = new Hono<Env>()
         description: t.description,
         visibility: t.visibility,
         createdAt: t.createdAt.toISOString(),
+        unread: unreadByTopic.get(t.id) ?? 0,
       })),
+    });
+  })
+
+  // PATCH /v1/topics/:name/read — mark a topic read up to now for the
+  // member that issued this api key. Upserts topic_member if no row
+  // exists yet (e.g. dashboard owner who joined the mesh before #general
+  // existed and hadn't been auto-subscribed). No-op if the api key has
+  // no issuing member (legacy keys without issuedByMemberId).
+  .patch("/topics/:name/read", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    const name = c.req.param("name");
+    requireTopicScope(key, name);
+
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+
+    const [topic] = await db
+      .select({ id: meshTopic.id })
+      .from(meshTopic)
+      .where(
+        and(
+          eq(meshTopic.meshId, key.meshId),
+          eq(meshTopic.name, name),
+          isNull(meshTopic.archivedAt),
+        ),
+      );
+    if (!topic) {
+      return c.json({ error: "topic_not_found", topic: name }, 404);
+    }
+
+    const now = new Date();
+    await db
+      .insert(meshTopicMember)
+      .values({
+        topicId: topic.id,
+        memberId: key.issuedByMemberId,
+        lastReadAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [meshTopicMember.topicId, meshTopicMember.memberId],
+        set: { lastReadAt: now },
+      });
+
+    return c.json({
+      topic: name,
+      topicId: topic.id,
+      readAt: now.toISOString(),
     });
   })
 

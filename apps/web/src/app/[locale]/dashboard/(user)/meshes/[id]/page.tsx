@@ -4,10 +4,14 @@ import { notFound } from "next/navigation";
 import { getMyMeshResponseSchema } from "@turbostarter/api/schema";
 import { handle } from "@turbostarter/api/utils";
 import { db } from "@turbostarter/db/server";
-import { meshTopic } from "@turbostarter/db/schema/mesh";
+import {
+  meshTopic,
+  meshTopicMember,
+  meshTopicMessage,
+} from "@turbostarter/db/schema/mesh";
 import { Badge } from "@turbostarter/ui-web/badge";
 import { buttonVariants } from "@turbostarter/ui-web/button";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, count, eq, isNull, ne, or, sql } from "drizzle-orm";
 
 import { pathsConfig } from "~/config/paths";
 import { api } from "~/lib/api/server";
@@ -51,6 +55,43 @@ export default async function MeshPage({
     .from(meshTopic)
     .where(and(eq(meshTopic.meshId, id), isNull(meshTopic.archivedAt)))
     .orderBy(asc(meshTopic.name));
+
+  // Unread counts per topic for the viewing member. Skips messages the
+  // viewer themselves sent (no point flagging "you" as unread). Topics
+  // the viewer hasn't joined fall through to last_read_at = epoch via
+  // the LEFT JOIN, which counts every message — that's the correct
+  // first-visit behaviour for owner-created topics they haven't opened.
+  const myMemberId = members.find((m) => m.isMe)?.id;
+  const unreadByTopic = new Map<string, number>();
+  if (myMemberId && topics.length > 0) {
+    const counts = await db
+      .select({
+        topicId: meshTopicMessage.topicId,
+        unread: count(meshTopicMessage.id),
+      })
+      .from(meshTopicMessage)
+      .leftJoin(
+        meshTopicMember,
+        and(
+          eq(meshTopicMember.topicId, meshTopicMessage.topicId),
+          eq(meshTopicMember.memberId, myMemberId),
+        ),
+      )
+      .where(
+        and(
+          sql`${meshTopicMessage.topicId} = ANY(${topics.map((t) => t.id)})`,
+          ne(meshTopicMessage.senderMemberId, myMemberId),
+          or(
+            isNull(meshTopicMember.lastReadAt),
+            sql`${meshTopicMessage.createdAt} > ${meshTopicMember.lastReadAt}`,
+          ),
+        ),
+      )
+      .groupBy(meshTopicMessage.topicId);
+    for (const row of counts) {
+      unreadByTopic.set(row.topicId, Number(row.unread));
+    }
+  }
 
   return (
     <>
@@ -166,7 +207,9 @@ export default async function MeshPage({
             </div>
           ) : (
             <div className="divide-y">
-              {topics.map((t) => (
+              {topics.map((t) => {
+                const unread = unreadByTopic.get(t.id) ?? 0;
+                return (
                 <Link
                   key={t.id}
                   href={pathsConfig.dashboard.user.meshes.topic(mesh.id, t.name)}
@@ -180,6 +223,15 @@ export default async function MeshPage({
                     <Badge variant="outline" className="text-xs">
                       {t.visibility}
                     </Badge>
+                    {unread > 0 ? (
+                      <span
+                        className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--cm-clay)] px-1.5 text-[10px] font-medium text-white"
+                        style={{ fontFamily: "var(--cm-font-mono)" }}
+                        aria-label={`${unread} unread`}
+                      >
+                        {unread > 99 ? "99+" : unread}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-3">
                     {t.description ? (
@@ -195,7 +247,8 @@ export default async function MeshPage({
                     </span>
                   </div>
                 </Link>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>

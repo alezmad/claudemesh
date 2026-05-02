@@ -131,6 +131,7 @@ export function TopicChatPanel({
   const [lastEventAt, setLastEventAt] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const seenIdsRef = useRef<Set<string>>(new Set());
+  const lastMarkReadAtRef = useRef<number>(0);
 
   const headers = useMemo(
     () => ({
@@ -139,6 +140,22 @@ export function TopicChatPanel({
     }),
     [apiKeySecret],
   );
+
+  // Mark the topic read up to now, but at most once per 5 seconds —
+  // we'd otherwise hit /read on every inbound SSE message which is
+  // wasteful (the wall-clock watermark advances either way).
+  const markRead = useCallback(async () => {
+    if (Date.now() - lastMarkReadAtRef.current < 5000) return;
+    lastMarkReadAtRef.current = Date.now();
+    try {
+      await fetch(`/api/v1/topics/${encodeURIComponent(topicName)}/read`, {
+        method: "PATCH",
+        headers,
+      });
+    } catch {
+      // Soft-fail — unread counts are advisory.
+    }
+  }, [headers, topicName]);
 
   // One-shot history backfill on mount; the SSE stream is forward-only,
   // so any messages older than connect-time come from this fetch.
@@ -164,7 +181,8 @@ export function TopicChatPanel({
 
   useEffect(() => {
     void loadHistory();
-  }, [loadHistory]);
+    void markRead();
+  }, [loadHistory, markRead]);
 
   // SSE subscription with auto-reconnect. AbortController unwinds the
   // stream when the component unmounts or the topic/key changes.
@@ -212,6 +230,7 @@ export function TopicChatPanel({
                 if (seenIdsRef.current.has(m.id)) continue;
                 seenIdsRef.current.add(m.id);
                 setMessages((cur) => [...cur, m]);
+                void markRead();
               } catch {
                 // Drop malformed events silently — heartbeat-as-message
                 // happens once per misconfigured proxy.
@@ -236,7 +255,7 @@ export function TopicChatPanel({
       setStreamState("stopped");
       ctl.abort();
     };
-  }, [apiKeySecret, topicName]);
+  }, [apiKeySecret, topicName, markRead]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
