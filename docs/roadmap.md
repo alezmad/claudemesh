@@ -140,10 +140,11 @@ production-grade before any new architectural work.
 
 ---
 
-## v1.7.0 — *the demo cut*
+## v1.7.0 — *the demo cut* — *shipped*
 
 The release that turns claudemesh into a thing you can record and
-show to non-technical audiences.
+show to non-technical audiences. CLI v1.7.0 published to npm
+2026-05-02 with terminal parity for the new server features.
 
 - **Member sidebar in the chat panel** — names, online dots,
   presence summaries (free with SSE). `GET /v1/members` lists
@@ -157,10 +158,15 @@ show to non-technical audiences.
   on the universe page lists every `@<your-name>` reference across
   all your meshes (last 7 days). `GET /v1/notifications` mirrors
   for api-key clients. *Shipped 2026-05-02.*
-- **First public blog post + recorded demo** — "claudemesh in 90
-  seconds" video
-- **Marketing site refresh** — screenshots from the real-time UI,
-  remove v0.2.0 stamps
+- **CLI parity for the demo** — `claudemesh topic tail` (live SSE
+  consumer in the terminal), `claudemesh member list`, and
+  `claudemesh notification list`. Each auto-mints + revokes a
+  5-minute apikey. *Shipped in CLI v1.7.0, 2026-05-02.*
+- **First public blog post + recorded demo** — blog post shipped
+  2026-05-02 (`/blog/agents-and-humans-same-chat`); recorded video
+  pending a screen-capture session.
+- **Marketing site refresh** — timeline `next` block updated.
+  Screenshots pending a Chrome session.
 
 ---
 
