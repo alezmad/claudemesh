@@ -15,7 +15,7 @@ import { HttpStatusCode } from "@turbostarter/shared/constants";
 import { db } from "@turbostarter/db/server";
 import { meshApiKey } from "@turbostarter/db/schema/mesh";
 import { and, eq } from "drizzle-orm";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 export type ApiKeyCapability = "send" | "read" | "state_write" | "admin";
 
@@ -108,4 +108,44 @@ export function requireTopicScope(key: AuthedApiKey, topicName: string): void {
   throw new HttpException(HttpStatusCode.FORBIDDEN, {
     code: "error.api_key_topic_out_of_scope",
   });
+}
+
+/**
+ * Mint an API key for an authenticated dashboard user. Returns the plaintext
+ * secret — the caller is responsible for handing it to the browser only over
+ * the authenticated session render and never persisting it server-side
+ * outside the (hashed) row this writes.
+ *
+ * The default capabilities are read+send and the default expiry is 24h, which
+ * matches the lifetime of a typical dashboard session. The browser caches the
+ * secret in `sessionStorage`; on the next page load we mint a fresh one.
+ */
+export async function createDashboardApiKey(args: {
+  meshId: string;
+  memberId: string;
+  label: string;
+  capabilities?: ApiKeyCapability[];
+  topicScopes?: string[] | null;
+  expiresInMs?: number;
+}): Promise<{ id: string; secret: string; expiresAt: Date }> {
+  const bytes = randomBytes(32);
+  const plaintext = "cm_" + bytes.toString("base64url");
+  const prefix = plaintext.slice(0, 11);
+  const hash = createHash("sha256").update(plaintext).digest("hex");
+  const expiresAt = new Date(Date.now() + (args.expiresInMs ?? 24 * 60 * 60 * 1000));
+  const [row] = await db
+    .insert(meshApiKey)
+    .values({
+      meshId: args.meshId,
+      label: args.label,
+      secretHash: hash,
+      secretPrefix: prefix,
+      capabilities: args.capabilities ?? ["read", "send"],
+      topicScopes: args.topicScopes ?? null,
+      issuedByMemberId: args.memberId,
+      expiresAt,
+    })
+    .returning({ id: meshApiKey.id });
+  if (!row) throw new Error("failed to mint dashboard api key");
+  return { id: row.id, secret: plaintext, expiresAt };
 }

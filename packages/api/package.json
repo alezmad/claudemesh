@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./env": "./src/env.ts",
     "./utils": "./src/utils/index.ts",
-    "./schema": "./src/schema/index.ts"
+    "./schema": "./src/schema/index.ts",
+    "./modules/mesh/api-key-auth": "./src/modules/mesh/api-key-auth.ts"
   },
   "scripts": {
     "clean": "git clean -xdf .cache .turbo dist node_modules",

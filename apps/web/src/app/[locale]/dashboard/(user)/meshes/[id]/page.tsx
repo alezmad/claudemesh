@@ -3,8 +3,11 @@ import { notFound } from "next/navigation";
 
 import { getMyMeshResponseSchema } from "@turbostarter/api/schema";
 import { handle } from "@turbostarter/api/utils";
+import { db } from "@turbostarter/db/server";
+import { meshTopic } from "@turbostarter/db/schema/mesh";
 import { Badge } from "@turbostarter/ui-web/badge";
 import { buttonVariants } from "@turbostarter/ui-web/button";
+import { and, asc, eq, isNull } from "drizzle-orm";
 
 import { pathsConfig } from "~/config/paths";
 import { api } from "~/lib/api/server";
@@ -36,6 +39,17 @@ export default async function MeshPage({
   const activeInvites = invites.filter(
     (i) => !i.revokedAt && new Date(i.expiresAt) > new Date(),
   );
+
+  const topics = await db
+    .select({
+      id: meshTopic.id,
+      name: meshTopic.name,
+      description: meshTopic.description,
+      visibility: meshTopic.visibility,
+    })
+    .from(meshTopic)
+    .where(and(eq(meshTopic.meshId, id), isNull(meshTopic.archivedAt)))
+    .orderBy(asc(meshTopic.name));
 
   return (
     <>
@@ -124,6 +138,49 @@ export default async function MeshPage({
                     joined {new Date(m.joinedAt).toLocaleDateString()}
                   </span>
                 </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-lg border">
+          <header className="flex items-center justify-between border-b px-4 py-3">
+            <h2 className="font-medium">
+              Topics{" "}
+              <span className="text-muted-foreground">({topics.length})</span>
+            </h2>
+          </header>
+          {topics.length === 0 ? (
+            <p className="text-muted-foreground px-4 py-8 text-center text-sm">
+              No topics yet. Run{" "}
+              <code className="bg-muted rounded px-1.5 py-0.5 text-xs">
+                claudemesh topic create &lt;name&gt;
+              </code>{" "}
+              from the CLI.
+            </p>
+          ) : (
+            <div className="divide-y">
+              {topics.map((t) => (
+                <Link
+                  key={t.id}
+                  href={pathsConfig.dashboard.user.meshes.topic(mesh.id, t.name)}
+                  className="hover:bg-muted/50 flex flex-col gap-1.5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
+                >
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    <span className="font-medium">
+                      <span className="text-muted-foreground">#</span>
+                      {t.name}
+                    </span>
+                    <Badge variant="outline" className="text-xs">
+                      {t.visibility}
+                    </Badge>
+                  </div>
+                  {t.description ? (
+                    <span className="text-muted-foreground truncate text-xs">
+                      {t.description}
+                    </span>
+                  ) : null}
+                </Link>
               ))}
             </div>
           )}
