@@ -2,13 +2,14 @@ import { randomBytes } from "node:crypto";
 
 import sodium from "libsodium-wrappers";
 
-import { and, eq, isNull } from "@turbostarter/db";
+import { and, asc, eq, isNull } from "@turbostarter/db";
 import {
   invite,
   mesh,
   meshMember,
   meshTopic,
   meshTopicMember,
+  meshTopicMemberKey,
   pendingInvite,
 } from "@turbostarter/db/schema";
 import { db } from "@turbostarter/db/server";
@@ -206,11 +207,24 @@ export const ensureGeneralTopic = async (
   meshId: string,
 ): Promise<{ id: string } | null> => {
   const [existing] = await db
-    .select({ id: meshTopic.id })
+    .select({
+      id: meshTopic.id,
+      encryptedKeyPubkey: meshTopic.encryptedKeyPubkey,
+    })
     .from(meshTopic)
     .where(and(eq(meshTopic.meshId, meshId), eq(meshTopic.name, "general")))
     .limit(1);
-  if (existing) return existing;
+  if (existing) return { id: existing.id };
+
+  // Generate the topic's symmetric key + an ephemeral sender keypair
+  // for v0.3.0 phase 2 sealing. Mirrors the broker's createTopic path
+  // so web-created topics aren't stuck as unencrypted v0.2.0 placeholders.
+  // The plaintext topicKey leaves memory after sealing one copy for
+  // the mesh owner — the broker never persists it.
+  await sodium.ready;
+  const topicKey = sodium.randombytes_buf(32);
+  const senderKp = sodium.crypto_box_keypair();
+
   const [row] = await db
     .insert(meshTopic)
     .values({
@@ -218,10 +232,49 @@ export const ensureGeneralTopic = async (
       name: "general",
       description: "Default mesh-wide channel. Every member can read and post.",
       visibility: "public",
+      encryptedKeyPubkey: sodium.to_hex(senderKp.publicKey),
     })
     .onConflictDoNothing()
     .returning({ id: meshTopic.id });
-  return row ?? null;
+  if (!row) return null;
+
+  // Seal a copy for the oldest non-revoked member (the owner, by
+  // construction — owner-as-member rows are minted at mesh creation
+  // time, ahead of this call).
+  const [owner] = await db
+    .select({
+      id: meshMember.id,
+      peerPubkey: meshMember.peerPubkey,
+    })
+    .from(meshMember)
+    .where(and(eq(meshMember.meshId, meshId), isNull(meshMember.revokedAt)))
+    .orderBy(asc(meshMember.joinedAt))
+    .limit(1);
+  if (owner) {
+    try {
+      const recipientX25519 = sodium.crypto_sign_ed25519_pk_to_curve25519(
+        sodium.from_hex(owner.peerPubkey),
+      );
+      const nonce = sodium.randombytes_buf(sodium.crypto_box_NONCEBYTES);
+      const sealed = sodium.crypto_box_easy(
+        topicKey,
+        nonce,
+        recipientX25519,
+        senderKp.privateKey,
+      );
+      await db.insert(meshTopicMemberKey).values({
+        topicId: row.id,
+        memberId: owner.id,
+        encryptedKey: sodium.to_base64(sealed, sodium.base64_variants.ORIGINAL),
+        nonce: sodium.to_base64(nonce, sodium.base64_variants.ORIGINAL),
+      }).onConflictDoNothing();
+    } catch {
+      // Owner pubkey isn't a valid ed25519 key (legacy data?). Topic
+      // is still created — phase 3 re-seal flow will handle it.
+    }
+  }
+
+  return row;
 };
 
 export const archiveMyMesh = async ({
