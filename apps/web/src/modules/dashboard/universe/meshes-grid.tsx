@@ -12,6 +12,7 @@ interface MeshSummary {
   myRole: "admin" | "member";
   isOwner: boolean;
   memberCount: number;
+  topicCount?: number;
   archivedAt: Date | string | null;
 }
 
@@ -130,6 +131,21 @@ const MeshCard = ({
       <div className="mt-auto flex items-center justify-between border-t border-[var(--cm-border-soft,rgba(217,119,87,0.1))] pt-3 font-mono text-[11px] tracking-[0.04em] text-[var(--cm-fg-tertiary)]">
         <span className={mesh.memberCount > 0 ? "text-[var(--cm-cactus)]" : ""}>
           {mesh.memberCount} {mesh.memberCount === 1 ? "MEMBER" : "MEMBERS"}
+          {mesh.topicCount !== undefined ? (
+            <>
+              {" · "}
+              <span
+                className={
+                  mesh.topicCount > 0
+                    ? "text-[var(--cm-clay)]"
+                    : "text-[var(--cm-fg-tertiary)]"
+                }
+              >
+                {mesh.topicCount}{" "}
+                {mesh.topicCount === 1 ? "TOPIC" : "TOPICS"}
+              </span>
+            </>
+          ) : null}
           {" · "}
           <span className="uppercase">{mesh.tier}</span>
         </span>

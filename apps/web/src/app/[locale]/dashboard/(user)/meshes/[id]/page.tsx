@@ -17,6 +17,7 @@ import {
   DashboardHeaderDescription,
   DashboardHeaderTitle,
 } from "~/modules/common/layout/dashboard/header";
+import { CreateTopicForm } from "~/modules/mesh/create-topic-form";
 
 export const generateMetadata = getMetadata({
   title: "Mesh",
@@ -144,42 +145,55 @@ export default async function MeshPage({
         </section>
 
         <section className="rounded-lg border">
-          <header className="flex items-center justify-between border-b px-4 py-3">
+          <header className="flex items-center justify-between gap-3 border-b px-4 py-3">
             <h2 className="font-medium">
               Topics{" "}
               <span className="text-muted-foreground">({topics.length})</span>
             </h2>
+            {topics.length > 0 ? (
+              <CreateTopicForm meshId={mesh.id} variant="compact" />
+            ) : null}
           </header>
           {topics.length === 0 ? (
-            <p className="text-muted-foreground px-4 py-8 text-center text-sm">
-              No topics yet. Run{" "}
-              <code className="bg-muted rounded px-1.5 py-0.5 text-xs">
-                claudemesh topic create &lt;name&gt;
-              </code>{" "}
-              from the CLI.
-            </p>
+            <div className="px-4 py-6">
+              <p
+                className="mb-4 text-center text-[11px] text-[var(--cm-fg-tertiary)]"
+                style={{ fontFamily: "var(--cm-font-mono)" }}
+              >
+                no topics yet · create one to start a conversation
+              </p>
+              <CreateTopicForm meshId={mesh.id} variant="inline" />
+            </div>
           ) : (
             <div className="divide-y">
               {topics.map((t) => (
                 <Link
                   key={t.id}
                   href={pathsConfig.dashboard.user.meshes.topic(mesh.id, t.name)}
-                  className="hover:bg-muted/50 flex flex-col gap-1.5 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3"
+                  className="group flex flex-col gap-1.5 px-4 py-3 transition-colors hover:bg-[var(--cm-bg-hover)] sm:flex-row sm:items-center sm:justify-between sm:gap-3"
                 >
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                     <span className="font-medium">
-                      <span className="text-muted-foreground">#</span>
+                      <span className="text-[var(--cm-clay)]">#</span>
                       {t.name}
                     </span>
                     <Badge variant="outline" className="text-xs">
                       {t.visibility}
                     </Badge>
                   </div>
-                  {t.description ? (
-                    <span className="text-muted-foreground truncate text-xs">
-                      {t.description}
+                  <div className="flex items-center gap-3">
+                    {t.description ? (
+                      <span className="text-muted-foreground max-w-[40ch] truncate text-xs">
+                        {t.description}
+                      </span>
+                    ) : null}
+                    <span
+                      className="text-[11px] text-[var(--cm-fg-tertiary)] transition-transform group-hover:translate-x-0.5"
+                      style={{ fontFamily: "var(--cm-font-mono)" }}
+                    >
+                      open →
                     </span>
-                  ) : null}
+                  </div>
                 </Link>
               ))}
             </div>

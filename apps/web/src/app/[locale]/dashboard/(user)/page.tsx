@@ -5,6 +5,9 @@ import {
   getMyMeshesResponseSchema,
 } from "@turbostarter/api/schema";
 import { handle } from "@turbostarter/api/utils";
+import { db } from "@turbostarter/db/server";
+import { meshTopic } from "@turbostarter/db/schema/mesh";
+import { and, count, inArray, isNull } from "drizzle-orm";
 
 import { appConfig } from "~/config/app";
 import { pathsConfig } from "~/config/paths";
@@ -42,6 +45,24 @@ export default async function UniversePage() {
     redirect(`${pathsConfig.dashboard.user.meshes.new}?onboarding=1`);
   }
 
+  // Decorate each mesh with its non-archived topic count so MeshesGrid
+  // can show "X TOPICS" inline. One aggregate query, not N+1.
+  const meshIds = activeMeshes.map((m) => m.id);
+  const topicCounts = meshIds.length
+    ? await db
+        .select({ meshId: meshTopic.meshId, n: count() })
+        .from(meshTopic)
+        .where(
+          and(inArray(meshTopic.meshId, meshIds), isNull(meshTopic.archivedAt)),
+        )
+        .groupBy(meshTopic.meshId)
+    : [];
+  const topicMap = new Map(topicCounts.map((r) => [r.meshId, Number(r.n)]));
+  const meshesWithTopics = activeMeshes.map((m) => ({
+    ...m,
+    topicCount: topicMap.get(m.id) ?? 0,
+  }));
+
   return (
     <div className="@container relative h-full p-6 md:p-10">
       {/* Subtle radial backdrop, matching marketing hero */}
@@ -65,7 +86,7 @@ export default async function UniversePage() {
           appBaseUrl={appConfig.url ?? "https://claudemesh.com"}
         />
 
-        <MeshesGrid meshes={activeMeshes} />
+        <MeshesGrid meshes={meshesWithTopics} />
       </div>
     </div>
   );
