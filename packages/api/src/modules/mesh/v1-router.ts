@@ -254,9 +254,15 @@ export const v1Router = new Hono<Env>()
       }
     }
 
+    // For topic posts the durable identity is the topic_message row;
+    // the message_queue row is ephemeral (drains on delivery). Return
+    // historyRow.id as `messageId` so callers that paste the response
+    // back into `--reply-to` actually find the parent in history.
+    // `historyId` and `queueId` are kept as explicit aliases.
     return c.json({
-      messageId: queueRow?.id ?? null,
+      messageId: historyRow?.id ?? queueRow?.id ?? null,
       historyId: historyRow?.id ?? null,
+      queueId: queueRow?.id ?? null,
       topic: body.topic,
       topicId: topic.id,
       notifications,

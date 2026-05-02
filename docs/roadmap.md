@@ -223,6 +223,28 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   web chat encrypt-on-send / decrypt-on-render. Web stays on v1
   plaintext until this lands; the existing CLI re-seal loop will pick
   up web members the moment they have a real pubkey.
+- **v0.3.1 — topic message threading (reply-to)** — `topic_message`
+  gains a self-FK `reply_to_id` column (migration 0027); REST `POST
+  /v1/messages` and the WS `send` envelope accept `replyToId`; broker
+  validates same-topic membership. CLI: `topic post --reply-to <id>`
+  (full id or 8+ char prefix), `topic tail` renders `↳ in reply to
+  <name>: "<snippet>"` above replies and emits `#xxxxxxxx` short ids
+  per row for copy-paste. WS push envelope + MCP `<channel>` channel
+  attributes now carry `senderMemberId`, `senderName`, `topic`,
+  `message_id`, `reply_to_id` so the recipient has everything needed
+  to thread a reply without a follow-up query. *Shipped 2026-05-02 in
+  CLI v1.9.0.*
+- **v0.3.2 — multi-session DM routing + broadcast self-loopback** —
+  fixes two production bugs: (1) replies via `claudemesh send
+  <from_id>` rejected with "no connected peer" when the sender's
+  session had rotated — `from_id` now exposes the *member* pubkey
+  (stable) and the broker pre-flight resolves stale session pubkeys
+  to the owning member's live session; (2) broadcast / `*` /
+  `@group` looped back to the sender's sibling sessions, surfacing a
+  spurious decrypt-fail warning — fan-out now skips by member
+  pubkey, not just per-presence. Push envelope adds
+  `senderMemberPubkey` alongside `senderPubkey`. *Shipped 2026-05-02
+  in CLI v1.9.1.*
 - **Self-hosted broker packaging** — one-command Docker compose,
   Postgres included. The new migration runner (v1.6.x) makes this
   practical.
