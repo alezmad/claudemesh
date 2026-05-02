@@ -131,11 +131,12 @@ production-grade before any new architectural work.
   + per-topic `unread` on `GET /v1/topics`; clay-rounded badges on
   the per-mesh topic list and aggregate badge per mesh on the
   dashboard universe page. *Shipped 2026-05-02.*
+- **`/v1/peers` includes humans** — recently-active apikey holders
+  (5-minute window) appear alongside WS-connected sessions, so the
+  dashboard chat user is visible to CLI peers calling list_peers.
+  *Shipped 2026-05-02.*
 - **Bridge end-to-end smoke test** — two-mesh forwarding validated
   before any external demo.
-- **`/v1/peers` includes humans** — synthetic presence rows for
-  active apikey sessions; the dashboard chat user becomes visible
-  to other peers.
 
 ---
 
