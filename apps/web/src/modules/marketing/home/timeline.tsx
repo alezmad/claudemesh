@@ -210,7 +210,8 @@ export const Timeline = () => {
                     className="text-[14px] text-[var(--cm-fg-tertiary)]"
                     style={{ fontFamily: "var(--cm-font-serif)" }}
                   >
-                    Dashboard · Slack bridge · self-host packaging · SSO
+                    Daemon redesign · per-topic encryption · self-host
+                    packaging · federation
                   </span>
                 </div>
               </div>
