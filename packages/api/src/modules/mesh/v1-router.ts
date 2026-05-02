@@ -507,6 +507,84 @@ export const v1Router = new Hono<Env>()
     });
   })
 
+  // GET /v1/notifications — recent @-mentions of the viewer across all
+  // topics in the key's mesh. v0.2.0 plaintext-base64 ciphertext lets
+  // us regex match server-side; in v0.3.0 (per-topic encryption) this
+  // moves to a notification table populated at write time.
+  //
+  // Query: ?since=<ISO> to incrementally fetch only newer mentions
+  // (e.g. for a polling notification bell). Default: last 24h.
+  .get("/notifications", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    if (!key.issuedByMemberId) {
+      return c.json({ notifications: [] });
+    }
+
+    const [me] = await db
+      .select({ displayName: meshMember.displayName })
+      .from(meshMember)
+      .where(eq(meshMember.id, key.issuedByMemberId));
+    if (!me) return c.json({ notifications: [] });
+
+    const sinceParam = c.req.query("since");
+    const since = sinceParam
+      ? new Date(sinceParam)
+      : new Date(Date.now() - 24 * 60 * 60 * 1000);
+    if (Number.isNaN(since.getTime())) {
+      return c.json({ error: "invalid_since" }, 400);
+    }
+
+    // Postgres regex with case-insensitive match + word boundary on
+    // both sides. Decode the base64 ciphertext (plaintext envelope in
+    // v0.2.0) so we're matching readable text, not the base64 alphabet.
+    const escaped = me.displayName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = `(^|\\s|[^A-Za-z0-9_-])@${escaped}($|[^A-Za-z0-9_-])`;
+
+    const rows = await db
+      .select({
+        id: meshTopicMessage.id,
+        topicId: meshTopicMessage.topicId,
+        topicName: meshTopic.name,
+        senderMemberId: meshTopicMessage.senderMemberId,
+        senderName: meshMember.displayName,
+        senderPubkey: meshMember.peerPubkey,
+        ciphertext: meshTopicMessage.ciphertext,
+        createdAt: meshTopicMessage.createdAt,
+      })
+      .from(meshTopicMessage)
+      .innerJoin(meshTopic, eq(meshTopic.id, meshTopicMessage.topicId))
+      .innerJoin(
+        meshMember,
+        eq(meshMember.id, meshTopicMessage.senderMemberId),
+      )
+      .where(
+        and(
+          eq(meshTopic.meshId, key.meshId),
+          isNull(meshTopic.archivedAt),
+          gt(meshTopicMessage.createdAt, since),
+          sql`${meshTopicMessage.senderMemberId} <> ${key.issuedByMemberId}`,
+          sql`convert_from(decode(${meshTopicMessage.ciphertext}, 'base64'), 'UTF8') ~* ${pattern}`,
+        ),
+      )
+      .orderBy(desc(meshTopicMessage.createdAt))
+      .limit(50);
+
+    return c.json({
+      notifications: rows.map((r) => ({
+        id: r.id,
+        topicId: r.topicId,
+        topicName: r.topicName,
+        senderName: r.senderName,
+        senderPubkey: r.senderPubkey,
+        ciphertext: r.ciphertext,
+        createdAt: r.createdAt.toISOString(),
+      })),
+      since: since.toISOString(),
+      mentionedAs: me.displayName,
+    });
+  })
+
   // GET /v1/peers — connected peers in the key's mesh
   // Dedupe by memberId — a member can have multiple active presence
   // rows (one per session). Status reflects the most recent presence;
