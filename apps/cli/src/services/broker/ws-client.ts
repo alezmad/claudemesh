@@ -161,6 +161,11 @@ export class BrokerClient {
   private grantFileAccessResolvers = new Map<string, { resolve: (ok: boolean) => void; timer: NodeJS.Timeout }>();
   private peerFileResponseResolvers = new Map<string, { resolve: (result: { content?: string; error?: string }) => void; timer: NodeJS.Timeout }>();
   private peerDirResponseResolvers = new Map<string, { resolve: (result: { entries?: string[]; error?: string }) => void; timer: NodeJS.Timeout }>();
+  // ── Topics (v0.2.0) ──
+  private topicCreatedResolvers = new Map<string, { resolve: (r: { id: string; name: string; created: boolean } | null) => void; timer: NodeJS.Timeout }>();
+  private topicListResolvers = new Map<string, { resolve: (topics: Array<{ id: string; name: string; description: string | null; visibility: "public" | "private" | "dm"; memberCount: number; createdAt: string }>) => void; timer: NodeJS.Timeout }>();
+  private topicMembersResolvers = new Map<string, { resolve: (members: Array<{ memberId: string; pubkey: string; displayName: string; role: "lead" | "member" | "observer"; joinedAt: string; lastReadAt: string | null }>) => void; timer: NodeJS.Timeout }>();
+  private topicHistoryResolvers = new Map<string, { resolve: (messages: Array<{ id: string; senderPubkey: string; nonce: string; ciphertext: string; createdAt: string }>) => void; timer: NodeJS.Timeout }>();
   /** Directories from which this peer serves files. Default: [process.cwd()]. */
   private sharedDirs: string[] = [process.cwd()];
   private _serviceCatalog: Array<{ name: string; description: string; status: string; tools: Array<{ name: string; description: string; inputSchema: object }>; deployed_by: string }> = [];
@@ -525,6 +530,121 @@ export class BrokerClient {
   async leaveGroup(name: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
     this.ws.send(JSON.stringify({ type: "leave_group", name }));
+  }
+
+  // --- Topics (v0.2.0) ---
+  // Conversation-scope primitive within a mesh. Spec:
+  // .artifacts/specs/2026-05-02-v0.2.0-scope.md
+
+  async topicCreate(args: {
+    name: string;
+    description?: string;
+    visibility?: "public" | "private" | "dm";
+  }): Promise<{ id: string; name: string; created: boolean } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.topicCreatedResolvers.set(reqId, {
+        resolve,
+        timer: setTimeout(() => {
+          if (this.topicCreatedResolvers.delete(reqId)) resolve(null);
+        }, 5_000),
+      });
+      this.ws!.send(
+        JSON.stringify({ type: "topic_create", _reqId: reqId, ...args }),
+      );
+    });
+  }
+
+  async topicList(): Promise<
+    Array<{
+      id: string;
+      name: string;
+      description: string | null;
+      visibility: "public" | "private" | "dm";
+      memberCount: number;
+      createdAt: string;
+    }>
+  > {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.topicListResolvers.set(reqId, {
+        resolve,
+        timer: setTimeout(() => {
+          if (this.topicListResolvers.delete(reqId)) resolve([]);
+        }, 5_000),
+      });
+      this.ws!.send(JSON.stringify({ type: "topic_list", _reqId: reqId }));
+    });
+  }
+
+  async topicJoin(topic: string, role?: "lead" | "member" | "observer"): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "topic_join", topic, role }));
+  }
+
+  async topicLeave(topic: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "topic_leave", topic }));
+  }
+
+  async topicMembers(topic: string): Promise<
+    Array<{
+      memberId: string;
+      pubkey: string;
+      displayName: string;
+      role: "lead" | "member" | "observer";
+      joinedAt: string;
+      lastReadAt: string | null;
+    }>
+  > {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.topicMembersResolvers.set(reqId, {
+        resolve,
+        timer: setTimeout(() => {
+          if (this.topicMembersResolvers.delete(reqId)) resolve([]);
+        }, 5_000),
+      });
+      this.ws!.send(
+        JSON.stringify({ type: "topic_members", _reqId: reqId, topic }),
+      );
+    });
+  }
+
+  async topicHistory(args: {
+    topic: string;
+    limit?: number;
+    beforeId?: string;
+  }): Promise<
+    Array<{
+      id: string;
+      senderPubkey: string;
+      nonce: string;
+      ciphertext: string;
+      createdAt: string;
+    }>
+  > {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.topicHistoryResolvers.set(reqId, {
+        resolve,
+        timer: setTimeout(() => {
+          if (this.topicHistoryResolvers.delete(reqId)) resolve([]);
+        }, 5_000),
+      });
+      this.ws!.send(
+        JSON.stringify({ type: "topic_history", _reqId: reqId, ...args }),
+      );
+    });
+  }
+
+  async topicMarkRead(topic: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "topic_mark_read", topic }));
   }
 
   // --- State ---
@@ -1692,6 +1812,28 @@ export class BrokerClient {
     if (msg.type === "peers_list") {
       const peers = (msg.peers as PeerInfo[]) ?? [];
       this.resolveFromMap(this.listPeersResolvers, msgReqId, peers);
+      return;
+    }
+    // ── Topics (v0.2.0) ──
+    if (msg.type === "topic_created") {
+      const r = (msg.topic ?? {}) as { id: string; name: string };
+      this.resolveFromMap(this.topicCreatedResolvers, msgReqId, {
+        id: r.id,
+        name: r.name,
+        created: !!msg.created,
+      });
+      return;
+    }
+    if (msg.type === "topic_list_response") {
+      this.resolveFromMap(this.topicListResolvers, msgReqId, (msg.topics as any[]) ?? []);
+      return;
+    }
+    if (msg.type === "topic_members_response") {
+      this.resolveFromMap(this.topicMembersResolvers, msgReqId, (msg.members as any[]) ?? []);
+      return;
+    }
+    if (msg.type === "topic_history_response") {
+      this.resolveFromMap(this.topicHistoryResolvers, msgReqId, (msg.messages as any[]) ?? []);
       return;
     }
     if (msg.type === "push") {

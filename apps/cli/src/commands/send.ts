@@ -69,7 +69,19 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
   // Cold path
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
     let targetSpec = to;
-    if (!to.startsWith("@") && to !== "*" && !/^[0-9a-f]{64}$/i.test(to)) {
+    if (to.startsWith("#") && !/^#[0-9a-z_-]{20,}$/i.test(to)) {
+      // Topic by name → resolve to "#<topicId>" via topicList. The broker
+      // wire format is "#<topicId>"; users type "#<name>" for ergonomics.
+      const name = to.slice(1);
+      const topics = await client.topicList();
+      const match = topics.find((t) => t.name === name);
+      if (!match) {
+        const names = topics.map((t) => "#" + t.name).join(", ");
+        render.err(`Topic "${to}" not found.`, `topics: ${names || "(none)"}`);
+        process.exit(1);
+      }
+      targetSpec = "#" + match.id;
+    } else if (!to.startsWith("@") && !to.startsWith("#") && to !== "*" && !/^[0-9a-f]{64}$/i.test(to)) {
       const peers = await client.listPeers();
       const match = peers.find(
         (p) => p.displayName.toLowerCase() === to.toLowerCase(),

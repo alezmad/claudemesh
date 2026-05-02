@@ -85,6 +85,13 @@ export function classifyInvocation(command: string, positionals: string[]): Invo
     case "task": {
       return { resource: "task", verb: sub || "list", isWrite: isWrite(sub) };
     }
+    case "topic": {
+      // topic verbs: create | list | join | leave | members | history | read
+      // writes: create, join, leave; reads: list, members, history, read
+      const verb = sub || "list";
+      const writeVerbs = new Set(["create", "join", "leave"]);
+      return { resource: "topic", verb, isWrite: writeVerbs.has(verb) };
+    }
 
     // Platform — sub is the verb.
     case "vector": case "graph": case "context": case "stream":

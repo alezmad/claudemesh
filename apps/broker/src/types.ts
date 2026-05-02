@@ -179,6 +179,107 @@ export interface WSLeaveGroupMessage {
   name: string;
 }
 
+// ── Topics (v0.2.0) ─────────────────────────────────────────────────
+// Topics complement groups: groups are identity tags, topics are
+// conversation scopes. targetSpec for topic-tagged messages is
+// "#<topicId>". Spec: .artifacts/specs/2026-05-02-v0.2.0-scope.md
+
+export interface WSTopicCreateMessage {
+  type: "topic_create";
+  name: string;
+  description?: string;
+  visibility?: "public" | "private" | "dm";
+  _reqId?: string;
+}
+
+export interface WSTopicListMessage {
+  type: "topic_list";
+  _reqId?: string;
+}
+
+export interface WSTopicJoinMessage {
+  type: "topic_join";
+  /** Topic id OR name. Server resolves. */
+  topic: string;
+  role?: "lead" | "member" | "observer";
+  _reqId?: string;
+}
+
+export interface WSTopicLeaveMessage {
+  type: "topic_leave";
+  topic: string;
+  _reqId?: string;
+}
+
+export interface WSTopicMembersMessage {
+  type: "topic_members";
+  topic: string;
+  _reqId?: string;
+}
+
+export interface WSTopicHistoryMessage {
+  type: "topic_history";
+  topic: string;
+  limit?: number;
+  beforeId?: string;
+  _reqId?: string;
+}
+
+export interface WSTopicMarkReadMessage {
+  type: "topic_mark_read";
+  topic: string;
+  _reqId?: string;
+}
+
+// Server → client topic responses
+
+export interface WSTopicCreatedMessage {
+  type: "topic_created";
+  topic: { id: string; name: string; visibility: "public" | "private" | "dm" };
+  created: boolean;
+  _reqId?: string;
+}
+
+export interface WSTopicListResponseMessage {
+  type: "topic_list_response";
+  topics: Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    visibility: "public" | "private" | "dm";
+    memberCount: number;
+    createdAt: string;
+  }>;
+  _reqId?: string;
+}
+
+export interface WSTopicMembersResponseMessage {
+  type: "topic_members_response";
+  topic: string;
+  members: Array<{
+    memberId: string;
+    pubkey: string;
+    displayName: string;
+    role: "lead" | "member" | "observer";
+    joinedAt: string;
+    lastReadAt: string | null;
+  }>;
+  _reqId?: string;
+}
+
+export interface WSTopicHistoryResponseMessage {
+  type: "topic_history_response";
+  topic: string;
+  messages: Array<{
+    id: string;
+    senderPubkey: string;
+    nonce: string;
+    ciphertext: string;
+    createdAt: string;
+  }>;
+  _reqId?: string;
+}
+
 /** Client → broker: set a shared state key-value. */
 export interface WSSetStateMessage {
   type: "set_state";
@@ -1145,6 +1246,13 @@ export type WSClientMessage =
   | WSSetProfileMessage
   | WSJoinGroupMessage
   | WSLeaveGroupMessage
+  | WSTopicCreateMessage
+  | WSTopicListMessage
+  | WSTopicJoinMessage
+  | WSTopicLeaveMessage
+  | WSTopicMembersMessage
+  | WSTopicHistoryMessage
+  | WSTopicMarkReadMessage
   | WSSetStateMessage
   | WSGetStateMessage
   | WSListStateMessage
@@ -1313,6 +1421,10 @@ export type WSServerMessage =
   | WSPushMessage
   | WSAckMessage
   | WSPeersListMessage
+  | WSTopicCreatedMessage
+  | WSTopicListResponseMessage
+  | WSTopicMembersResponseMessage
+  | WSTopicHistoryResponseMessage
   | WSStateChangeMessage
   | WSStateResultMessage
   | WSStateListMessage

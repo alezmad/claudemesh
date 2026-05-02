@@ -58,11 +58,10 @@ export const presenceStatusEnum = meshSchema.enum("presence_status", [
   "dnd",
 ]);
 
-export const presenceStatusSourceEnum = meshSchema.enum("presence_status_source", [
-  "hook",
-  "manual",
-  "jsonl",
-]);
+export const presenceStatusSourceEnum = meshSchema.enum(
+  "presence_status_source",
+  ["hook", "manual", "jsonl"],
+);
 
 export const messagePriorityEnum = meshSchema.enum("message_priority", [
   "now",
@@ -120,12 +119,19 @@ export const mesh = meshSchema.table("mesh", {
    * Per-mesh policy controlling which profile fields members can edit
    * about themselves. Admins can always edit anyone's profile regardless.
    */
-  selfEditable: jsonb().$type<{
-    displayName: boolean;
-    roleTag: boolean;
-    groups: boolean;
-    messageMode: boolean;
-  }>().default({ displayName: true, roleTag: true, groups: true, messageMode: true }),
+  selfEditable: jsonb()
+    .$type<{
+      displayName: boolean;
+      roleTag: boolean;
+      groups: boolean;
+      messageMode: boolean;
+    }>()
+    .default({
+      displayName: true,
+      roleTag: true,
+      groups: true,
+      messageMode: true,
+    }),
   createdAt: timestamp().defaultNow().notNull(),
   archivedAt: timestamp(),
 });
@@ -141,43 +147,46 @@ export const mesh = meshSchema.table("mesh", {
  * one of the two on collision. Unique TS name + short DB name is the
  * cleanest trade-off.
  */
-export const meshMember = meshSchema.table("member", {
-  id: text().primaryKey().notNull().$defaultFn(generateId),
-  meshId: text()
-    .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
-    .notNull(),
-  userId: text().references(() => user.id, {
-    onDelete: "set null",
-    onUpdate: "cascade",
-  }),
-  peerPubkey: text().notNull(),
-  displayName: text().notNull(),
-  role: meshRoleEnum().notNull().default("member"),
-  /** Free-text role label visible to peers (not to be confused with `role` which is the permission enum). */
-  roleTag: text(),
-  /** Persistent group memberships set via dashboard or CLI profile command. */
-  defaultGroups: jsonb().$type<Array<{ name: string; role?: string }>>().default([]),
-  /** Delivery preference: push (real-time), inbox (held), off (manual poll). */
-  messageMode: text().default("push"),
-  /** Links this mesh member to a dashboard OAuth user (Payload CMS user.id). */
-  dashboardUserId: text(),
-  joinedAt: timestamp().defaultNow().notNull(),
-  lastSeenAt: timestamp(),
-  revokedAt: timestamp(),
-  /**
-   * Per-peer capability grants — which peer pubkeys can send this member
-   * which kinds of messages. Empty object = use defaults (read + dm +
-   * broadcast + state-read). Empty array for a specific pubkey = blocked.
-   * See .artifacts/specs/2026-04-15-per-peer-capabilities.md.
-   */
-  peerGrants: jsonb()
-    .$type<Record<string, string[]>>()
-    .notNull()
-    .default({}),
-}, (table) => [
-  index("member_dashboard_user_idx").on(table.dashboardUserId),
-  index("member_peer_grants_gin_idx").using("gin", table.peerGrants),
-]);
+export const meshMember = meshSchema.table(
+  "member",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    userId: text().references(() => user.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    peerPubkey: text().notNull(),
+    displayName: text().notNull(),
+    role: meshRoleEnum().notNull().default("member"),
+    /** Free-text role label visible to peers (not to be confused with `role` which is the permission enum). */
+    roleTag: text(),
+    /** Persistent group memberships set via dashboard or CLI profile command. */
+    defaultGroups: jsonb()
+      .$type<{ name: string; role?: string }[]>()
+      .default([]),
+    /** Delivery preference: push (real-time), inbox (held), off (manual poll). */
+    messageMode: text().default("push"),
+    /** Links this mesh member to a dashboard OAuth user (Payload CMS user.id). */
+    dashboardUserId: text(),
+    joinedAt: timestamp().defaultNow().notNull(),
+    lastSeenAt: timestamp(),
+    revokedAt: timestamp(),
+    /**
+     * Per-peer capability grants — which peer pubkeys can send this member
+     * which kinds of messages. Empty object = use defaults (read + dm +
+     * broadcast + state-read). Empty array for a specific pubkey = blocked.
+     * See .artifacts/specs/2026-04-15-per-peer-capabilities.md.
+     */
+    peerGrants: jsonb().$type<Record<string, string[]>>().notNull().default({}),
+  },
+  (table) => [
+    index("member_dashboard_user_idx").on(table.dashboardUserId),
+    index("member_peer_grants_gin_idx").using("gin", table.peerGrants),
+  ],
+);
 
 /**
  * Invite tokens used to join a mesh via shareable URL.
@@ -206,12 +215,14 @@ export const invite = meshSchema.table("invite", {
   usedCount: integer().notNull().default(0),
   role: meshRoleEnum().notNull().default("member"),
   /** Pre-configured profile values applied to new members on join. */
-  preset: jsonb().$type<{
-    displayName?: string;
-    roleTag?: string;
-    groups?: Array<{ name: string; role?: string }>;
-    messageMode?: string;
-  }>().default({}),
+  preset: jsonb()
+    .$type<{
+      displayName?: string;
+      roleTag?: string;
+      groups?: { name: string; role?: string }[];
+      messageMode?: string;
+    }>()
+    .default({}),
   expiresAt: timestamp().notNull(),
   createdBy: text()
     .references(() => user.id, { onDelete: "cascade", onUpdate: "cascade" })
@@ -239,25 +250,29 @@ export const invite = meshSchema.table("invite", {
  * `code` references an underlying mesh.invite row that will be minted
  * on send; when the recipient lands on /i/{code} they claim the real invite.
  */
-export const pendingInvite = meshSchema.table("pending_invite", {
-  id: text().primaryKey().notNull().$defaultFn(generateId),
-  meshId: text()
-    .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
-    .notNull(),
-  email: text().notNull(),
-  /** The short code of the underlying `mesh.invite.code` row this email links to. */
-  code: text().notNull(),
-  sentAt: timestamp().defaultNow().notNull(),
-  acceptedAt: timestamp(),
-  revokedAt: timestamp(),
-  createdBy: text()
-    .references(() => user.id, { onDelete: "cascade", onUpdate: "cascade" })
-    .notNull(),
-  createdAt: timestamp().defaultNow().notNull(),
-}, (table) => [
-  index("pending_invite_email_idx").on(table.email),
-  index("pending_invite_mesh_idx").on(table.meshId),
-]);
+export const pendingInvite = meshSchema.table(
+  "pending_invite",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    email: text().notNull(),
+    /** The short code of the underlying `mesh.invite.code` row this email links to. */
+    code: text().notNull(),
+    sentAt: timestamp().defaultNow().notNull(),
+    acceptedAt: timestamp(),
+    revokedAt: timestamp(),
+    createdBy: text()
+      .references(() => user.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    createdAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [
+    index("pending_invite_email_idx").on(table.email),
+    index("pending_invite_mesh_idx").on(table.meshId),
+  ],
+);
 
 /**
  * Signed, hash-chained audit log. NEVER stores message content — every
@@ -294,7 +309,10 @@ export const auditLog = meshSchema.table("audit_log", {
 export const presence = meshSchema.table("presence", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   memberId: text()
-    .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .references(() => meshMember.id, {
+      onDelete: "cascade",
+      onUpdate: "cascade",
+    })
     .notNull(),
   sessionId: text().notNull(),
   sessionPubkey: text(),
@@ -305,7 +323,7 @@ export const presence = meshSchema.table("presence", {
   statusSource: presenceStatusSourceEnum().notNull().default("jsonl"),
   statusUpdatedAt: timestamp().defaultNow().notNull(),
   summary: text(),
-  groups: jsonb().$type<Array<{ name: string; role?: string }>>().default([]),
+  groups: jsonb().$type<{ name: string; role?: string }[]>().default([]),
   connectedAt: timestamp().defaultNow().notNull(),
   lastPingAt: timestamp().defaultNow().notNull(),
   disconnectedAt: timestamp(),
@@ -326,7 +344,10 @@ export const messageQueue = meshSchema.table("message_queue", {
     .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),
   senderMemberId: text()
-    .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .references(() => meshMember.id, {
+      onDelete: "cascade",
+      onUpdate: "cascade",
+    })
     .notNull(),
   senderSessionPubkey: text(),
   targetSpec: text().notNull(),
@@ -474,7 +495,10 @@ export const meshContext = meshSchema.table(
     meshId: text()
       .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
       .notNull(),
-    memberId: text().references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" }),
+    memberId: text().references(() => meshMember.id, {
+      onDelete: "cascade",
+      onUpdate: "cascade",
+    }),
     presenceId: text().references(() => presence.id, { onDelete: "cascade" }),
     peerName: text(),
     summary: text().notNull(),
@@ -580,11 +604,16 @@ export const meshWebhook = meshSchema.table(
     secret: text().notNull(),
     active: boolean().notNull().default(true),
     createdBy: text()
-      .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .references(() => meshMember.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
       .notNull(),
     createdAt: timestamp().defaultNow().notNull(),
   },
-  (table) => [uniqueIndex("webhook_mesh_name_idx").on(table.meshId, table.name)],
+  (table) => [
+    uniqueIndex("webhook_mesh_name_idx").on(table.meshId, table.name),
+  ],
 );
 
 export const meshService = meshSchema.table(
@@ -618,7 +647,9 @@ export const meshService = meshSchema.table(
     createdAt: timestamp().defaultNow().notNull(),
     updatedAt: timestamp().defaultNow().notNull(),
   },
-  (table) => [uniqueIndex("service_mesh_name_idx").on(table.meshId, table.name)],
+  (table) => [
+    uniqueIndex("service_mesh_name_idx").on(table.meshId, table.name),
+  ],
 );
 
 export const meshVaultEntry = meshSchema.table(
@@ -641,7 +672,13 @@ export const meshVaultEntry = meshSchema.table(
     createdAt: timestamp().defaultNow().notNull(),
     updatedAt: timestamp().defaultNow().notNull(),
   },
-  (table) => [uniqueIndex("vault_entry_mesh_member_key_idx").on(table.meshId, table.memberId, table.key)],
+  (table) => [
+    uniqueIndex("vault_entry_mesh_member_key_idx").on(
+      table.meshId,
+      table.memberId,
+      table.key,
+    ),
+  ],
 );
 
 export const meshWebhookRelations = relations(meshWebhook, ({ one }) => ({
@@ -668,7 +705,10 @@ export const scheduledMessage = meshSchema.table("scheduled_message", {
   /** Nullable — the presence that created it may be gone after a restart. */
   presenceId: text(),
   memberId: text()
-    .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
+    .references(() => meshMember.id, {
+      onDelete: "cascade",
+      onUpdate: "cascade",
+    })
     .notNull(),
   to: text().notNull(),
   message: text().notNull(),
@@ -683,19 +723,24 @@ export const scheduledMessage = meshSchema.table("scheduled_message", {
   createdAt: timestamp().defaultNow().notNull(),
 });
 
-export const scheduledMessageRelations = relations(scheduledMessage, ({ one }) => ({
-  mesh: one(mesh, {
-    fields: [scheduledMessage.meshId],
-    references: [mesh.id],
+export const scheduledMessageRelations = relations(
+  scheduledMessage,
+  ({ one }) => ({
+    mesh: one(mesh, {
+      fields: [scheduledMessage.meshId],
+      references: [mesh.id],
+    }),
+    member: one(meshMember, {
+      fields: [scheduledMessage.memberId],
+      references: [meshMember.id],
+    }),
   }),
-  member: one(meshMember, {
-    fields: [scheduledMessage.memberId],
-    references: [meshMember.id],
-  }),
-}));
+);
 
-export const selectScheduledMessageSchema = createSelectSchema(scheduledMessage);
-export const insertScheduledMessageSchema = createInsertSchema(scheduledMessage);
+export const selectScheduledMessageSchema =
+  createSelectSchema(scheduledMessage);
+export const insertScheduledMessageSchema =
+  createInsertSchema(scheduledMessage);
 export type SelectScheduledMessage = typeof scheduledMessage.$inferSelect;
 export type InsertScheduledMessage = typeof scheduledMessage.$inferInsert;
 
@@ -736,40 +781,44 @@ export const meshMemberRelations = relations(meshMember, ({ one, many }) => ({
  *
  * Explicit rows override these defaults (allow or deny).
  */
-export const meshPermission = meshSchema.table("permission", {
-  id: text().primaryKey().notNull().$defaultFn(generateId),
-  meshId: text()
-    .references(() => mesh.id, { onDelete: "cascade" })
-    .notNull(),
-  memberId: text()
-    .references(() => meshMember.id, { onDelete: "cascade" })
-    .notNull(),
-  /** Invite other users to the mesh. */
-  canInvite: boolean().notNull().default(false),
-  /** Deploy/undeploy MCP services. */
-  canDeployMcp: boolean().notNull().default(false),
-  /** Upload/delete shared files. */
-  canManageFiles: boolean().notNull().default(false),
-  /** Read/write vault secrets. */
-  canManageVault: boolean().notNull().default(false),
-  /** Create/manage URL watches. */
-  canManageWatches: boolean().notNull().default(false),
-  /** Create/manage webhooks. */
-  canManageWebhooks: boolean().notNull().default(false),
-  /** Write shared state (read is always allowed). */
-  canWriteState: boolean().notNull().default(true),
-  /** Send messages to peers. */
-  canSend: boolean().notNull().default(true),
-  /** Use deployed MCP tools. */
-  canUseTools: boolean().notNull().default(true),
-  /** Delete the mesh entirely (owner only). */
-  canDeleteMesh: boolean().notNull().default(false),
-  /** Manage other members' permissions. */
-  canManagePermissions: boolean().notNull().default(false),
-  updatedAt: timestamp().defaultNow().notNull(),
-}, (table) => [
-  uniqueIndex("permission_member_mesh_idx").on(table.meshId, table.memberId),
-]);
+export const meshPermission = meshSchema.table(
+  "permission",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade" })
+      .notNull(),
+    memberId: text()
+      .references(() => meshMember.id, { onDelete: "cascade" })
+      .notNull(),
+    /** Invite other users to the mesh. */
+    canInvite: boolean().notNull().default(false),
+    /** Deploy/undeploy MCP services. */
+    canDeployMcp: boolean().notNull().default(false),
+    /** Upload/delete shared files. */
+    canManageFiles: boolean().notNull().default(false),
+    /** Read/write vault secrets. */
+    canManageVault: boolean().notNull().default(false),
+    /** Create/manage URL watches. */
+    canManageWatches: boolean().notNull().default(false),
+    /** Create/manage webhooks. */
+    canManageWebhooks: boolean().notNull().default(false),
+    /** Write shared state (read is always allowed). */
+    canWriteState: boolean().notNull().default(true),
+    /** Send messages to peers. */
+    canSend: boolean().notNull().default(true),
+    /** Use deployed MCP tools. */
+    canUseTools: boolean().notNull().default(true),
+    /** Delete the mesh entirely (owner only). */
+    canDeleteMesh: boolean().notNull().default(false),
+    /** Manage other members' permissions. */
+    canManagePermissions: boolean().notNull().default(false),
+    updatedAt: timestamp().defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("permission_member_mesh_idx").on(table.meshId, table.memberId),
+  ],
+);
 
 export const meshPermissionRelations = relations(meshPermission, ({ one }) => ({
   mesh: one(mesh, {
@@ -792,22 +841,43 @@ export type InsertMeshPermission = typeof meshPermission.$inferInsert;
  */
 export const DEFAULT_PERMISSIONS = {
   owner: {
-    canInvite: true, canDeployMcp: true, canManageFiles: true,
-    canManageVault: true, canManageWatches: true, canManageWebhooks: true,
-    canWriteState: true, canSend: true, canUseTools: true,
-    canDeleteMesh: true, canManagePermissions: true,
+    canInvite: true,
+    canDeployMcp: true,
+    canManageFiles: true,
+    canManageVault: true,
+    canManageWatches: true,
+    canManageWebhooks: true,
+    canWriteState: true,
+    canSend: true,
+    canUseTools: true,
+    canDeleteMesh: true,
+    canManagePermissions: true,
   },
   admin: {
-    canInvite: true, canDeployMcp: true, canManageFiles: true,
-    canManageVault: true, canManageWatches: true, canManageWebhooks: true,
-    canWriteState: true, canSend: true, canUseTools: true,
-    canDeleteMesh: false, canManagePermissions: true,
+    canInvite: true,
+    canDeployMcp: true,
+    canManageFiles: true,
+    canManageVault: true,
+    canManageWatches: true,
+    canManageWebhooks: true,
+    canWriteState: true,
+    canSend: true,
+    canUseTools: true,
+    canDeleteMesh: false,
+    canManagePermissions: true,
   },
   member: {
-    canInvite: false, canDeployMcp: false, canManageFiles: false,
-    canManageVault: false, canManageWatches: false, canManageWebhooks: false,
-    canWriteState: true, canSend: true, canUseTools: true,
-    canDeleteMesh: false, canManagePermissions: false,
+    canInvite: false,
+    canDeployMcp: false,
+    canManageFiles: false,
+    canManageVault: false,
+    canManageWatches: false,
+    canManageWebhooks: false,
+    canWriteState: true,
+    canSend: true,
+    canUseTools: true,
+    canDeleteMesh: false,
+    canManagePermissions: false,
   },
 } as const;
 
@@ -844,7 +914,10 @@ export const inviteRelations = relations(invite, ({ one }) => ({
 
 export const pendingInviteRelations = relations(pendingInvite, ({ one }) => ({
   mesh: one(mesh, { fields: [pendingInvite.meshId], references: [mesh.id] }),
-  inviter: one(user, { fields: [pendingInvite.createdBy], references: [user.id] }),
+  inviter: one(user, {
+    fields: [pendingInvite.createdBy],
+    references: [user.id],
+  }),
 }));
 
 export const auditLogRelations = relations(auditLog, ({ one }) => ({
@@ -997,14 +1070,31 @@ export const peerState = meshSchema.table(
       .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
       .notNull(),
     memberId: text()
-      .references(() => meshMember.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .references(() => meshMember.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
       .notNull(),
-    groups: jsonb().$type<Array<{ name: string; role?: string }>>().default([]),
-    profile: jsonb().$type<{ avatar?: string; title?: string; bio?: string; capabilities?: string[] }>().default({}),
+    groups: jsonb().$type<{ name: string; role?: string }[]>().default([]),
+    profile: jsonb()
+      .$type<{
+        avatar?: string;
+        title?: string;
+        bio?: string;
+        capabilities?: string[];
+      }>()
+      .default({}),
     visible: boolean().notNull().default(true),
     lastSummary: text(),
     lastDisplayName: text(),
-    cumulativeStats: jsonb().$type<{ messagesIn: number; messagesOut: number; toolCalls: number; errors: number }>().default({ messagesIn: 0, messagesOut: 0, toolCalls: 0, errors: 0 }),
+    cumulativeStats: jsonb()
+      .$type<{
+        messagesIn: number;
+        messagesOut: number;
+        toolCalls: number;
+        errors: number;
+      }>()
+      .default({ messagesIn: 0, messagesOut: 0, toolCalls: 0, errors: 0 }),
     lastSeenAt: timestamp(),
     createdAt: timestamp().defaultNow().notNull(),
     updatedAt: timestamp().defaultNow().notNull(),
@@ -1052,8 +1142,14 @@ export type InsertMeshSkill = typeof meshSkill.$inferInsert;
 
 export const meshServiceRelations = relations(meshService, ({ one }) => ({
   mesh: one(mesh, { fields: [meshService.meshId], references: [mesh.id] }),
-  sourceFile: one(meshFile, { fields: [meshService.sourceFileId], references: [meshFile.id] }),
-  deployer: one(meshMember, { fields: [meshService.deployedBy], references: [meshMember.id] }),
+  sourceFile: one(meshFile, {
+    fields: [meshService.sourceFileId],
+    references: [meshFile.id],
+  }),
+  deployer: one(meshMember, {
+    fields: [meshService.deployedBy],
+    references: [meshMember.id],
+  }),
 }));
 
 export const selectMeshServiceSchema = createSelectSchema(meshService);
@@ -1063,7 +1159,10 @@ export type InsertMeshService = typeof meshService.$inferInsert;
 
 export const meshVaultEntryRelations = relations(meshVaultEntry, ({ one }) => ({
   mesh: one(mesh, { fields: [meshVaultEntry.meshId], references: [mesh.id] }),
-  member: one(meshMember, { fields: [meshVaultEntry.memberId], references: [meshMember.id] }),
+  member: one(meshMember, {
+    fields: [meshVaultEntry.memberId],
+    references: [meshMember.id],
+  }),
 }));
 
 export const selectMeshVaultEntrySchema = createSelectSchema(meshVaultEntry);
@@ -1134,31 +1233,35 @@ export const deviceCodeStatusEnum = meshSchema.enum("device_code_status", [
  * Device codes for CLI → browser → CLI OAuth flow.
  * CLI creates a code, browser approves it, CLI polls until approved.
  */
-export const deviceCode = meshSchema.table("device_code", {
-  id: text().primaryKey().notNull().$defaultFn(generateId),
-  /** Random 16-char code used by CLI to poll (secret, never shown to user). */
-  deviceCode: text().notNull().unique(),
-  /** Human-readable code shown in both terminal and browser for visual confirmation. */
-  userCode: text().notNull(),
-  /** URL-safe session identifier (clm_sess_..., 32 chars). Not secret — appears in browser URL. */
-  sessionId: text().notNull().unique(),
-  status: deviceCodeStatusEnum().notNull().default("pending"),
-  /** Filled on approve — the authenticated user. */
-  userId: text().references(() => user.id, { onDelete: "cascade" }),
-  /** Device info from CLI request. */
-  hostname: text(),
-  platform: text(),
-  arch: text(),
-  ipAddress: text(),
-  /** Signed JWT session token — filled on approve. */
-  sessionToken: text(),
-  createdAt: timestamp().defaultNow().notNull(),
-  approvedAt: timestamp(),
-  expiresAt: timestamp().notNull(),
-}, (table) => [
-  index("device_code_status_idx").on(table.status),
-  index("device_code_user_code_idx").on(table.userCode),
-]);
+export const deviceCode = meshSchema.table(
+  "device_code",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    /** Random 16-char code used by CLI to poll (secret, never shown to user). */
+    deviceCode: text().notNull().unique(),
+    /** Human-readable code shown in both terminal and browser for visual confirmation. */
+    userCode: text().notNull(),
+    /** URL-safe session identifier (clm_sess_..., 32 chars). Not secret — appears in browser URL. */
+    sessionId: text().notNull().unique(),
+    status: deviceCodeStatusEnum().notNull().default("pending"),
+    /** Filled on approve — the authenticated user. */
+    userId: text().references(() => user.id, { onDelete: "cascade" }),
+    /** Device info from CLI request. */
+    hostname: text(),
+    platform: text(),
+    arch: text(),
+    ipAddress: text(),
+    /** Signed JWT session token — filled on approve. */
+    sessionToken: text(),
+    createdAt: timestamp().defaultNow().notNull(),
+    approvedAt: timestamp(),
+    expiresAt: timestamp().notNull(),
+  },
+  (table) => [
+    index("device_code_status_idx").on(table.status),
+    index("device_code_user_code_idx").on(table.userCode),
+  ],
+);
 
 export const deviceCodeRelations = relations(deviceCode, ({ one }) => ({
   user: one(user, {
@@ -1176,26 +1279,30 @@ export type InsertDeviceCode = typeof deviceCode.$inferInsert;
  * Persistent CLI session records — one per authenticated device.
  * Enables dashboard "Signed in on N devices" view and per-device revocation.
  */
-export const cliSession = meshSchema.table("cli_session", {
-  id: text().primaryKey().notNull().$defaultFn(generateId),
-  userId: text()
-    .references(() => user.id, { onDelete: "cascade" })
-    .notNull(),
-  /** Which device-code auth created this session. */
-  deviceCodeId: text().references(() => deviceCode.id),
-  hostname: text(),
-  platform: text(),
-  arch: text(),
-  /** SHA-256 hash of the JWT for revocation lookup. */
-  tokenHash: text().notNull(),
-  lastSeenAt: timestamp().defaultNow(),
-  createdAt: timestamp().defaultNow().notNull(),
-  /** NULL until user revokes from dashboard. */
-  revokedAt: timestamp(),
-}, (table) => [
-  index("cli_session_user_idx").on(table.userId),
-  index("cli_session_token_hash_idx").on(table.tokenHash),
-]);
+export const cliSession = meshSchema.table(
+  "cli_session",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    userId: text()
+      .references(() => user.id, { onDelete: "cascade" })
+      .notNull(),
+    /** Which device-code auth created this session. */
+    deviceCodeId: text().references(() => deviceCode.id),
+    hostname: text(),
+    platform: text(),
+    arch: text(),
+    /** SHA-256 hash of the JWT for revocation lookup. */
+    tokenHash: text().notNull(),
+    lastSeenAt: timestamp().defaultNow(),
+    createdAt: timestamp().defaultNow().notNull(),
+    /** NULL until user revokes from dashboard. */
+    revokedAt: timestamp(),
+  },
+  (table) => [
+    index("cli_session_user_idx").on(table.userId),
+    index("cli_session_token_hash_idx").on(table.tokenHash),
+  ],
+);
 
 export const cliSessionRelations = relations(cliSession, ({ one }) => ({
   user: one(user, {
@@ -1212,3 +1319,167 @@ export const selectCliSessionSchema = createSelectSchema(cliSession);
 export const insertCliSessionSchema = createInsertSchema(cliSession);
 export type SelectCliSession = typeof cliSession.$inferSelect;
 export type InsertCliSession = typeof cliSession.$inferInsert;
+
+/* ────────────────────────────────────────────────────────────────────────
+ * Topics (v0.2.0) — conversational primitive within a mesh.
+ *
+ * Mesh = trust boundary. Group = identity tag. Topic = conversation scope.
+ * Three orthogonal axes; topics complement (don't replace) groups.
+ *
+ * Spec: .artifacts/specs/2026-05-02-v0.2.0-scope.md
+ * ──────────────────────────────────────────────────────────────────────── */
+
+export const topicVisibilityEnum = meshSchema.enum("topic_visibility", [
+  "public", // any mesh member can join
+  "private", // invite-only
+  "dm", // 1:1, autocreated when two peers DM
+]);
+
+export const topicMemberRoleEnum = meshSchema.enum("topic_member_role", [
+  "lead",
+  "member",
+  "observer",
+]);
+
+/**
+ * A topic is a named conversation scope within a mesh. Messages, state,
+ * memory, and files can be topic-scoped. Membership controls delivery
+ * (broker filters topic-tagged messages by topic_member rows).
+ */
+export const meshTopic = meshSchema.table(
+  "topic",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    meshId: text()
+      .references(() => mesh.id, { onDelete: "cascade", onUpdate: "cascade" })
+      .notNull(),
+    name: text().notNull(), // unique within mesh; e.g. "deploys"
+    description: text(),
+    visibility: topicVisibilityEnum().notNull().default("public"),
+    createdByMemberId: text().references(() => meshMember.id, {
+      onDelete: "set null",
+      onUpdate: "cascade",
+    }),
+    createdAt: timestamp().defaultNow().notNull(),
+    archivedAt: timestamp(),
+  },
+  (t) => [uniqueIndex("topic_mesh_name_unique").on(t.meshId, t.name)],
+);
+
+/**
+ * Per-member topic membership. last_read_at drives unread counts in the
+ * web chat UI; role is advisory (lead/member/observer) like meshGroup.
+ */
+export const meshTopicMember = meshSchema.table(
+  "topic_member",
+  {
+    topicId: text()
+      .references(() => meshTopic.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    memberId: text()
+      .references(() => meshMember.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    role: topicMemberRoleEnum().notNull().default("member"),
+    joinedAt: timestamp().defaultNow().notNull(),
+    lastReadAt: timestamp(),
+  },
+  (t) => [
+    uniqueIndex("topic_member_unique").on(t.topicId, t.memberId),
+    index("topic_member_by_member").on(t.memberId),
+  ],
+);
+
+/**
+ * Topic-scoped persistent message history. Direct messages (DMs) stay
+ * ephemeral via message_queue by design — this table only persists
+ * messages addressed to a topic, so humans (and agents that opt in) can
+ * see history when they reconnect.
+ *
+ * Ciphertext is encrypted to the topic's symmetric key (held by every
+ * topic member). Server cannot read content; it can only filter delivery
+ * by topic membership.
+ */
+export const meshTopicMessage = meshSchema.table(
+  "topic_message",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    topicId: text()
+      .references(() => meshTopic.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    senderMemberId: text()
+      .references(() => meshMember.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    senderSessionPubkey: text(),
+    nonce: text().notNull(),
+    ciphertext: text().notNull(),
+    createdAt: timestamp().defaultNow().notNull(),
+  },
+  (t) => [index("topic_message_by_topic_time").on(t.topicId, t.createdAt)],
+);
+
+export const meshTopicRelations = relations(meshTopic, ({ one, many }) => ({
+  mesh: one(mesh, { fields: [meshTopic.meshId], references: [mesh.id] }),
+  createdBy: one(meshMember, {
+    fields: [meshTopic.createdByMemberId],
+    references: [meshMember.id],
+  }),
+  members: many(meshTopicMember),
+  messages: many(meshTopicMessage),
+}));
+
+export const meshTopicMemberRelations = relations(
+  meshTopicMember,
+  ({ one }) => ({
+    topic: one(meshTopic, {
+      fields: [meshTopicMember.topicId],
+      references: [meshTopic.id],
+    }),
+    member: one(meshMember, {
+      fields: [meshTopicMember.memberId],
+      references: [meshMember.id],
+    }),
+  }),
+);
+
+export const meshTopicMessageRelations = relations(
+  meshTopicMessage,
+  ({ one }) => ({
+    topic: one(meshTopic, {
+      fields: [meshTopicMessage.topicId],
+      references: [meshTopic.id],
+    }),
+    sender: one(meshMember, {
+      fields: [meshTopicMessage.senderMemberId],
+      references: [meshMember.id],
+    }),
+  }),
+);
+
+export const selectMeshTopicSchema = createSelectSchema(meshTopic);
+export const insertMeshTopicSchema = createInsertSchema(meshTopic);
+export type SelectMeshTopic = typeof meshTopic.$inferSelect;
+export type InsertMeshTopic = typeof meshTopic.$inferInsert;
+
+export const selectMeshTopicMemberSchema = createSelectSchema(meshTopicMember);
+export const insertMeshTopicMemberSchema = createInsertSchema(meshTopicMember);
+export type SelectMeshTopicMember = typeof meshTopicMember.$inferSelect;
+export type InsertMeshTopicMember = typeof meshTopicMember.$inferInsert;
+
+export const selectMeshTopicMessageSchema =
+  createSelectSchema(meshTopicMessage);
+export const insertMeshTopicMessageSchema =
+  createInsertSchema(meshTopicMessage);
+export type SelectMeshTopicMessage = typeof meshTopicMessage.$inferSelect;
+export type InsertMeshTopicMessage = typeof meshTopicMessage.$inferInsert;

@@ -42,6 +42,9 @@ import {
   meshService,
   meshSkill,
   meshStream,
+  meshTopic,
+  meshTopicMember,
+  meshTopicMessage,
   meshVaultEntry,
   meshTask,
   messageQueue,
@@ -529,6 +532,254 @@ export async function leaveGroup(
     .set({ groups })
     .where(eq(presence.id, presenceId));
   return groups;
+}
+
+// --- Topics (v0.2.0) ---
+//
+// Conversational primitive within a mesh. Spec:
+// .artifacts/specs/2026-05-02-v0.2.0-scope.md
+//
+// Mesh = trust boundary. Group = identity tag. Topic = conversation scope.
+// Three orthogonal axes; topics complement (don't replace) groups.
+//
+// Routing: topic-tagged messages use targetSpec = "#<topicId>". The drain
+// query joins topic_member to filter delivery, so non-members never see
+// the message. Topic-tagged messages are also persisted to topic_message
+// so humans (and opting-in agents) can fetch history on reconnect.
+
+/** Create a topic in a mesh. Idempotent on (meshId, name). */
+export async function createTopic(args: {
+  meshId: string;
+  name: string;
+  description?: string;
+  visibility?: "public" | "private" | "dm";
+  createdByMemberId?: string;
+}): Promise<{ id: string; created: boolean }> {
+  const existing = await db
+    .select({ id: meshTopic.id })
+    .from(meshTopic)
+    .where(and(eq(meshTopic.meshId, args.meshId), eq(meshTopic.name, args.name)));
+  if (existing[0]) return { id: existing[0].id, created: false };
+
+  const [row] = await db
+    .insert(meshTopic)
+    .values({
+      meshId: args.meshId,
+      name: args.name,
+      description: args.description ?? null,
+      visibility: args.visibility ?? "public",
+      createdByMemberId: args.createdByMemberId ?? null,
+    })
+    .returning({ id: meshTopic.id });
+  if (!row) throw new Error("failed to create topic");
+  return { id: row.id, created: true };
+}
+
+/** List topics in a mesh, with member counts. */
+export async function listTopics(meshId: string): Promise<
+  Array<{
+    id: string;
+    name: string;
+    description: string | null;
+    visibility: "public" | "private" | "dm";
+    memberCount: number;
+    createdAt: Date;
+  }>
+> {
+  const rows = await db
+    .select({
+      id: meshTopic.id,
+      name: meshTopic.name,
+      description: meshTopic.description,
+      visibility: meshTopic.visibility,
+      createdAt: meshTopic.createdAt,
+      memberCount: sql<number>`(SELECT COUNT(*)::int FROM mesh.topic_member WHERE topic_id = ${meshTopic.id})`,
+    })
+    .from(meshTopic)
+    .where(and(eq(meshTopic.meshId, meshId), isNull(meshTopic.archivedAt)))
+    .orderBy(asc(meshTopic.name));
+  return rows;
+}
+
+/** Resolve a topic by name within a mesh. */
+export async function findTopicByName(
+  meshId: string,
+  name: string,
+): Promise<{ id: string; visibility: "public" | "private" | "dm" } | null> {
+  const [row] = await db
+    .select({ id: meshTopic.id, visibility: meshTopic.visibility })
+    .from(meshTopic)
+    .where(
+      and(
+        eq(meshTopic.meshId, meshId),
+        eq(meshTopic.name, name),
+        isNull(meshTopic.archivedAt),
+      ),
+    );
+  return row ?? null;
+}
+
+/** Add a member to a topic. Idempotent. */
+export async function joinTopic(args: {
+  topicId: string;
+  memberId: string;
+  role?: "lead" | "member" | "observer";
+}): Promise<void> {
+  await db
+    .insert(meshTopicMember)
+    .values({
+      topicId: args.topicId,
+      memberId: args.memberId,
+      role: args.role ?? "member",
+    })
+    .onConflictDoNothing();
+}
+
+/** Remove a member from a topic. */
+export async function leaveTopic(args: {
+  topicId: string;
+  memberId: string;
+}): Promise<void> {
+  await db
+    .delete(meshTopicMember)
+    .where(
+      and(
+        eq(meshTopicMember.topicId, args.topicId),
+        eq(meshTopicMember.memberId, args.memberId),
+      ),
+    );
+}
+
+/** List members of a topic with display names. */
+export async function topicMembers(topicId: string): Promise<
+  Array<{
+    memberId: string;
+    pubkey: string;
+    displayName: string;
+    role: "lead" | "member" | "observer";
+    joinedAt: Date;
+    lastReadAt: Date | null;
+  }>
+> {
+  const rows = await db
+    .select({
+      memberId: meshTopicMember.memberId,
+      pubkey: memberTable.peerPubkey,
+      displayName: memberTable.displayName,
+      role: meshTopicMember.role,
+      joinedAt: meshTopicMember.joinedAt,
+      lastReadAt: meshTopicMember.lastReadAt,
+    })
+    .from(meshTopicMember)
+    .innerJoin(memberTable, eq(meshTopicMember.memberId, memberTable.id))
+    .where(eq(meshTopicMember.topicId, topicId))
+    .orderBy(asc(memberTable.displayName));
+  return rows;
+}
+
+/** Return all topic ids a member belongs to (used by message routing). */
+export async function getMemberTopicIds(memberId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: meshTopicMember.topicId })
+    .from(meshTopicMember)
+    .where(eq(meshTopicMember.memberId, memberId));
+  return rows.map((r) => r.id);
+}
+
+/** Append a topic message to persistent history. */
+export async function appendTopicMessage(args: {
+  topicId: string;
+  senderMemberId: string;
+  senderSessionPubkey?: string;
+  nonce: string;
+  ciphertext: string;
+}): Promise<string> {
+  const [row] = await db
+    .insert(meshTopicMessage)
+    .values({
+      topicId: args.topicId,
+      senderMemberId: args.senderMemberId,
+      senderSessionPubkey: args.senderSessionPubkey ?? null,
+      nonce: args.nonce,
+      ciphertext: args.ciphertext,
+    })
+    .returning({ id: meshTopicMessage.id });
+  if (!row) throw new Error("failed to append topic message");
+  return row.id;
+}
+
+/**
+ * Fetch topic history for a member. Pagination via `before` cursor (id of
+ * an earlier message); pass null for the latest page.
+ */
+export async function topicHistory(args: {
+  topicId: string;
+  limit?: number;
+  beforeId?: string;
+}): Promise<
+  Array<{
+    id: string;
+    senderMemberId: string;
+    senderPubkey: string;
+    nonce: string;
+    ciphertext: string;
+    createdAt: Date;
+  }>
+> {
+  const limit = Math.min(Math.max(args.limit ?? 50, 1), 200);
+  const beforeClause = args.beforeId
+    ? sql`AND tm.created_at < (SELECT created_at FROM mesh.topic_message WHERE id = ${args.beforeId})`
+    : sql``;
+  const result = await db.execute<{
+    id: string;
+    sender_member_id: string;
+    sender_pubkey: string;
+    nonce: string;
+    ciphertext: string;
+    created_at: Date;
+  }>(sql`
+    SELECT tm.id, tm.sender_member_id,
+           COALESCE(tm.sender_session_pubkey, m.peer_pubkey) AS sender_pubkey,
+           tm.nonce, tm.ciphertext, tm.created_at
+    FROM mesh.topic_message tm
+    JOIN mesh.member m ON m.id = tm.sender_member_id
+    WHERE tm.topic_id = ${args.topicId}
+    ${beforeClause}
+    ORDER BY tm.created_at DESC, tm.id DESC
+    LIMIT ${limit}
+  `);
+  const rows = (result.rows ?? result) as Array<{
+    id: string;
+    sender_member_id: string;
+    sender_pubkey: string;
+    nonce: string;
+    ciphertext: string;
+    created_at: Date;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    senderMemberId: r.sender_member_id,
+    senderPubkey: r.sender_pubkey,
+    nonce: r.nonce,
+    ciphertext: r.ciphertext,
+    createdAt: r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
+  }));
+}
+
+/** Update last_read_at for a member's topic subscription. */
+export async function markTopicRead(args: {
+  topicId: string;
+  memberId: string;
+}): Promise<void> {
+  await db
+    .update(meshTopicMember)
+    .set({ lastReadAt: new Date() })
+    .where(
+      and(
+        eq(meshTopicMember.topicId, args.topicId),
+        eq(meshTopicMember.memberId, args.memberId),
+      ),
+    );
 }
 
 // --- Shared state ---
@@ -1563,7 +1814,7 @@ function deliverablePriorities(status: PeerStatus): Priority[] {
  */
 export async function drainForMember(
   meshId: string,
-  _memberId: string,
+  memberId: string,
   memberPubkey: string,
   status: PeerStatus,
   sessionPubkey?: string,
@@ -1615,6 +1866,17 @@ export async function drainForMember(
     groupTargets.map((t) => `'${t}'`).join(","),
   );
 
+  // Topic membership targets (v0.2.0). targetSpec for topic-tagged
+  // messages is "#<topicId>". A member receives a topic message iff
+  // they're in topic_member for that topic. We resolve memberships
+  // here and inline the list — same pattern as groups, no schema join
+  // in the hot path.
+  const topicIds = await getMemberTopicIds(memberId);
+  const topicTargetList =
+    topicIds.length > 0
+      ? sql.raw(topicIds.map((id) => `'#${id}'`).join(","))
+      : null;
+
   // Atomic claim with SQL-side ordering. The CTE claims rows via
   // UPDATE...RETURNING; the outer SELECT re-orders by created_at
   // (with id as tiebreaker so equal-timestamp rows stay deterministic).
@@ -1638,7 +1900,7 @@ export async function drainForMember(
         WHERE mesh_id = ${meshId}
           AND delivered_at IS NULL
           AND priority::text IN (${priorityList})
-          AND (target_spec = ${memberPubkey} OR target_spec = '*'${sessionPubkey ? sql` OR target_spec = ${sessionPubkey}` : sql``} OR target_spec IN (${groupTargetList}))
+          AND (target_spec = ${memberPubkey} OR target_spec = '*'${sessionPubkey ? sql` OR target_spec = ${sessionPubkey}` : sql``} OR target_spec IN (${groupTargetList})${topicTargetList ? sql` OR target_spec IN (${topicTargetList})` : sql``})
           ${excludeSenderSessionPubkey ? sql`AND NOT (target_spec IN ('*') AND sender_session_pubkey = ${excludeSenderSessionPubkey})` : sql``}
         ORDER BY created_at ASC, id ASC
         FOR UPDATE SKIP LOCKED

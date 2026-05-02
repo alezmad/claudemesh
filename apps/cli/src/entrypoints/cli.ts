@@ -102,6 +102,16 @@ Profile / presence  (resource form)
   claudemesh group join @<name>    join a group (--role X)
   claudemesh group leave @<name>   leave a group
 
+Topic  (conversation scope, v0.2.0)
+  claudemesh topic create <name>   create a topic [--description --visibility]
+  claudemesh topic list            list topics in the mesh
+  claudemesh topic join <topic>    subscribe (via name or id)
+  claudemesh topic leave <topic>   unsubscribe
+  claudemesh topic members <t>     list topic subscribers
+  claudemesh topic history <t>     fetch message history [--limit --before]
+  claudemesh topic read <topic>    mark all as read
+  claudemesh send "#topic" "msg"   send to a topic
+
 Schedule  (resource form)
   claudemesh schedule msg <m>      one-shot or recurring     (alias: remind)
   claudemesh schedule list         list pending
@@ -496,6 +506,30 @@ async function main(): Promise<void> {
       else if (sub === "pause") { const { runClockPause } = await import("~/commands/platform-actions.js"); process.exit(await runClockPause(f)); }
       else if (sub === "resume") { const { runClockResume } = await import("~/commands/platform-actions.js"); process.exit(await runClockResume(f)); }
       else { const { runClock } = await import("~/commands/broker-actions.js"); process.exit(await runClock(f)); }
+      break;
+    }
+
+    // topic — conversational primitive within a mesh (v0.2.0)
+    case "topic": {
+      const sub = positionals[0];
+      const f = {
+        mesh: flags.mesh as string,
+        json: !!flags.json,
+        description: flags.description as string,
+        visibility: flags.visibility as "public" | "private" | "dm" | undefined,
+        role: flags.role as "lead" | "member" | "observer" | undefined,
+        limit: flags.limit as string | undefined,
+        before: flags.before as string | undefined,
+      };
+      const arg = positionals[1] ?? "";
+      if (sub === "create") { const { runTopicCreate } = await import("~/commands/topic.js"); process.exit(await runTopicCreate(arg, f)); }
+      else if (sub === "list") { const { runTopicList } = await import("~/commands/topic.js"); process.exit(await runTopicList(f)); }
+      else if (sub === "join") { const { runTopicJoin } = await import("~/commands/topic.js"); process.exit(await runTopicJoin(arg, f)); }
+      else if (sub === "leave") { const { runTopicLeave } = await import("~/commands/topic.js"); process.exit(await runTopicLeave(arg, f)); }
+      else if (sub === "members") { const { runTopicMembers } = await import("~/commands/topic.js"); process.exit(await runTopicMembers(arg, f)); }
+      else if (sub === "history") { const { runTopicHistory } = await import("~/commands/topic.js"); process.exit(await runTopicHistory(arg, f)); }
+      else if (sub === "read") { const { runTopicMarkRead } = await import("~/commands/topic.js"); process.exit(await runTopicMarkRead(arg, f)); }
+      else { console.error("Usage: claudemesh topic <create|list|join|leave|members|history|read>"); process.exit(EXIT.INVALID_ARGS); }
       break;
     }
 
