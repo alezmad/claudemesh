@@ -119,7 +119,10 @@ Topic  (conversation scope, v0.2.0)
   claudemesh topic members <t>     list topic subscribers
   claudemesh topic history <t>     fetch message history [--limit --before]
   claudemesh topic read <topic>    mark all as read
+  claudemesh topic tail <topic>    live SSE tail [--limit --forward-only]
   claudemesh send "#topic" "msg"   send to a topic
+  claudemesh member list           mesh roster with online state [--online]
+  claudemesh notification list     recent @-mentions of you [--since <ISO>]
 
 Schedule  (resource form)
   claudemesh schedule msg <m>      one-shot or recurring     (alias: remind)
@@ -573,7 +576,53 @@ async function main(): Promise<void> {
       else if (sub === "members") { const { runTopicMembers } = await import("~/commands/topic.js"); process.exit(await runTopicMembers(arg, f)); }
       else if (sub === "history") { const { runTopicHistory } = await import("~/commands/topic.js"); process.exit(await runTopicHistory(arg, f)); }
       else if (sub === "read") { const { runTopicMarkRead } = await import("~/commands/topic.js"); process.exit(await runTopicMarkRead(arg, f)); }
-      else { console.error("Usage: claudemesh topic <create|list|join|leave|members|history|read>"); process.exit(EXIT.INVALID_ARGS); }
+      else if (sub === "tail") {
+        const tailFlags = {
+          mesh: flags.mesh as string,
+          json: !!flags.json,
+          limit: flags.limit as string | undefined,
+          forwardOnly: !!flags["forward-only"],
+        };
+        const { runTopicTail } = await import("~/commands/topic-tail.js");
+        process.exit(await runTopicTail(arg, tailFlags));
+      }
+      else { console.error("Usage: claudemesh topic <create|list|join|leave|members|history|read|tail>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
+
+    // notification — recent @-mentions of the viewer (v1.7.0)
+    case "notification": case "notifications": {
+      const sub = positionals[0] ?? "list";
+      const f = {
+        mesh: flags.mesh as string,
+        json: !!flags.json,
+        since: flags.since as string,
+      };
+      if (sub === "list") {
+        const { runNotificationList } = await import("~/commands/notification.js");
+        process.exit(await runNotificationList(f));
+      } else {
+        console.error("Usage: claudemesh notification list [--since <ISO>]");
+        process.exit(EXIT.INVALID_ARGS);
+      }
+      break;
+    }
+
+    // member — mesh roster with online state (v1.7.0)
+    case "member": case "members": {
+      const sub = positionals[0] ?? "list";
+      const f = {
+        mesh: flags.mesh as string,
+        json: !!flags.json,
+        online: !!flags.online,
+      };
+      if (sub === "list") {
+        const { runMemberList } = await import("~/commands/member.js");
+        process.exit(await runMemberList(f));
+      } else {
+        console.error("Usage: claudemesh member list [--online]");
+        process.exit(EXIT.INVALID_ARGS);
+      }
       break;
     }
 

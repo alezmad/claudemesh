@@ -26,4 +26,7 @@ export { runWelcome } from "./welcome.js";
 export { runHook } from "./hook.js";
 export { runMcp } from "./mcp.js";
 export { runSeedTestMesh } from "./seed-test-mesh.js";
+export { runNotificationList } from "./notification.js";
+export { runMemberList } from "./member.js";
+export { runTopicTail } from "./topic-tail.js";
 export { withMesh } from "./connect.js";
