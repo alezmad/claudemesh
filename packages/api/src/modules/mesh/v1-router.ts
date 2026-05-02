@@ -435,12 +435,16 @@ export const v1Router = new Hono<Env>()
     const onlineCounts = await db
       .select({
         meshId: meshMember.meshId,
-        online: count(presence.memberId),
+        online: sql<number>`count(distinct ${presence.memberId})`,
       })
       .from(presence)
       .innerJoin(meshMember, eq(presence.memberId, meshMember.id))
       .where(
-        and(inArray(meshMember.meshId, meshIds), isNull(meshMember.revokedAt)),
+        and(
+          inArray(meshMember.meshId, meshIds),
+          isNull(meshMember.revokedAt),
+          isNull(presence.disconnectedAt),
+        ),
       )
       .groupBy(meshMember.meshId);
 
