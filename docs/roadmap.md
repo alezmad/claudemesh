@@ -218,11 +218,15 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   30s background re-seal loop. Wire format: `<32-byte sender x25519
   pubkey> || crypto_box(topic_key)` so re-sealed copies decode like
   creator-sealed copies. *Shipped 2026-05-02 in CLI v1.8.0.*
-- **Per-topic encryption — phase 3.5 (web)** — browser-side persistent
-  ed25519 identity in IndexedDB + `POST /v1/me/peer-pubkey` sync +
-  web chat encrypt-on-send / decrypt-on-render. Web stays on v1
-  plaintext until this lands; the existing CLI re-seal loop will pick
-  up web members the moment they have a real pubkey.
+- **Per-topic encryption — phase 3.5 (web)** — browser-side
+  persistent ed25519 identity in IndexedDB +
+  `POST /v1/me/peer-pubkey` sync + web chat encrypt-on-send /
+  decrypt-on-render. The dashboard's throwaway pubkey is replaced on
+  first chat-panel mount with one whose secret the browser actually
+  holds; the existing CLI re-seal loop seals the topic key against
+  it within 30s. Composer shows `🔒 v0.3.0` when keyed and "waiting
+  for a CLI peer to share the topic key" while `not_sealed`.
+  *Shipped 2026-05-02.*
 - **v0.3.1 — topic message threading (reply-to)** — `topic_message`
   gains a self-FK `reply_to_id` column (migration 0027); REST `POST
   /v1/messages` and the WS `send` envelope accept `replyToId`; broker
