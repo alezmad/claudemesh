@@ -5,12 +5,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@turbostarter/ui-web/button";
 
+import {
+  decryptMessage,
+  encryptMessage,
+  getTopicKey,
+  registerBrowserPeerPubkey,
+} from "~/services/crypto/topic-key";
+
 interface TopicMessage {
   id: string;
   senderPubkey: string;
   senderName: string;
   nonce: string;
   ciphertext: string;
+  /** 1 = legacy plaintext-base64. 2 = crypto_secretbox under topic key. */
+  bodyVersion?: number;
+  replyToId?: string | null;
   createdAt: string;
 }
 
@@ -35,12 +45,28 @@ interface Props {
 }
 
 /**
- * Encode plaintext into the broker's wire format. v0.2.0 uses base64
- * plaintext in the `ciphertext` field — real per-topic symmetric keys
- * land in v0.3.0. Same applies to the random nonce: it satisfies the
- * schema but isn't cryptographically meaningful yet.
+ * v1 (legacy plaintext-base64) decode path. v0.2.0 messages used this
+ * fake-encryption stub; real v0.3.0 ciphertext is decrypted via the
+ * topic key — see `decryptForRender` below.
  */
-function encodeOutgoing(plaintext: string): { ciphertext: string; nonce: string } {
+function decodeV1(ciphertext: string): string {
+  try {
+    const decoded =
+      typeof window === "undefined"
+        ? Buffer.from(ciphertext, "base64").toString("utf-8")
+        : new TextDecoder().decode(
+            Uint8Array.from(atob(ciphertext), (c) => c.charCodeAt(0)),
+          );
+    return decoded;
+  } catch {
+    return "[decode failed]";
+  }
+}
+
+/** Encode v1 plaintext for the rare fallback path when a topic has no
+ *  encryption key (legacy v0.2.0 topics). v0.3.0+ topics encrypt via
+ *  `encryptMessage` from the topic-key service. */
+function encodeV1Outgoing(plaintext: string): { ciphertext: string; nonce: string } {
   const bytes = new TextEncoder().encode(plaintext);
   const ciphertext =
     typeof window === "undefined"
@@ -53,20 +79,6 @@ function encodeOutgoing(plaintext: string): { ciphertext: string; nonce: string 
       ? Buffer.from(nonceBytes).toString("base64")
       : btoa(String.fromCharCode(...nonceBytes));
   return { ciphertext, nonce };
-}
-
-function decodeIncoming(ciphertext: string): string {
-  try {
-    const decoded =
-      typeof window === "undefined"
-        ? Buffer.from(ciphertext, "base64").toString("utf-8")
-        : new TextDecoder().decode(
-            Uint8Array.from(atob(ciphertext), (c) => c.charCodeAt(0)),
-          );
-    return decoded;
-  } catch {
-    return "[decode failed]";
-  }
 }
 
 /**
@@ -187,6 +199,19 @@ export function TopicChatPanel({
   const seenIdsRef = useRef<Set<string>>(new Set());
   const lastMarkReadAtRef = useRef<number>(0);
 
+  // v0.3.0 per-topic encryption state.
+  // `topicKey` is the 32-byte symmetric key for the active topic (null =
+  // unencrypted / not yet sealed for this browser). `keyState` distinguishes
+  // the three reasons we might not have a key yet, so the UI can show the
+  // right message ("waiting for a CLI peer to share the key" vs "topic is
+  // legacy plaintext" vs "decrypt failed").
+  const [topicKey, setTopicKey] = useState<Uint8Array | null>(null);
+  const [keyState, setKeyState] = useState<
+    "loading" | "ready" | "not_sealed" | "topic_unencrypted" | "error"
+  >("loading");
+  // Decrypted plaintext per message id, computed lazily on render.
+  const [decrypted, setDecrypted] = useState<Map<string, string>>(new Map());
+
   const headers = useMemo(
     () => ({
       Authorization: `Bearer ${apiKeySecret}`,
@@ -237,6 +262,95 @@ export function TopicChatPanel({
     void loadHistory();
     void markRead();
   }, [loadHistory, markRead]);
+
+  // Per-topic encryption bootstrap.
+  //
+  // On mount: register the browser's IndexedDB-persisted pubkey against
+  // mesh.member.peer_pubkey (idempotent), then ask /v1/topics/:name/key
+  // for our sealed copy. If no peer has sealed for us yet (404), poll
+  // every 5s — the CLI's 30s re-seal loop will eventually catch up.
+  // If the topic is unencrypted (legacy v0.2.0), fall through to v1.
+  useEffect(() => {
+    let cancelled = false;
+    let pollTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const tryFetchKey = async (firstAttempt: boolean) => {
+      try {
+        if (firstAttempt) {
+          // Idempotent — only writes on first run / after rotation.
+          await registerBrowserPeerPubkey(apiKeySecret);
+        }
+        const res = await getTopicKey({ apiKeySecret, topicName });
+        if (cancelled) return;
+        if (res.ok && res.topicKey) {
+          setTopicKey(res.topicKey);
+          setKeyState("ready");
+          return;
+        }
+        if (res.error === "topic_unencrypted") {
+          setTopicKey(null);
+          setKeyState("topic_unencrypted");
+          return;
+        }
+        if (res.error === "not_sealed") {
+          setTopicKey(null);
+          setKeyState("not_sealed");
+          // Re-poll: a CLI peer's re-seal loop runs every 30s, so 5s
+          // here gives a quick reaction without hammering the server.
+          pollTimer = setTimeout(() => void tryFetchKey(false), 5000);
+          return;
+        }
+        setKeyState("error");
+      } catch {
+        if (!cancelled) setKeyState("error");
+      }
+    };
+    void tryFetchKey(true);
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
+  }, [apiKeySecret, topicName]);
+
+  // Decrypt any v2 messages that we haven't decrypted yet. Runs after
+  // `messages` updates (history backfill, SSE delivery) and after
+  // `topicKey` lands.
+  useEffect(() => {
+    if (!topicKey) return;
+    let cancelled = false;
+    (async () => {
+      const additions = new Map<string, string>();
+      for (const m of messages) {
+        if ((m.bodyVersion ?? 1) !== 2) continue;
+        if (decrypted.has(m.id)) continue;
+        const plain = await decryptMessage(topicKey, m.ciphertext, m.nonce);
+        additions.set(m.id, plain ?? "[decrypt failed]");
+      }
+      if (cancelled || additions.size === 0) return;
+      setDecrypted((prev) => {
+        const next = new Map(prev);
+        for (const [k, v] of additions) next.set(k, v);
+        return next;
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [messages, topicKey, decrypted]);
+
+  // Render-time text resolution: v2 -> decrypted cache; v1 -> legacy decode.
+  // Falls back to a placeholder if v2 hasn't been decrypted yet (the
+  // useEffect above will fill it in).
+  const resolveText = useCallback(
+    (m: TopicMessage): string => {
+      if ((m.bodyVersion ?? 1) === 2) {
+        return decrypted.get(m.id) ?? "🔒 decrypting…";
+      }
+      return decodeV1(m.ciphertext);
+    },
+    [decrypted],
+  );
 
   // Roster — refresh every 20s so online state stays roughly current.
   // Tighter cadence isn't worth a dedicated SSE channel for v1.6.x.
@@ -435,7 +549,24 @@ export function TopicChatPanel({
     setSending(true);
     setError(null);
     try {
-      const { ciphertext, nonce } = encodeOutgoing(text);
+      let ciphertext: string;
+      let nonce: string;
+      let bodyVersion: 1 | 2;
+      if (topicKey && keyState === "ready") {
+        const enc = await encryptMessage(topicKey, text);
+        ciphertext = enc.ciphertext;
+        nonce = enc.nonce;
+        bodyVersion = 2;
+      } else {
+        // Legacy unencrypted topic, or sealed-key not yet available.
+        // Sending v1 plaintext keeps the chat working in either case;
+        // CLI peers on encrypted topics will read it as v1 (alongside
+        // their v2 traffic) without the round-trip breaking.
+        const enc = encodeV1Outgoing(text);
+        ciphertext = enc.ciphertext;
+        nonce = enc.nonce;
+        bodyVersion = 1;
+      }
       const mentions = extractMentions(text);
       const res = await fetch("/api/v1/messages", {
         method: "POST",
@@ -444,6 +575,7 @@ export function TopicChatPanel({
           topic: topicName,
           ciphertext,
           nonce,
+          bodyVersion,
           ...(mentions.length > 0 ? { mentions } : {}),
         }),
       });
@@ -491,10 +623,10 @@ export function TopicChatPanel({
   const filteredMessages = useMemo(() => {
     if (!searchTerm) return messages;
     return messages.filter((m) =>
-      decodeIncoming(m.ciphertext).toLowerCase().includes(searchTerm) ||
+      resolveText(m).toLowerCase().includes(searchTerm) ||
       (m.senderName ?? "").toLowerCase().includes(searchTerm),
     );
-  }, [messages, searchTerm]);
+  }, [messages, searchTerm, resolveText]);
 
   return (
     <div className="flex h-[70vh] flex-col overflow-hidden rounded-[var(--cm-radius-lg)] border border-[var(--cm-border)] bg-[var(--cm-bg)]">
@@ -588,7 +720,15 @@ export function TopicChatPanel({
                   </span>
                 </div>
                 <p className="text-[var(--cm-fg)] text-sm leading-relaxed whitespace-pre-wrap break-words">
-                  {renderWithMentions(decodeIncoming(m.ciphertext))}
+                  {(m.bodyVersion ?? 1) === 2 ? (
+                    <span
+                      className="mr-1 text-[var(--cm-fg-tertiary)]"
+                      title="end-to-end encrypted (v0.3.0 per-topic)"
+                    >
+                      🔒
+                    </span>
+                  ) : null}
+                  {renderWithMentions(resolveText(m))}
                 </p>
               </li>
             ))}
@@ -691,6 +831,23 @@ export function TopicChatPanel({
             style={monoStyle}
           >
             error · {error}
+          </p>
+        ) : null}
+        {keyState === "not_sealed" ? (
+          <p
+            className="mb-2 text-[10px] text-[var(--cm-fg-tertiary)]"
+            style={monoStyle}
+            title="The CLI's 30s re-seal loop will share the topic key with this browser shortly. Messages you send now go as v1 plaintext."
+          >
+            🔒 waiting for a CLI peer to share the topic key — sending v1 plaintext until then
+          </p>
+        ) : keyState === "ready" ? (
+          <p
+            className="mb-2 text-[10px] text-[var(--cm-fg-tertiary)]"
+            style={monoStyle}
+            title="Messages you send are encrypted with the topic's symmetric key (crypto_secretbox)."
+          >
+            🔒 end-to-end encrypted (v0.3.0)
           </p>
         ) : null}
         <form

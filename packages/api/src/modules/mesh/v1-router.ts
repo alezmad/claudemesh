@@ -271,6 +271,61 @@ export const v1Router = new Hono<Env>()
     });
   })
 
+  // POST /v1/me/peer-pubkey — register the caller's persistent peer pubkey.
+  //
+  // Browser users get a throwaway ed25519 pubkey at mesh-create time
+  // (no secret retained). To participate in v0.3.0 per-topic encryption
+  // they must replace it with a pubkey whose secret they actually hold
+  // (persisted in IndexedDB). This endpoint writes the new pubkey on the
+  // mesh.member row identified by the apikey's issuer; the broker / CLI
+  // re-seal loop then picks them up as a regular topic-key recipient
+  // within ~30s.
+  //
+  // Idempotent: same pubkey → no-op; different pubkey → updates and
+  // bumps `joined_at` so re-sealers notice the change. We do NOT
+  // invalidate the existing sealed topic_member_key rows here —
+  // they're keyed by member, not pubkey, and the next CLI re-seal pass
+  // will overwrite them with copies sealed to the new pubkey.
+  .post(
+    "/me/peer-pubkey",
+    validate(
+      "json",
+      z.object({
+        pubkey: z
+          .string()
+          .length(64)
+          .regex(/^[0-9a-f]{64}$/i, "must be 64 lowercase hex chars"),
+      }),
+    ),
+    async (c) => {
+      const key = c.var.apiKey;
+      if (!key.issuedByMemberId) {
+        return c.json({ error: "api_key_has_no_issuer" }, 400);
+      }
+      const body = c.req.valid("json");
+      const newPubkey = body.pubkey.toLowerCase();
+      const [existing] = await db
+        .select({ peerPubkey: meshMember.peerPubkey })
+        .from(meshMember)
+        .where(eq(meshMember.id, key.issuedByMemberId));
+      if (!existing) {
+        return c.json({ error: "member_not_found" }, 404);
+      }
+      const changed = existing.peerPubkey !== newPubkey;
+      if (changed) {
+        await db
+          .update(meshMember)
+          .set({ peerPubkey: newPubkey })
+          .where(eq(meshMember.id, key.issuedByMemberId));
+      }
+      return c.json({
+        memberId: key.issuedByMemberId,
+        pubkey: newPubkey,
+        changed,
+      });
+    },
+  )
+
   // GET /v1/topics — list topics in the key's mesh
   // Includes per-topic unread counts when the key has an issuing member
   // (i.e. dashboard keys; CLI-minted keys also carry it). Counts are
