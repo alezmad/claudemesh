@@ -305,11 +305,32 @@ export const v1Router = new Hono<Env>()
       const body = c.req.valid("json");
       const newPubkey = body.pubkey.toLowerCase();
       const [existing] = await db
-        .select({ peerPubkey: meshMember.peerPubkey })
+        .select({
+          peerPubkey: meshMember.peerPubkey,
+          dashboardUserId: meshMember.dashboardUserId,
+        })
         .from(meshMember)
         .where(eq(meshMember.id, key.issuedByMemberId));
       if (!existing) {
         return c.json({ error: "member_not_found" }, 404);
+      }
+      // Safety: only web-managed members (dashboardUserId set) can have
+      // their peer_pubkey rewritten via this endpoint. CLI-created
+      // members hold a real on-disk secret that matches their existing
+      // peer_pubkey; overwriting it would break their next WS hello
+      // (signature verification fails because the stored pubkey no
+      // longer matches the secret they sign with). The browser flow
+      // always mints its apikey against the dashboard member, so this
+      // restriction is invisible to legitimate callers.
+      if (!existing.dashboardUserId) {
+        return c.json(
+          {
+            error: "not_web_member",
+            detail:
+              "this endpoint only updates web-managed members (mesh.member.dashboard_user_id IS NOT NULL); CLI members own their on-disk keypair and can't have peer_pubkey rewritten remotely",
+          },
+          409,
+        );
       }
       const changed = existing.peerPubkey !== newPubkey;
       if (changed) {
