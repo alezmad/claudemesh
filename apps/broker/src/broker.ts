@@ -47,6 +47,7 @@ import {
   meshStream,
   meshTopic,
   meshTopicMember,
+  meshTopicMemberKey,
   meshTopicMessage,
   meshVaultEntry,
   meshTask,
@@ -557,12 +558,27 @@ export async function createTopic(args: {
   description?: string;
   visibility?: "public" | "private" | "dm";
   createdByMemberId?: string;
-}): Promise<{ id: string; created: boolean }> {
+}): Promise<{ id: string; created: boolean; encryptedKeyPubkey?: string }> {
   const existing = await db
-    .select({ id: meshTopic.id })
+    .select({
+      id: meshTopic.id,
+      encryptedKeyPubkey: meshTopic.encryptedKeyPubkey,
+    })
     .from(meshTopic)
     .where(and(eq(meshTopic.meshId, args.meshId), eq(meshTopic.name, args.name)));
-  if (existing[0]) return { id: existing[0].id, created: false };
+  if (existing[0]) {
+    return {
+      id: existing[0].id,
+      created: false,
+      encryptedKeyPubkey: existing[0].encryptedKeyPubkey ?? undefined,
+    };
+  }
+
+  // Generate the topic's per-message symmetric key + an ephemeral
+  // sender keypair used to seal it for each member. The plaintext
+  // topicKey is held in memory only long enough to seal one copy per
+  // member; the broker never persists it.
+  const topicKeyBundle = await generateTopicKeyBundle();
 
   const [row] = await db
     .insert(meshTopic)
@@ -572,10 +588,119 @@ export async function createTopic(args: {
       description: args.description ?? null,
       visibility: args.visibility ?? "public",
       createdByMemberId: args.createdByMemberId ?? null,
+      encryptedKeyPubkey: topicKeyBundle.senderPubkeyHex,
     })
     .returning({ id: meshTopic.id });
   if (!row) throw new Error("failed to create topic");
-  return { id: row.id, created: true };
+
+  // Seal a copy for the creator immediately. Other members get sealed
+  // copies as they join via joinTopic().
+  if (args.createdByMemberId) {
+    await sealTopicKeyForMember({
+      topicId: row.id,
+      memberId: args.createdByMemberId,
+      bundle: topicKeyBundle,
+    });
+  }
+
+  return {
+    id: row.id,
+    created: true,
+    encryptedKeyPubkey: topicKeyBundle.senderPubkeyHex,
+  };
+}
+
+/**
+ * Generate a per-topic symmetric key + an ephemeral x25519 sender keypair
+ * used to seal it. Returns the bundle in a form that callers can hand to
+ * sealTopicKeyForMember() repeatedly without ever persisting the key
+ * plaintext.
+ *
+ * crypto_kx is the libsodium primitive matching v0.1's mesh handshake,
+ * but we only need a fresh x25519 pair here — keyPair() suffices.
+ */
+async function generateTopicKeyBundle(): Promise<{
+  topicKey: Uint8Array;
+  senderSecret: Uint8Array;
+  senderPubkey: Uint8Array;
+  senderPubkeyHex: string;
+}> {
+  const sodium = await import("libsodium-wrappers");
+  await sodium.ready;
+  const topicKey = sodium.randombytes_buf(32);
+  const sender = sodium.crypto_box_keypair();
+  return {
+    topicKey,
+    senderSecret: sender.privateKey,
+    senderPubkey: sender.publicKey,
+    senderPubkeyHex: sodium.to_hex(sender.publicKey),
+  };
+}
+
+interface TopicKeyBundle {
+  topicKey: Uint8Array;
+  senderSecret: Uint8Array;
+  senderPubkey: Uint8Array;
+  senderPubkeyHex: string;
+}
+
+/**
+ * Seal the topic key for one member using crypto_box. Idempotent on
+ * (topicId, memberId) — calling again rotates the cipher but not the
+ * underlying key (rotation is a separate flow).
+ *
+ * The recipient's peer pubkey is the ed25519 key they registered with
+ * the broker. crypto_box wants x25519, so we convert. Members decrypt
+ * with crypto_box_open + sender pubkey + their own x25519 secret
+ * (derived from their ed25519 secret the same way).
+ */
+async function sealTopicKeyForMember(args: {
+  topicId: string;
+  memberId: string;
+  bundle: TopicKeyBundle;
+}): Promise<void> {
+  const [member] = await db
+    .select({ peerPubkey: memberTable.peerPubkey })
+    .from(memberTable)
+    .where(eq(memberTable.id, args.memberId));
+  if (!member) return;
+
+  const sodium = await import("libsodium-wrappers");
+  await sodium.ready;
+  let recipientX25519: Uint8Array;
+  try {
+    const ed = sodium.from_hex(member.peerPubkey);
+    recipientX25519 = sodium.crypto_sign_ed25519_pk_to_curve25519(ed);
+  } catch {
+    // Recipient pubkey isn't a valid ed25519 key — skip silently. The
+    // member won't be able to read v2 messages on this topic until
+    // their identity is regenerated.
+    return;
+  }
+  const nonce = sodium.randombytes_buf(sodium.crypto_box_NONCEBYTES);
+  const sealed = sodium.crypto_box_easy(
+    args.bundle.topicKey,
+    nonce,
+    recipientX25519,
+    args.bundle.senderSecret,
+  );
+
+  await db
+    .insert(meshTopicMemberKey)
+    .values({
+      topicId: args.topicId,
+      memberId: args.memberId,
+      encryptedKey: sodium.to_base64(sealed, sodium.base64_variants.ORIGINAL),
+      nonce: sodium.to_base64(nonce, sodium.base64_variants.ORIGINAL),
+    })
+    .onConflictDoUpdate({
+      target: [meshTopicMemberKey.topicId, meshTopicMemberKey.memberId],
+      set: {
+        encryptedKey: sodium.to_base64(sealed, sodium.base64_variants.ORIGINAL),
+        nonce: sodium.to_base64(nonce, sodium.base64_variants.ORIGINAL),
+        rotatedAt: new Date(),
+      },
+    });
 }
 
 /** List topics in a mesh, with member counts. */

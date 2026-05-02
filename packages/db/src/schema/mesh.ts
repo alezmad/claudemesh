@@ -1360,6 +1360,11 @@ export const meshTopic = meshSchema.table(
       onDelete: "set null",
       onUpdate: "cascade",
     }),
+    /**
+     * Ephemeral x25519 sender pubkey used to seal per-member topic-key
+     * copies via crypto_box. Null on legacy v0.2.0 topics (no encryption).
+     */
+    encryptedKeyPubkey: text(),
     createdAt: timestamp().defaultNow().notNull(),
     archivedAt: timestamp(),
   },
@@ -1396,6 +1401,61 @@ export const meshTopicMember = meshSchema.table(
 );
 
 /**
+ * Per-(topic, member) sealed copy of the topic's symmetric key. v0.3.0
+ * phase 2 — each topic_member gets a crypto_box ciphertext of the 32-byte
+ * topic key, sealed to their peer pubkey using an ephemeral sender
+ * keypair stored on `topic.encryptedKeyPubkey`. The server holds only
+ * ciphertext; it can't read message bodies.
+ */
+export const meshTopicMemberKey = meshSchema.table(
+  "topic_member_key",
+  {
+    id: text().primaryKey().notNull().$defaultFn(generateId),
+    topicId: text()
+      .references(() => meshTopic.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    memberId: text()
+      .references(() => meshMember.id, {
+        onDelete: "cascade",
+        onUpdate: "cascade",
+      })
+      .notNull(),
+    encryptedKey: text().notNull(),
+    nonce: text().notNull(),
+    createdAt: timestamp().defaultNow().notNull(),
+    rotatedAt: timestamp(),
+  },
+  (t) => [
+    uniqueIndex("topic_member_key_unique").on(t.topicId, t.memberId),
+    index("topic_member_key_by_member").on(t.memberId),
+  ],
+);
+
+export const meshTopicMemberKeyRelations = relations(
+  meshTopicMemberKey,
+  ({ one }) => ({
+    topic: one(meshTopic, {
+      fields: [meshTopicMemberKey.topicId],
+      references: [meshTopic.id],
+    }),
+    member: one(meshMember, {
+      fields: [meshTopicMemberKey.memberId],
+      references: [meshMember.id],
+    }),
+  }),
+);
+
+export const selectMeshTopicMemberKeySchema =
+  createSelectSchema(meshTopicMemberKey);
+export const insertMeshTopicMemberKeySchema =
+  createInsertSchema(meshTopicMemberKey);
+export type SelectMeshTopicMemberKey = typeof meshTopicMemberKey.$inferSelect;
+export type InsertMeshTopicMemberKey = typeof meshTopicMemberKey.$inferInsert;
+
+/**
  * Topic-scoped persistent message history. Direct messages (DMs) stay
  * ephemeral via message_queue by design — this table only persists
  * messages addressed to a topic, so humans (and agents that opt in) can
@@ -1424,9 +1484,19 @@ export const meshTopicMessage = meshSchema.table(
     senderSessionPubkey: text(),
     nonce: text().notNull(),
     ciphertext: text().notNull(),
+    /**
+     * Body-format version. 1 = legacy base64-of-plaintext (v0.2.0). 2 =
+     * crypto_secretbox under the topic key (v0.3.0). Readers branch on
+     * this; mention fan-out is decoupled via the notification table so
+     * a v2 message still resolves @-mentions correctly.
+     */
+    bodyVersion: integer().notNull().default(1),
     createdAt: timestamp().defaultNow().notNull(),
   },
-  (t) => [index("topic_message_by_topic_time").on(t.topicId, t.createdAt)],
+  (t) => [
+    index("topic_message_by_topic_time").on(t.topicId, t.createdAt),
+    index("topic_message_by_version").on(t.bodyVersion),
+  ],
 );
 
 export const meshTopicRelations = relations(meshTopic, ({ one, many }) => ({

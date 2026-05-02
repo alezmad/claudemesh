@@ -34,6 +34,7 @@ import {
   meshNotification,
   meshTopic,
   meshTopicMember,
+  meshTopicMemberKey,
   meshTopicMessage,
   messageQueue,
   presence,
@@ -592,6 +593,91 @@ export const v1Router = new Hono<Env>()
           summary: live?.summary ?? null,
         };
       }),
+    });
+  })
+
+  // GET /v1/topics/:name/key — fetch the calling member's sealed copy
+  // of the topic's symmetric key. v0.3.0 phase 2.
+  //
+  // The broker stores `crypto_box(topic_key, recipient_x25519,
+  // ephemeral_sender_x25519)` per (topic, member). Clients decrypt with
+  // their ed25519→x25519-converted secret + the topic's ephemeral
+  // sender pubkey on `topic.encrypted_key_pubkey`.
+  //
+  // Returns 404 when no sealed copy exists for this member yet —
+  // expected when the member joined a topic after creation and no
+  // other peer has re-sealed the key for them. UI surfaces a "pending
+  // — waiting for re-seal from another member" state in that case.
+  // Spec for the re-seal flow lives at
+  // `.artifacts/specs/2026-05-02-topic-key-onboarding.md`.
+  .get("/topics/:name/key", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    const name = c.req.param("name");
+    requireTopicScope(key, name);
+
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+
+    const [topic] = await db
+      .select({
+        id: meshTopic.id,
+        encryptedKeyPubkey: meshTopic.encryptedKeyPubkey,
+      })
+      .from(meshTopic)
+      .where(
+        and(
+          eq(meshTopic.meshId, key.meshId),
+          eq(meshTopic.name, name),
+          isNull(meshTopic.archivedAt),
+        ),
+      );
+    if (!topic) {
+      return c.json({ error: "topic_not_found", topic: name }, 404);
+    }
+    if (!topic.encryptedKeyPubkey) {
+      return c.json(
+        {
+          error: "topic_unencrypted",
+          topic: name,
+          hint: "legacy v0.2.0 topic — messages are base64 plaintext",
+        },
+        409,
+      );
+    }
+
+    const [sealed] = await db
+      .select({
+        encryptedKey: meshTopicMemberKey.encryptedKey,
+        nonce: meshTopicMemberKey.nonce,
+        createdAt: meshTopicMemberKey.createdAt,
+      })
+      .from(meshTopicMemberKey)
+      .where(
+        and(
+          eq(meshTopicMemberKey.topicId, topic.id),
+          eq(meshTopicMemberKey.memberId, key.issuedByMemberId),
+        ),
+      );
+    if (!sealed) {
+      return c.json(
+        {
+          error: "key_not_sealed_for_member",
+          topic: name,
+          hint: "join the topic, then ask an existing member to re-seal",
+        },
+        404,
+      );
+    }
+
+    return c.json({
+      topic: name,
+      topicId: topic.id,
+      encryptedKey: sealed.encryptedKey,
+      nonce: sealed.nonce,
+      senderPubkey: topic.encryptedKeyPubkey,
+      createdAt: sealed.createdAt.toISOString(),
     });
   })
 
