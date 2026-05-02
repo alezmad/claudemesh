@@ -102,6 +102,11 @@ Profile / presence  (resource form)
   claudemesh group join @<name>    join a group (--role X)
   claudemesh group leave @<name>   leave a group
 
+API keys  (REST + external WS auth, v0.2.0)
+  claudemesh apikey create <label>  issue [--cap send,read] [--topic deploys]
+  claudemesh apikey list             show keys (status, last-used, scope)
+  claudemesh apikey revoke <id>      revoke a key
+
 Topic  (conversation scope, v0.2.0)
   claudemesh topic create <name>   create a topic [--description --visibility]
   claudemesh topic list            list topics in the mesh
@@ -506,6 +511,24 @@ async function main(): Promise<void> {
       else if (sub === "pause") { const { runClockPause } = await import("~/commands/platform-actions.js"); process.exit(await runClockPause(f)); }
       else if (sub === "resume") { const { runClockResume } = await import("~/commands/platform-actions.js"); process.exit(await runClockResume(f)); }
       else { const { runClock } = await import("~/commands/broker-actions.js"); process.exit(await runClock(f)); }
+      break;
+    }
+
+    // apikey — REST + external WS bearer tokens (v0.2.0)
+    case "apikey": case "api-key": {
+      const sub = positionals[0];
+      const f = {
+        mesh: flags.mesh as string,
+        json: !!flags.json,
+        cap: flags.cap as string,
+        topic: flags.topic as string,
+        expires: flags.expires as string,
+      };
+      const arg = positionals[1] ?? "";
+      if (sub === "create") { const { runApiKeyCreate } = await import("~/commands/apikey.js"); process.exit(await runApiKeyCreate(arg, f)); }
+      else if (sub === "list") { const { runApiKeyList } = await import("~/commands/apikey.js"); process.exit(await runApiKeyList(f)); }
+      else if (sub === "revoke") { const { runApiKeyRevoke } = await import("~/commands/apikey.js"); process.exit(await runApiKeyRevoke(arg, f)); }
+      else { console.error("Usage: claudemesh apikey <create|list|revoke>"); process.exit(EXIT.INVALID_ARGS); }
       break;
     }
 

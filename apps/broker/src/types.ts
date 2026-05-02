@@ -179,6 +179,60 @@ export interface WSLeaveGroupMessage {
   name: string;
 }
 
+// ── API keys (v0.2.0) ───────────────────────────────────────────────
+// Issuance/management of bearer tokens for REST + external WS. Only the
+// mesh admin can issue; keys are scoped by capability + optional topic
+// whitelist. Spec: .artifacts/specs/2026-05-02-v0.2.0-scope.md
+
+export interface WSApiKeyCreateMessage {
+  type: "apikey_create";
+  label: string;
+  capabilities: Array<"send" | "read" | "state_write" | "admin">;
+  topicScopes?: string[];
+  expiresAt?: string;
+  _reqId?: string;
+}
+
+export interface WSApiKeyListMessage {
+  type: "apikey_list";
+  _reqId?: string;
+}
+
+export interface WSApiKeyRevokeMessage {
+  type: "apikey_revoke";
+  id: string;
+  _reqId?: string;
+}
+
+export interface WSApiKeyCreatedMessage {
+  type: "apikey_created";
+  id: string;
+  /** Plaintext secret — shown ONCE, never returned again. */
+  secret: string;
+  label: string;
+  prefix: string;
+  capabilities: Array<"send" | "read" | "state_write" | "admin">;
+  topicScopes: string[] | null;
+  createdAt: string;
+  _reqId?: string;
+}
+
+export interface WSApiKeyListResponseMessage {
+  type: "apikey_list_response";
+  keys: Array<{
+    id: string;
+    label: string;
+    prefix: string;
+    capabilities: Array<"send" | "read" | "state_write" | "admin">;
+    topicScopes: string[] | null;
+    createdAt: string;
+    lastUsedAt: string | null;
+    revokedAt: string | null;
+    expiresAt: string | null;
+  }>;
+  _reqId?: string;
+}
+
 // ── Topics (v0.2.0) ─────────────────────────────────────────────────
 // Topics complement groups: groups are identity tags, topics are
 // conversation scopes. targetSpec for topic-tagged messages is
@@ -1253,6 +1307,9 @@ export type WSClientMessage =
   | WSTopicMembersMessage
   | WSTopicHistoryMessage
   | WSTopicMarkReadMessage
+  | WSApiKeyCreateMessage
+  | WSApiKeyListMessage
+  | WSApiKeyRevokeMessage
   | WSSetStateMessage
   | WSGetStateMessage
   | WSListStateMessage
@@ -1425,6 +1482,8 @@ export type WSServerMessage =
   | WSTopicListResponseMessage
   | WSTopicMembersResponseMessage
   | WSTopicHistoryResponseMessage
+  | WSApiKeyCreatedMessage
+  | WSApiKeyListResponseMessage
   | WSStateChangeMessage
   | WSStateResultMessage
   | WSStateListMessage

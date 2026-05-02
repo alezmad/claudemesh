@@ -92,6 +92,13 @@ export function classifyInvocation(command: string, positionals: string[]): Invo
       const writeVerbs = new Set(["create", "join", "leave"]);
       return { resource: "topic", verb, isWrite: writeVerbs.has(verb) };
     }
+    case "apikey": case "api-key": {
+      // apikey verbs: create | list | revoke. create issues a credential —
+      // strongly destructive in security terms; revoke is also a write.
+      const verb = sub || "list";
+      const writeVerbs = new Set(["create", "revoke"]);
+      return { resource: "apikey", verb, isWrite: writeVerbs.has(verb) };
+    }
 
     // Platform — sub is the verb.
     case "vector": case "graph": case "context": case "stream":

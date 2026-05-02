@@ -77,6 +77,8 @@ export const DEFAULT_POLICY: Policy = {
     { resource: "sql",     verb: "execute",    decision: "prompt", reason: "raw SQL write to mesh DB" },
     { resource: "graph",   verb: "execute",    decision: "prompt", reason: "graph mutation" },
     { resource: "mesh",    verb: "delete",     decision: "prompt", reason: "deletes the mesh for everyone" },
+    { resource: "apikey",  verb: "create",     decision: "prompt", reason: "issues a long-lived credential" },
+    { resource: "apikey",  verb: "revoke",     decision: "prompt", reason: "irreversibly disables a credential" },
   ],
 };
 

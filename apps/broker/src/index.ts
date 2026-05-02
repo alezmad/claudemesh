@@ -93,6 +93,9 @@ import {
   topicHistory,
   markTopicRead,
   appendTopicMessage,
+  createApiKey,
+  listApiKeys,
+  revokeApiKey,
 } from "./broker";
 import * as serviceManager from "./service-manager";
 import { ensureBucket, meshBucketName, minioClient } from "./minio";
@@ -2460,6 +2463,69 @@ function handleConnection(ws: WebSocket): void {
           const topicId = await resolveTopicId(conn.meshId, tr.topic);
           if (!topicId) { sendError(ws, "topic_not_found", `topic "${tr.topic}" not found`, _reqId); break; }
           await markTopicRead({ topicId, memberId: conn.memberId });
+          break;
+        }
+
+        // ── API keys (v0.2.0) ───────────────────────────────────────
+        // TODO: gate to admin members only. For now any authed peer can
+        // issue keys for their mesh — matches existing `share` invite
+        // semantics; tighter ACL lands with the broader admin role work.
+        case "apikey_create": {
+          const ac = msg as Extract<WSClientMessage, { type: "apikey_create" }>;
+          if (!ac.label || !ac.capabilities?.length) {
+            sendError(ws, "invalid_args", "label and at least one capability required", _reqId);
+            break;
+          }
+          const result = await createApiKey({
+            meshId: conn.meshId,
+            label: ac.label,
+            capabilities: ac.capabilities,
+            topicScopes: ac.topicScopes ?? null,
+            issuedByMemberId: conn.memberId,
+            expiresAt: ac.expiresAt ? new Date(ac.expiresAt) : undefined,
+          });
+          const resp: WSServerMessage = {
+            type: "apikey_created",
+            id: result.id,
+            secret: result.secret,
+            label: result.label,
+            prefix: result.prefix,
+            capabilities: result.capabilities,
+            topicScopes: result.topicScopes,
+            createdAt: result.createdAt.toISOString(),
+            ...(_reqId ? { _reqId } : {}),
+          };
+          conn.ws.send(JSON.stringify(resp));
+          log.info("ws apikey_create", { presence_id: presenceId, label: ac.label, key_id: result.id });
+          break;
+        }
+
+        case "apikey_list": {
+          const keys = await listApiKeys(conn.meshId);
+          const resp: WSServerMessage = {
+            type: "apikey_list_response",
+            keys: keys.map((k) => ({
+              id: k.id,
+              label: k.label,
+              prefix: k.prefix,
+              capabilities: k.capabilities,
+              topicScopes: k.topicScopes,
+              createdAt: k.createdAt.toISOString(),
+              lastUsedAt: k.lastUsedAt?.toISOString() ?? null,
+              revokedAt: k.revokedAt?.toISOString() ?? null,
+              expiresAt: k.expiresAt?.toISOString() ?? null,
+            })),
+            ...(_reqId ? { _reqId } : {}),
+          };
+          conn.ws.send(JSON.stringify(resp));
+          break;
+        }
+
+        case "apikey_revoke": {
+          const ar = msg as Extract<WSClientMessage, { type: "apikey_revoke" }>;
+          if (!ar.id) { sendError(ws, "invalid_args", "id required", _reqId); break; }
+          await revokeApiKey({ meshId: conn.meshId, id: ar.id });
+          log.info("ws apikey_revoke", { presence_id: presenceId, key_id: ar.id });
           break;
         }
 

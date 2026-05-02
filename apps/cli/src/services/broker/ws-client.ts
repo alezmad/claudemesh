@@ -166,6 +166,9 @@ export class BrokerClient {
   private topicListResolvers = new Map<string, { resolve: (topics: Array<{ id: string; name: string; description: string | null; visibility: "public" | "private" | "dm"; memberCount: number; createdAt: string }>) => void; timer: NodeJS.Timeout }>();
   private topicMembersResolvers = new Map<string, { resolve: (members: Array<{ memberId: string; pubkey: string; displayName: string; role: "lead" | "member" | "observer"; joinedAt: string; lastReadAt: string | null }>) => void; timer: NodeJS.Timeout }>();
   private topicHistoryResolvers = new Map<string, { resolve: (messages: Array<{ id: string; senderPubkey: string; nonce: string; ciphertext: string; createdAt: string }>) => void; timer: NodeJS.Timeout }>();
+  // ── API keys (v0.2.0) ──
+  private apiKeyCreatedResolvers = new Map<string, { resolve: (r: { id: string; secret: string; label: string; prefix: string; capabilities: Array<"send" | "read" | "state_write" | "admin">; topicScopes: string[] | null; createdAt: string } | null) => void; timer: NodeJS.Timeout }>();
+  private apiKeyListResolvers = new Map<string, { resolve: (keys: Array<{ id: string; label: string; prefix: string; capabilities: Array<"send" | "read" | "state_write" | "admin">; topicScopes: string[] | null; createdAt: string; lastUsedAt: string | null; revokedAt: string | null; expiresAt: string | null }>) => void; timer: NodeJS.Timeout }>();
   /** Directories from which this peer serves files. Default: [process.cwd()]. */
   private sharedDirs: string[] = [process.cwd()];
   private _serviceCatalog: Array<{ name: string; description: string; status: string; tools: Array<{ name: string; description: string; inputSchema: object }>; deployed_by: string }> = [];
@@ -645,6 +648,60 @@ export class BrokerClient {
   async topicMarkRead(topic: string): Promise<void> {
     if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
     this.ws.send(JSON.stringify({ type: "topic_mark_read", topic }));
+  }
+
+  // --- API keys (v0.2.0) ---
+
+  async apiKeyCreate(args: {
+    label: string;
+    capabilities: Array<"send" | "read" | "state_write" | "admin">;
+    topicScopes?: string[];
+    expiresAt?: string;
+  }): Promise<{ id: string; secret: string; label: string; prefix: string; capabilities: Array<"send" | "read" | "state_write" | "admin">; topicScopes: string[] | null; createdAt: string } | null> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return null;
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.apiKeyCreatedResolvers.set(reqId, {
+        resolve,
+        timer: setTimeout(() => {
+          if (this.apiKeyCreatedResolvers.delete(reqId)) resolve(null);
+        }, 5_000),
+      });
+      this.ws!.send(
+        JSON.stringify({ type: "apikey_create", _reqId: reqId, ...args }),
+      );
+    });
+  }
+
+  async apiKeyList(): Promise<
+    Array<{
+      id: string;
+      label: string;
+      prefix: string;
+      capabilities: Array<"send" | "read" | "state_write" | "admin">;
+      topicScopes: string[] | null;
+      createdAt: string;
+      lastUsedAt: string | null;
+      revokedAt: string | null;
+      expiresAt: string | null;
+    }>
+  > {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return [];
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.apiKeyListResolvers.set(reqId, {
+        resolve,
+        timer: setTimeout(() => {
+          if (this.apiKeyListResolvers.delete(reqId)) resolve([]);
+        }, 5_000),
+      });
+      this.ws!.send(JSON.stringify({ type: "apikey_list", _reqId: reqId }));
+    });
+  }
+
+  async apiKeyRevoke(id: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "apikey_revoke", id }));
   }
 
   // --- State ---
@@ -1834,6 +1891,22 @@ export class BrokerClient {
     }
     if (msg.type === "topic_history_response") {
       this.resolveFromMap(this.topicHistoryResolvers, msgReqId, (msg.messages as any[]) ?? []);
+      return;
+    }
+    if (msg.type === "apikey_created") {
+      this.resolveFromMap(this.apiKeyCreatedResolvers, msgReqId, {
+        id: String(msg.id ?? ""),
+        secret: String(msg.secret ?? ""),
+        label: String(msg.label ?? ""),
+        prefix: String(msg.prefix ?? ""),
+        capabilities: (msg.capabilities as any[]) ?? [],
+        topicScopes: (msg.topicScopes as string[] | null) ?? null,
+        createdAt: String(msg.createdAt ?? ""),
+      });
+      return;
+    }
+    if (msg.type === "apikey_list_response") {
+      this.resolveFromMap(this.apiKeyListResolvers, msgReqId, (msg.keys as any[]) ?? []);
       return;
     }
     if (msg.type === "push") {
