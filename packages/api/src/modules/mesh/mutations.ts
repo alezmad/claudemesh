@@ -3,7 +3,14 @@ import { randomBytes } from "node:crypto";
 import sodium from "libsodium-wrappers";
 
 import { and, eq, isNull } from "@turbostarter/db";
-import { invite, mesh, meshMember, pendingInvite } from "@turbostarter/db/schema";
+import {
+  invite,
+  mesh,
+  meshMember,
+  meshTopic,
+  meshTopicMember,
+  pendingInvite,
+} from "@turbostarter/db/schema";
 import { db } from "@turbostarter/db/server";
 
 import type {
@@ -142,7 +149,45 @@ export const createMyMesh = async ({
     })
     .returning({ id: mesh.id, slug: mesh.slug });
 
+  if (created) {
+    await ensureGeneralTopic(created.id);
+  }
+
   return created!;
+};
+
+/**
+ * Idempotently create the conventional `#general` topic for a mesh.
+ *
+ * `#general` is the default web-readable room: a public topic that every
+ * mesh has so the dashboard chat surface always has somewhere to land.
+ * Subscription is not required for read access via the REST surface, so
+ * subscribing members happens lazily at member-row creation time
+ * (invite-claim) rather than here.
+ *
+ * Safe to call repeatedly — the unique (meshId, name) index keeps it a
+ * no-op on the second call.
+ */
+export const ensureGeneralTopic = async (
+  meshId: string,
+): Promise<{ id: string } | null> => {
+  const [existing] = await db
+    .select({ id: meshTopic.id })
+    .from(meshTopic)
+    .where(and(eq(meshTopic.meshId, meshId), eq(meshTopic.name, "general")))
+    .limit(1);
+  if (existing) return existing;
+  const [row] = await db
+    .insert(meshTopic)
+    .values({
+      meshId,
+      name: "general",
+      description: "Default mesh-wide channel. Every member can read and post.",
+      visibility: "public",
+    })
+    .onConflictDoNothing()
+    .returning({ id: meshTopic.id });
+  return row ?? null;
 };
 
 export const archiveMyMesh = async ({

@@ -10,7 +10,7 @@
 import { and, eq, isNull, lt, sql } from "drizzle-orm";
 import sodium from "libsodium-wrappers";
 import { db } from "./db";
-import { invite as inviteTable, mesh, meshMember } from "@turbostarter/db/schema/mesh";
+import { invite as inviteTable, mesh, meshMember, meshTopic, meshTopicMember } from "@turbostarter/db/schema/mesh";
 
 let ready = false;
 async function ensureSodium(): Promise<typeof sodium> {
@@ -342,6 +342,32 @@ export async function claimInviteV2Core(params: {
     .returning({ id: meshMember.id });
   if (!row) {
     return { ok: false, status: 400, body: { error: "malformed" } };
+  }
+
+  // 6b. Auto-subscribe the new member to #general (the default mesh-wide
+  // room). Idempotent via unique (topic_id, member_id). If the mesh was
+  // created before #general auto-creation existed, ensure it now via a
+  // best-effort INSERT … ON CONFLICT — backfill migration handles the
+  // bulk case so this is just a safety net.
+  await db
+    .insert(meshTopic)
+    .values({
+      meshId: inv.meshId,
+      name: "general",
+      description: "Default mesh-wide channel. Every member can read and post.",
+      visibility: "public",
+    })
+    .onConflictDoNothing();
+  const [generalTopic] = await db
+    .select({ id: meshTopic.id })
+    .from(meshTopic)
+    .where(and(eq(meshTopic.meshId, inv.meshId), eq(meshTopic.name, "general")))
+    .limit(1);
+  if (generalTopic) {
+    await db
+      .insert(meshTopicMember)
+      .values({ topicId: generalTopic.id, memberId: row.id, role: "member" })
+      .onConflictDoNothing();
   }
 
   // 7. Seal the mesh root_key to the recipient's x25519 pubkey.

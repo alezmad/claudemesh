@@ -5945,6 +5945,22 @@ async function handleCliMeshCreate(req: IncomingMessage, res: ServerResponse, st
       VALUES (${memberId}, ${meshId}, ${auth.userId}, ${body.pubkey}, ${body.name + "-owner"}, ${"admin"})
     `);
 
+    // Auto-create the conventional #general topic + subscribe the owner.
+    // Idempotent via unique (mesh_id, name) — re-running is a no-op.
+    const generalTopicId = generateId();
+    await db.execute(sql`
+      INSERT INTO mesh.topic (id, mesh_id, name, description, visibility, created_by_member_id)
+      VALUES (${generalTopicId}, ${meshId}, ${"general"}, ${"Default mesh-wide channel. Every member can read and post."}, ${"public"}, ${memberId})
+      ON CONFLICT (mesh_id, name) DO NOTHING
+    `);
+    await db.execute(sql`
+      INSERT INTO mesh.topic_member (topic_id, member_id, role)
+      SELECT t.id, ${memberId}, ${"lead"}
+      FROM mesh.topic t
+      WHERE t.mesh_id = ${meshId} AND t.name = ${"general"}
+      ON CONFLICT (topic_id, member_id) DO NOTHING
+    `);
+
     writeJson(res, 200, { id: meshId, slug, name: body.name, member_id: memberId });
     log.info("mesh-create", { route: "POST /cli/mesh/create", slug, user_id: auth.userId, latency_ms: Date.now() - started });
   } catch (e) {
