@@ -126,7 +126,28 @@ gnome-terminal -- bash -lc 'claudemesh launch --name "Lug Nut" --mesh openclaw -
 
 # screen detached:
 screen -dmS lugnut bash -lc 'claudemesh launch --name "Lug Nut" --mesh openclaw -y'
+
+# Windows Terminal (wt.exe) — open a new tab:
+wt.exe new-tab --title claudemesh-lugnut powershell -NoExit -Command "claudemesh launch --name 'Lug Nut' --mesh openclaw -y"
+
+# Windows Terminal — split the current pane vertically instead:
+wt.exe split-pane -V powershell -NoExit -Command "claudemesh launch --name 'Lug Nut' --mesh openclaw -y"
+
+# PowerShell — spawn a detached window of the user's default shell:
+Start-Process powershell -ArgumentList '-NoExit','-Command','claudemesh launch --name "Lug Nut" --mesh openclaw -y'
+
+# cmd.exe — start a new console window:
+start "claudemesh-lugnut" cmd /k "claudemesh launch --name ""Lug Nut"" --mesh openclaw -y"
+
+# WSL from a Windows host — same launch verb, just route through wsl.exe:
+wsl.exe -- bash -lc 'claudemesh launch --name "Lug Nut" --mesh openclaw -y'
 ```
+
+Windows-specific gotchas:
+- **Single quotes don't nest in cmd.exe.** Use `""` to escape inner double quotes (see the `cmd /k` example) or move to PowerShell where single quotes work normally.
+- **`-NoExit`** is the PowerShell equivalent of bash's `exec` + interactive shell — keeps the window open after `claudemesh launch` returns control to its child `claude` process. Without it, the window closes when the launch script exits.
+- **WSL paths.** If you spawn from a Windows-side script into WSL, the `claudemesh` CLI in WSL writes to `~/.claudemesh/` on the Linux side, *not* `%USERPROFILE%\.claudemesh\`. The two installs are independent — match the spawn host to the install host.
+- **Windows Terminal profile names.** Replace `powershell` with `pwsh` for PowerShell 7+, or use `--profile "<name>"` to target a configured profile (e.g. one preconfigured with WSL Ubuntu + a starting directory).
 
 The user's environment may also have these pre-built helpers (CLAUDE.md will tell you):
 
