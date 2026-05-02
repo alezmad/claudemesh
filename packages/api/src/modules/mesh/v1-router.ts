@@ -29,6 +29,7 @@ import { z } from "zod";
 import { db } from "@turbostarter/db/server";
 import {
   mesh,
+  meshApiKey,
   meshMember,
   meshTopic,
   meshTopicMember,
@@ -586,13 +587,22 @@ export const v1Router = new Hono<Env>()
   })
 
   // GET /v1/peers — connected peers in the key's mesh
-  // Dedupe by memberId — a member can have multiple active presence
-  // rows (one per session). Status reflects the most recent presence;
-  // summary/groups come from the latest row.
+  //
+  // Sources, deduped by memberId:
+  //   1. presence rows — WS-connected peers (CLI sessions, MCP push-pipes)
+  //   2. recently-active apikey holders — humans driving the dashboard
+  //      chat over REST. We treat any apikey used in the last 5 minutes
+  //      as a live "human peer" so other CLIs can see them.
+  //
+  // Presence wins when both exist (more accurate status). Apikey-only
+  // rows get a `via: "rest"` flag and inherit the issuing member's
+  // identity — that's the only way the dashboard chat user appears in
+  // /list_peers from a CLI today.
   .get("/peers", async (c) => {
     const key = c.var.apiKey;
     requireCapability(key, "read");
-    const rows = await db
+
+    const presenceRows = await db
       .select({
         memberId: meshMember.id,
         pubkey: meshMember.peerPubkey,
@@ -608,6 +618,28 @@ export const v1Router = new Hono<Env>()
         and(eq(meshMember.meshId, key.meshId), isNull(presence.disconnectedAt)),
       )
       .orderBy(desc(presence.connectedAt));
+
+    const restCutoff = new Date(Date.now() - 5 * 60 * 1000);
+    const restRows = await db
+      .select({
+        memberId: meshMember.id,
+        pubkey: meshMember.peerPubkey,
+        displayName: meshMember.displayName,
+        lastUsedAt: meshApiKey.lastUsedAt,
+      })
+      .from(meshApiKey)
+      .innerJoin(
+        meshMember,
+        eq(meshApiKey.issuedByMemberId, meshMember.id),
+      )
+      .where(
+        and(
+          eq(meshApiKey.meshId, key.meshId),
+          isNull(meshApiKey.revokedAt),
+          gt(meshApiKey.lastUsedAt, restCutoff),
+        ),
+      );
+
     const seen = new Set<string>();
     const peers: Array<{
       pubkey: string;
@@ -615,8 +647,10 @@ export const v1Router = new Hono<Env>()
       status: string;
       summary: string | null;
       groups: unknown;
+      via: "ws" | "rest";
     }> = [];
-    for (const r of rows) {
+
+    for (const r of presenceRows) {
       if (seen.has(r.memberId)) continue;
       seen.add(r.memberId);
       peers.push({
@@ -625,6 +659,19 @@ export const v1Router = new Hono<Env>()
         status: r.status,
         summary: r.summary,
         groups: r.groups,
+        via: "ws",
+      });
+    }
+    for (const r of restRows) {
+      if (seen.has(r.memberId)) continue;
+      seen.add(r.memberId);
+      peers.push({
+        pubkey: r.pubkey,
+        displayName: r.displayName,
+        status: "idle",
+        summary: null,
+        groups: [],
+        via: "rest",
       });
     }
     return c.json({ peers });
