@@ -38,7 +38,6 @@ import {
   meshFileKey,
   meshContext,
   meshMember as memberTable,
-  meshMember,
   meshMemory,
   meshNotification,
   meshState,
@@ -896,12 +895,12 @@ async function fanOutMentions(args: {
 
   const recipients = await db
     .select({
-      id: meshMember.id,
-      displayName: meshMember.displayName,
+      id: memberTable.id,
+      displayName: memberTable.displayName,
     })
-    .from(meshMember)
+    .from(memberTable)
     .where(
-      and(eq(meshMember.meshId, topic.meshId), isNull(meshMember.revokedAt)),
+      and(eq(memberTable.meshId, topic.meshId), isNull(memberTable.revokedAt)),
     );
   const tokenSet = new Set(tokens);
   const targets = recipients

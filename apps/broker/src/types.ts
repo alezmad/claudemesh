@@ -98,6 +98,14 @@ export interface WSSendMessage {
   nonce: string; // base64
   ciphertext: string; // base64
   id?: string; // client-side correlation id
+  /**
+   * Optional client-extracted `@-mention` display names (lowercased,
+   * no `@` prefix, max 16). Required when `body_version: 2` cipher
+   * lands in v0.3.0 phase 3 — the server can't read v2 ciphertext to
+   * regex-match. Today's v1 plaintext path falls back to a regex on
+   * the body when this is absent.
+   */
+  mentions?: string[];
 }
 
 /** Broker → client: an envelope addressed to this peer. */

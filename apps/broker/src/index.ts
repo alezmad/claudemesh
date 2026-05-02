@@ -1952,6 +1952,7 @@ async function handleSend(
       senderSessionPubkey: conn.sessionPubkey ?? undefined,
       nonce: msg.nonce,
       ciphertext: msg.ciphertext,
+      mentions: msg.mentions,
     }).catch((e) =>
       log.warn("appendTopicMessage failed", { topic_id: topicId, err: String(e) }),
     );
