@@ -6,8 +6,13 @@ import {
 } from "@turbostarter/api/schema";
 import { handle } from "@turbostarter/api/utils";
 import { db } from "@turbostarter/db/server";
-import { meshTopic } from "@turbostarter/db/schema/mesh";
-import { and, count, inArray, isNull } from "drizzle-orm";
+import {
+  meshMember,
+  meshTopic,
+  meshTopicMember,
+  meshTopicMessage,
+} from "@turbostarter/db/schema/mesh";
+import { and, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
 
 import { appConfig } from "~/config/app";
 import { pathsConfig } from "~/config/paths";
@@ -58,9 +63,61 @@ export default async function UniversePage() {
         .groupBy(meshTopic.meshId)
     : [];
   const topicMap = new Map(topicCounts.map((r) => [r.meshId, Number(r.n)]));
+
+  // Aggregate unread per mesh for the viewing user. Every topic_message
+  // not authored by one of the viewer's member rows, in a topic whose
+  // last_read_at by the viewer is null or older than the message,
+  // counts as unread. The LEFT JOIN on topic_member is restricted to
+  // the viewer's own member ids so a NULL row reliably means "viewer
+  // never opened this topic" — every message in such a topic is unread.
+  const myMembers = user && meshIds.length
+    ? await db
+        .select({ id: meshMember.id })
+        .from(meshMember)
+        .where(
+          and(
+            eq(meshMember.userId, user.id),
+            inArray(meshMember.meshId, meshIds),
+            isNull(meshMember.revokedAt),
+          ),
+        )
+    : [];
+  const myMemberIds = myMembers.map((m) => m.id);
+
+  const unreadRows = myMemberIds.length
+    ? await db
+        .select({
+          meshId: meshTopic.meshId,
+          n: count(meshTopicMessage.id),
+        })
+        .from(meshTopicMessage)
+        .innerJoin(meshTopic, eq(meshTopic.id, meshTopicMessage.topicId))
+        .leftJoin(
+          meshTopicMember,
+          and(
+            eq(meshTopicMember.topicId, meshTopicMessage.topicId),
+            inArray(meshTopicMember.memberId, myMemberIds),
+          ),
+        )
+        .where(
+          and(
+            inArray(meshTopic.meshId, meshIds),
+            isNull(meshTopic.archivedAt),
+            sql`${meshTopicMessage.senderMemberId} <> ALL(${myMemberIds})`,
+            or(
+              isNull(meshTopicMember.lastReadAt),
+              sql`${meshTopicMessage.createdAt} > ${meshTopicMember.lastReadAt}`,
+            ),
+          ),
+        )
+        .groupBy(meshTopic.meshId)
+    : [];
+  const unreadMap = new Map(unreadRows.map((r) => [r.meshId, Number(r.n)]));
+
   const meshesWithTopics = activeMeshes.map((m) => ({
     ...m,
     topicCount: topicMap.get(m.id) ?? 0,
+    unreadCount: unreadMap.get(m.id) ?? 0,
   }));
 
   return (

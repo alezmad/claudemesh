@@ -13,6 +13,7 @@ interface MeshSummary {
   isOwner: boolean;
   memberCount: number;
   topicCount?: number;
+  unreadCount?: number;
   archivedAt: Date | string | null;
 }
 
@@ -113,15 +114,26 @@ const MeshCard = ({
             {isHero ? ` · id ${mesh.id.slice(0, 8)}…` : ""}
           </p>
         </div>
-        <span
-          className={[
-            "whitespace-nowrap rounded-sm border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em]",
-            roleClass(mesh.isOwner, mesh.myRole),
-            "border-[var(--cm-border)]",
-          ].join(" ")}
-        >
-          {mesh.archivedAt ? "archived" : mesh.isOwner ? "owner" : mesh.myRole}
-        </span>
+        <div className="flex items-center gap-2">
+          {mesh.unreadCount && mesh.unreadCount > 0 ? (
+            <span
+              className="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-[var(--cm-clay)] px-1.5 text-[10px] font-medium text-white"
+              style={{ fontFamily: "var(--cm-font-mono)" }}
+              aria-label={`${mesh.unreadCount} unread across topics`}
+            >
+              {mesh.unreadCount > 99 ? "99+" : mesh.unreadCount}
+            </span>
+          ) : null}
+          <span
+            className={[
+              "whitespace-nowrap rounded-sm border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em]",
+              roleClass(mesh.isOwner, mesh.myRole),
+              "border-[var(--cm-border)]",
+            ].join(" ")}
+          >
+            {mesh.archivedAt ? "archived" : mesh.isOwner ? "owner" : mesh.myRole}
+          </span>
+        </div>
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-1.5">
