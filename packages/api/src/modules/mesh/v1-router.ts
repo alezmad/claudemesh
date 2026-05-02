@@ -347,6 +347,160 @@ export const v1Router = new Hono<Env>()
     },
   )
 
+  // GET /v1/me/workspace — cross-mesh overview for the caller's user.
+  //
+  // The first user-scoped (vs mesh-scoped) endpoint. Resolves the api
+  // key's issuing member to a user_id, then aggregates over every
+  // non-revoked member row that user holds across the system. Emits
+  // one row per joined mesh with: peer count, online count, topic
+  // count, unread @-mention count for that user.
+  //
+  // Auth model: any apikey whose issuer carries a non-null user_id
+  // can call this. The caller is implicitly trusting the apikey
+  // they're using, and this endpoint never reveals data outside that
+  // user's own membership graph.
+  //
+  // Spec: .artifacts/specs/2026-05-02-workspace-view.md
+  .get("/me/workspace", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+
+    // Resolve user_id from the issuing member.
+    const [issuer] = await db
+      .select({ userId: meshMember.userId })
+      .from(meshMember)
+      .where(eq(meshMember.id, key.issuedByMemberId));
+    if (!issuer?.userId) {
+      return c.json({ error: "issuer_member_has_no_user" }, 400);
+    }
+
+    // All meshes the user is a member of (any role, not revoked).
+    const memberships = await db
+      .select({
+        memberId: meshMember.id,
+        meshId: meshMember.meshId,
+        meshSlug: mesh.slug,
+        meshName: mesh.name,
+        myRole: meshMember.role,
+        joinedAt: meshMember.joinedAt,
+      })
+      .from(meshMember)
+      .innerJoin(mesh, eq(mesh.id, meshMember.meshId))
+      .where(
+        and(
+          eq(meshMember.userId, issuer.userId),
+          isNull(meshMember.revokedAt),
+          isNull(mesh.archivedAt),
+        ),
+      )
+      .orderBy(asc(mesh.slug));
+
+    if (memberships.length === 0) {
+      return c.json({
+        userId: issuer.userId,
+        meshes: [],
+        totals: { meshes: 0, peers: 0, topics: 0, unreadMentions: 0 },
+      });
+    }
+
+    const meshIds = memberships.map((m) => m.meshId);
+    const myMemberIds = memberships.map((m) => m.memberId);
+
+    // Per-mesh stats: peer count, topic count, online count.
+    const peerCounts = await db
+      .select({
+        meshId: meshMember.meshId,
+        peers: count(meshMember.id),
+      })
+      .from(meshMember)
+      .where(
+        and(
+          sql`${meshMember.meshId} = ANY(${meshIds})`,
+          isNull(meshMember.revokedAt),
+        ),
+      )
+      .groupBy(meshMember.meshId);
+
+    const topicCounts = await db
+      .select({
+        meshId: meshTopic.meshId,
+        topics: count(meshTopic.id),
+      })
+      .from(meshTopic)
+      .where(
+        and(
+          sql`${meshTopic.meshId} = ANY(${meshIds})`,
+          isNull(meshTopic.archivedAt),
+        ),
+      )
+      .groupBy(meshTopic.meshId);
+
+    const onlineCounts = await db
+      .select({
+        meshId: meshMember.meshId,
+        online: count(presence.memberId),
+      })
+      .from(presence)
+      .innerJoin(meshMember, eq(presence.memberId, meshMember.id))
+      .where(
+        and(
+          sql`${meshMember.meshId} = ANY(${meshIds})`,
+          isNull(meshMember.revokedAt),
+        ),
+      )
+      .groupBy(meshMember.meshId);
+
+    // Per-mesh unread @-mentions for this user (mentions targeting
+    // any of the user's member rows that haven't been read).
+    const unreadMentions = await db
+      .select({
+        meshId: meshNotification.meshId,
+        unread: count(meshNotification.id),
+      })
+      .from(meshNotification)
+      .where(
+        and(
+          sql`${meshNotification.meshId} = ANY(${meshIds})`,
+          sql`${meshNotification.recipientMemberId} = ANY(${myMemberIds})`,
+          isNull(meshNotification.readAt),
+        ),
+      )
+      .groupBy(meshNotification.meshId);
+
+    const peersBy = new Map(peerCounts.map((r) => [r.meshId, Number(r.peers)]));
+    const topicsBy = new Map(topicCounts.map((r) => [r.meshId, Number(r.topics)]));
+    const onlineBy = new Map(onlineCounts.map((r) => [r.meshId, Number(r.online)]));
+    const unreadBy = new Map(unreadMentions.map((r) => [r.meshId, Number(r.unread)]));
+
+    const meshes = memberships.map((m) => ({
+      meshId: m.meshId,
+      slug: m.meshSlug,
+      name: m.meshName,
+      memberId: m.memberId,
+      myRole: m.myRole,
+      joinedAt: m.joinedAt.toISOString(),
+      peers: peersBy.get(m.meshId) ?? 0,
+      online: onlineBy.get(m.meshId) ?? 0,
+      topics: topicsBy.get(m.meshId) ?? 0,
+      unreadMentions: unreadBy.get(m.meshId) ?? 0,
+    }));
+
+    return c.json({
+      userId: issuer.userId,
+      meshes,
+      totals: {
+        meshes: meshes.length,
+        peers: meshes.reduce((a, m) => a + m.peers, 0),
+        online: meshes.reduce((a, m) => a + m.online, 0),
+        topics: meshes.reduce((a, m) => a + m.topics, 0),
+        unreadMentions: meshes.reduce((a, m) => a + m.unreadMentions, 0),
+      },
+    });
+  })
+
   // GET /v1/topics — list topics in the key's mesh
   // Includes per-topic unread counts when the key has an issuing member
   // (i.e. dashboard keys; CLI-minted keys also carry it). Counts are
