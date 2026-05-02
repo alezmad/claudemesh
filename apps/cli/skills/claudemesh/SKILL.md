@@ -45,6 +45,104 @@ claudemesh send "<from_name>" "..." --mesh "<mesh_slug>"
 
 If the parent Claude session was launched via `claudemesh launch`, an MCP push-pipe is running and holds the per-mesh WS connection. CLI invocations dial `~/.claudemesh/sockets/<mesh-slug>.sock` and reuse that warm connection (~200ms total round-trip including Node.js startup). If no push-pipe is running (cron, scripts, hooks fired outside a session), the CLI opens its own WS, which takes ~500-700ms cold. **You don't manage this** — every verb auto-detects and falls through.
 
+## Spawning new sessions (no wizard)
+
+`claudemesh launch` is the canonical way to start a new Claude Code session connected to claudemesh. Pass every required flag up front so no interactive prompt fires — that's what makes the verb scriptable from tmux send-keys, AppleScript/iTerm spawn helpers, hooks, cron, and the `claudemesh launch` you call from inside another session. **Always use this verb, never `claude` directly with hand-rolled flags** — it sets up the per-session ed25519 keypair, exports `CLAUDEMESH_DISPLAY_NAME`, isolates the mesh config in a tmpdir, and passes the `--dangerously-load-development-channels server:claudemesh` plumbing that the MCP push-pipe needs.
+
+### Full flag surface
+
+| Flag | What it skips | Notes |
+|---|---|---|
+| `--name <display-name>` | the "What's your name?" prompt | required when spawning unattended; persists as the session's display name and `from_name` in inbound channels |
+| `--mesh <slug>` | the multi-mesh picker | required when the user has joined >1 mesh; otherwise the single mesh is auto-selected |
+| `--join <invite-url>` | the "join a mesh first" branch | run join + launch in one step; pair with `-y` for fully non-interactive |
+| `--groups "name:role,name2:role2,all"` | the group selection prompt | comma-separated `<groupname>:<role>` entries; the literal `all` joins `@all` |
+| `--role <lead\|member\|observer>` | the role prompt | applied to all groups in `--groups` that didn't specify their own |
+| `--message-mode <push\|inbox>` | the message-mode prompt | `push` (default) emits `<channel>` notifications mid-turn; `inbox` only buffers — quieter for headless agents |
+| `--system-prompt <path>` | nothing — pure pass-through | forwarded to `claude --append-system-prompt` |
+| `--resume <session-id>` | nothing — pure pass-through | forwarded to `claude --resume` to continue a prior Claude Code session |
+| `--continue` | nothing — pure pass-through | forwarded to `claude --continue` |
+| `-y` / `--yes` | every confirmation prompt | including the "you'll skip ALL permission prompts" gate. **Use for autonomous agents; omit for shared/multi-person meshes.** |
+| `-q` / `--quiet` | the welcome banner | useful when the spawning script wants clean stdout |
+| `--` | (separator) | everything after `--` is forwarded verbatim to `claude`. Example: `claudemesh launch --name X -y -- --resume abc123 --model opus` |
+
+### Wizard-free spawn templates
+
+```bash
+# Minimal — single joined mesh, fresh agent, autonomous:
+claudemesh launch --name "Lug Nut" -y
+
+# Multi-mesh user — pick mesh explicitly:
+claudemesh launch --name "Mou" --mesh openclaw -y
+
+# Cold-start a peer who hasn't joined the mesh yet:
+claudemesh launch \
+  --name "Lug Nut" \
+  --join "https://claudemesh.com/i/abc123" \
+  --groups "frontend:member,reviewers:observer,all" \
+  --message-mode push \
+  -y
+
+# Resume a specific Claude session inside claudemesh:
+claudemesh launch --name "Mou" --mesh openclaw -y -- --resume abc123-...
+
+# Quiet, headless, system-prompt loaded — for cron / hooks:
+claudemesh launch --name "ci-bot" --mesh openclaw \
+  --system-prompt /path/to/ci-bot.md \
+  --message-mode inbox \
+  -q -y
+```
+
+If any required flag is missing AND stdin is a TTY, `launch` falls back to its prompt for that single field. **In a non-TTY context (Bash tool, cron, AppleScript pipe), missing flags cause the verb to fail-closed — never silently use a default that affects identity.**
+
+### Spawning into new terminal panes/windows
+
+The launch verb itself is just a shell command — wrap it in whatever pane-creation primitive the host platform uses. The patterns that work today:
+
+```bash
+# tmux — send into a pane you control. NEVER send-keys into a pane
+# you didn't create; you risk typing into another live TUI.
+tmux new-window -t "$SESSION" -n claudemesh-lugnut
+tmux send-keys -t "$SESSION:claudemesh-lugnut" \
+  'claudemesh launch --name "Lug Nut" --mesh openclaw -y' Enter
+
+# macOS iTerm2 (split current window into a vertical pane):
+osascript <<'OSA'
+tell application "iTerm2"
+  tell current window
+    create tab with default profile
+    tell current session of current tab
+      write text "claudemesh launch --name \"Lug Nut\" --mesh openclaw -y"
+    end tell
+  end tell
+end tell
+OSA
+
+# macOS Terminal.app (new window):
+osascript -e 'tell application "Terminal" to do script "claudemesh launch --name \"Lug Nut\" --mesh openclaw -y"'
+
+# GNOME Terminal / generic Linux:
+gnome-terminal -- bash -lc 'claudemesh launch --name "Lug Nut" --mesh openclaw -y'
+
+# screen detached:
+screen -dmS lugnut bash -lc 'claudemesh launch --name "Lug Nut" --mesh openclaw -y'
+```
+
+The user's environment may also have these pre-built helpers (CLAUDE.md will tell you):
+
+- `~/tools/scripts/spawn-iterm-panes.sh` and `spawn-iterm-window.sh` — safer iTerm spawners that only write into sessions they themselves created.
+- `~/tools/scripts/claude-peers.sh` — tmux wrapper that opens a split running `claudemesh launch` with sensible defaults.
+
+Prefer those when available — they handle pane ownership / cleanup correctly.
+
+### Sanity rules for unattended spawns
+
+1. **Always pass `--name`.** A nameless session falls back to `<hostname>-<pid>`, which makes peer attribution opaque in `peer list` and inbound channels.
+2. **Always pass `--mesh` when the user has multiple meshes joined.** Otherwise the picker fires and the spawn hangs waiting for stdin.
+3. **Pass `-y` only when you understand the consent it grants.** It skips every permission gate — fine for an autonomous agent on a private mesh, dangerous on a shared mesh where peers can drive your file system.
+4. **For long-running daemonised peers, use `--message-mode inbox`** so they don't fire `<channel>` interrupts on every received DM. They poll `claudemesh inbox` on their own cadence.
+5. **Confirm the spawn worked** by waiting a few seconds and running `claudemesh peer list` — the new peer's `displayName` should appear with `status: "idle"`.
+
 ## Universal flags
 
 | Flag | Behavior |
