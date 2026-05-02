@@ -123,10 +123,14 @@ production-grade before any new architectural work.
   future schema change. *Shipped 2026-05-02.*
 - **Owner peer-identity at mesh creation** — web-first owners get a
   `mesh.member` row at sign-up time. *Shipped 2026-05-02.*
-- **Real-time push (SSE)** — replaces 5s polling on
-  `/api/v1/topics/:name/stream`. Sub-500ms message delivery.
-- **Unread counts via `last_read_at`** — schema column already
-  exists; PATCH on scroll-to-bottom + chip on topic list.
+- **Real-time push (SSE)** — `GET /api/v1/topics/:name/stream`
+  replaces 5s polling. Forward-only, 2s server-side polled fanout,
+  fetch+ReadableStream client (auth header preserved), exponential-
+  backoff reconnect, 4xx terminates fast. *Shipped 2026-05-02.*
+- **Unread counts via `last_read_at`** — `PATCH /v1/topics/:name/read`
+  + per-topic `unread` on `GET /v1/topics`; clay-rounded badges on
+  the per-mesh topic list and aggregate badge per mesh on the
+  dashboard universe page. *Shipped 2026-05-02.*
 - **Bridge end-to-end smoke test** — two-mesh forwarding validated
   before any external demo.
 - **`/v1/peers` includes humans** — synthetic presence rows for
@@ -141,11 +145,17 @@ The release that turns claudemesh into a thing you can record and
 show to non-technical audiences.
 
 - **Member sidebar in the chat panel** — names, online dots,
-  presence summaries (free with SSE)
-- **Topic search + member-mention autocomplete** — `@Mou` hot-keys
-  to `claudemesh send Mou ...`
-- **Notification feed at `/dashboard`** — "you have N unread in
-  #deploys, 2 mentions in #incident"
+  presence summaries (free with SSE). `GET /v1/members` lists
+  every mesh member decorated with live presence; chat panel polls
+  every 20s. *Shipped 2026-05-02.*
+- **Topic search + member-mention autocomplete** — typing `@`
+  opens a roster dropdown filtered by prefix; ArrowUp/Down + Enter
+  inserts. Search toggle in chat header client-filters loaded
+  messages. *Shipped 2026-05-02.*
+- **Notification feed at `/dashboard`** — "Recent mentions" section
+  on the universe page lists every `@<your-name>` reference across
+  all your meshes (last 7 days). `GET /v1/notifications` mirrors
+  for api-key clients. *Shipped 2026-05-02.*
 - **First public blog post + recorded demo** — "claudemesh in 90
   seconds" video
 - **Marketing site refresh** — screenshots from the real-time UI,
