@@ -39,7 +39,7 @@ import {
   messageQueue,
   presence,
 } from "@turbostarter/db/schema/mesh";
-import { and, asc, count, desc, eq, gt, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
 
 import { validate } from "../../middleware";
 import {
@@ -402,7 +402,7 @@ export const v1Router = new Hono<Env>()
       return c.json({
         userId: issuer.userId,
         meshes: [],
-        totals: { meshes: 0, peers: 0, topics: 0, unreadMentions: 0 },
+        totals: { meshes: 0, peers: 0, online: 0, topics: 0, unreadMentions: 0 },
       });
     }
 
@@ -417,10 +417,7 @@ export const v1Router = new Hono<Env>()
       })
       .from(meshMember)
       .where(
-        and(
-          sql`${meshMember.meshId} = ANY(${meshIds})`,
-          isNull(meshMember.revokedAt),
-        ),
+        and(inArray(meshMember.meshId, meshIds), isNull(meshMember.revokedAt)),
       )
       .groupBy(meshMember.meshId);
 
@@ -431,10 +428,7 @@ export const v1Router = new Hono<Env>()
       })
       .from(meshTopic)
       .where(
-        and(
-          sql`${meshTopic.meshId} = ANY(${meshIds})`,
-          isNull(meshTopic.archivedAt),
-        ),
+        and(inArray(meshTopic.meshId, meshIds), isNull(meshTopic.archivedAt)),
       )
       .groupBy(meshTopic.meshId);
 
@@ -446,10 +440,7 @@ export const v1Router = new Hono<Env>()
       .from(presence)
       .innerJoin(meshMember, eq(presence.memberId, meshMember.id))
       .where(
-        and(
-          sql`${meshMember.meshId} = ANY(${meshIds})`,
-          isNull(meshMember.revokedAt),
-        ),
+        and(inArray(meshMember.meshId, meshIds), isNull(meshMember.revokedAt)),
       )
       .groupBy(meshMember.meshId);
 
@@ -463,8 +454,8 @@ export const v1Router = new Hono<Env>()
       .from(meshNotification)
       .where(
         and(
-          sql`${meshNotification.meshId} = ANY(${meshIds})`,
-          sql`${meshNotification.recipientMemberId} = ANY(${myMemberIds})`,
+          inArray(meshNotification.meshId, meshIds),
+          inArray(meshNotification.recipientMemberId, myMemberIds),
           isNull(meshNotification.readAt),
         ),
       )
