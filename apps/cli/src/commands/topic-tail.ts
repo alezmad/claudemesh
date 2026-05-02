@@ -8,8 +8,13 @@
 import { URLS } from "~/constants/urls.js";
 import { withRestKey } from "~/services/api/with-rest-key.js";
 import { request } from "~/services/api/client.js";
+import {
+  getTopicKey,
+  decryptMessage,
+  sealTopicKeyFor,
+} from "~/services/crypto/topic-key.js";
 import { render } from "~/ui/render.js";
-import { bold, clay, dim } from "~/ui/styles.js";
+import { bold, clay, dim, yellow } from "~/ui/styles.js";
 import { EXIT } from "~/constants/exit-codes.js";
 
 export interface TopicTailFlags {
@@ -26,6 +31,7 @@ interface TopicMessage {
   senderName: string;
   nonce: string;
   ciphertext: string;
+  bodyVersion?: number;
   createdAt: string;
 }
 
@@ -35,12 +41,26 @@ interface HistoryResponse {
   messages: TopicMessage[];
 }
 
-function decodeCiphertext(b64: string): string {
+/**
+ * v1 (legacy plaintext-base64) decode. v2 messages are decrypted via
+ * the topic key separately — see decryptForRender below.
+ */
+function decodeV1(b64: string): string {
   try {
     return Buffer.from(b64, "base64").toString("utf-8");
   } catch {
     return "[decode failed]";
   }
+}
+
+async function decryptForRender(
+  m: TopicMessage,
+  topicKey: Uint8Array | null,
+): Promise<string> {
+  if ((m.bodyVersion ?? 1) === 1) return decodeV1(m.ciphertext);
+  if (!topicKey) return "[encrypted — no topic key]";
+  const plain = await decryptMessage(topicKey, m.ciphertext, m.nonce);
+  return plain ?? "[decrypt failed]";
 }
 
 function fmtTime(iso: string): string {
@@ -55,14 +75,19 @@ function fmtTime(iso: string): string {
   }
 }
 
-function printMessage(m: TopicMessage, json: boolean): void {
-  const text = decodeCiphertext(m.ciphertext);
+async function printMessage(
+  m: TopicMessage,
+  topicKey: Uint8Array | null,
+  json: boolean,
+): Promise<void> {
+  const text = await decryptForRender(m, topicKey);
   if (json) {
     console.log(JSON.stringify({ ...m, message: text }));
     return;
   }
+  const v2Marker = (m.bodyVersion ?? 1) === 2 ? dim("🔒 ") : "";
   process.stdout.write(
-    `  ${dim(fmtTime(m.createdAt))}  ${bold(m.senderName || m.senderPubkey.slice(0, 8))}  ${text}\n`,
+    `  ${dim(fmtTime(m.createdAt))}  ${bold(m.senderName || m.senderPubkey.slice(0, 8))}  ${v2Marker}${text}\n`,
   );
 }
 
@@ -118,7 +143,89 @@ export async function runTopicTail(name: string, flags: TopicTailFlags): Promise
       capabilities: ["read"],
       topicScopes: [cleanName],
     },
-    async ({ secret, meshSlug }) => {
+    async ({ secret, meshSlug, mesh }) => {
+      // Fetch + decrypt the topic key once. Stays in memory for this
+      // invocation; tail dies → key forgotten. v1 topics return
+      // not_sealed/topic_unencrypted and we just don't decrypt.
+      const keyResult = await getTopicKey({
+        apiKeySecret: secret,
+        memberSecretKeyHex: mesh.secretKey,
+        topicName: cleanName,
+      });
+      const topicKey = keyResult.ok ? keyResult.topicKey ?? null : null;
+
+      // Re-seal background loop. While we hold the topic key, every
+      // 30s we look for newly-joined members who don't have a sealed
+      // copy yet, seal the key for each, and POST. Soft-failures stay
+      // silent so a flaky network doesn't spam the tail output.
+      let resealTimer: ReturnType<typeof setInterval> | null = null;
+      if (topicKey) {
+        const reseal = async () => {
+          try {
+            const pending = await request<{
+              pending: Array<{
+                memberId: string;
+                pubkey: string;
+                displayName: string;
+              }>;
+            }>({
+              path: `/api/v1/topics/${encodeURIComponent(cleanName)}/pending-seals`,
+              token: secret,
+            });
+            for (const target of pending.pending) {
+              const sealed = await sealTopicKeyFor(
+                topicKey,
+                target.pubkey,
+                mesh.secretKey,
+              );
+              if (!sealed) continue;
+              try {
+                await request({
+                  path: `/api/v1/topics/${encodeURIComponent(cleanName)}/seal`,
+                  method: "POST",
+                  token: secret,
+                  body: {
+                    memberId: target.memberId,
+                    encryptedKey: sealed.encryptedKey,
+                    nonce: sealed.nonce,
+                  },
+                });
+                if (!flags.json) {
+                  render.info(
+                    dim(`re-sealed topic key for ${target.displayName}`),
+                  );
+                }
+              } catch {
+                // Another holder likely sealed first — ignore.
+              }
+            }
+          } catch {
+            // Soft-fail; next tick retries.
+          }
+        };
+        void reseal();
+        resealTimer = setInterval(reseal, 30_000);
+      }
+      if (!flags.json && !keyResult.ok) {
+        if (keyResult.error === "topic_unencrypted") {
+          render.info(
+            dim("topic is on v1 (plaintext) — encryption will activate after creator-seal"),
+          );
+        } else if (keyResult.error === "not_sealed") {
+          render.warn(
+            yellow(
+              "no topic key sealed for you yet — wait for a holder to re-seal",
+            ),
+          );
+        } else if (keyResult.error === "decrypt_failed") {
+          render.warn(
+            yellow(
+              `topic key fetched but decrypt failed: ${keyResult.message ?? ""}`,
+            ),
+          );
+        }
+      }
+
       // 1. Backfill the most recent N messages so the user sees context
       //    when they tail an active topic.
       if (!flags.forwardOnly && limit > 0) {
@@ -134,7 +241,7 @@ export async function runTopicTail(name: string, flags: TopicTailFlags): Promise
           }
           // History is newest-first; reverse for chronological display.
           for (const m of history.messages.slice().reverse()) {
-            printMessage(m, flags.json ?? false);
+            await printMessage(m, topicKey, flags.json ?? false);
           }
         } catch (err) {
           render.warn(`backfill failed: ${(err as Error).message}`);
@@ -176,7 +283,7 @@ export async function runTopicTail(name: string, flags: TopicTailFlags): Promise
           if (ev.event === "message") {
             try {
               const m = JSON.parse(ev.data) as TopicMessage;
-              printMessage(m, flags.json ?? false);
+              await printMessage(m, topicKey, flags.json ?? false);
             } catch {
               // skip malformed
             }
@@ -190,6 +297,7 @@ export async function runTopicTail(name: string, flags: TopicTailFlags): Promise
       } finally {
         process.removeListener("SIGINT", onSig);
         process.removeListener("SIGTERM", onSig);
+        if (resealTimer) clearInterval(resealTimer);
       }
     },
   );

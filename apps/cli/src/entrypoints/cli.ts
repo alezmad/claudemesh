@@ -120,7 +120,8 @@ Topic  (conversation scope, v0.2.0)
   claudemesh topic history <t>     fetch message history [--limit --before]
   claudemesh topic read <topic>    mark all as read
   claudemesh topic tail <topic>    live SSE tail [--limit --forward-only]
-  claudemesh send "#topic" "msg"   send to a topic
+  claudemesh topic post <t> <msg>  encrypted REST post (v0.3.0 v2)
+  claudemesh send "#topic" "msg"   send to a topic (WS path, v1 plaintext)
   claudemesh member list           mesh roster with online state [--online]
   claudemesh notification list     recent @-mentions of you [--since <ISO>]
 
@@ -586,7 +587,17 @@ async function main(): Promise<void> {
         const { runTopicTail } = await import("~/commands/topic-tail.js");
         process.exit(await runTopicTail(arg, tailFlags));
       }
-      else { console.error("Usage: claudemesh topic <create|list|join|leave|members|history|read|tail>"); process.exit(EXIT.INVALID_ARGS); }
+      else if (sub === "post") {
+        const postFlags = {
+          mesh: flags.mesh as string,
+          json: !!flags.json,
+          plaintext: !!flags.plaintext,
+        };
+        const message = positionals.slice(2).join(" ");
+        const { runTopicPost } = await import("~/commands/topic-post.js");
+        process.exit(await runTopicPost(arg, message, postFlags));
+      }
+      else { console.error("Usage: claudemesh topic <create|list|join|leave|members|history|read|tail|post>"); process.exit(EXIT.INVALID_ARGS); }
       break;
     }
 

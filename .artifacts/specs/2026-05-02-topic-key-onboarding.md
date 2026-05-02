@@ -79,7 +79,43 @@ ephemeral pubkey. Either:
     Decoder pulls the prefix, uses it as the sender pubkey. No schema
     change beyond what 0026 already ships.
 
-(b) wins on simplicity. Phase 2 implementation uses it.
+**(b) wins on simplicity. Phase 3 implementation ships it. Both the
+broker creator-seal and the CLI re-seal write the
+`<32-byte sender pubkey><cipher>` blob.** `topic.encrypted_key_pubkey`
+becomes informational only — the wire-format truth is the inline prefix.
+
+## Web client gap (phase 3.5)
+
+The CLI side of phase 3 ships in this cut. The web side does NOT —
+because web member rows have `peerPubkey` registered server-side but
+the corresponding ed25519 SECRET is discarded immediately after
+generation (see `mutations.ts:createMyMesh`). Without the secret the
+browser can't `crypto_box_open` its sealed topic key.
+
+Three fixes, in increasing order of effort:
+
+1. **Browser-side persistent identity (recommended)** — generate an
+   ed25519 keypair in the browser on first dashboard visit, store the
+   secret in IndexedDB, sync the public half to `mesh.member.peerPubkey`
+   via a new `POST /v1/me/peer-pubkey` endpoint. Topic keys then seal
+   to the new pubkey; web user decrypts locally. Existing #general
+   topics need a re-seal cycle (the v0.3.0 phase-3 re-seal loop in
+   the CLI already does this for any pending member, including web
+   ones). Spec lift: ~3 hours, mostly browser code + a sync endpoint.
+
+2. **Server-held secret** — keep the member's ed25519 secret server-
+   side. Trivial to implement, but the broker can read everything,
+   defeating the security claim. **Rejected.**
+
+3. **JWT-derived keys** — derive the member's keypair from a stable
+   user-secret (e.g. PBKDF2 over their session JWT). Means cross-
+   device same key, but needs the JWT to include ~32 bytes of stable
+   key material. Tied to v2.0.0 daemon redesign. **Deferred.**
+
+Phase 3 ships option 1 deferred; web stays on v1 plaintext until 3.5.
+The CLI re-seal loop in `topic tail` already handles re-sealing for
+web members ONCE they have a real pubkey — no broker work needed
+when 3.5 lands.
 
 ## Option C — leaderless protocol (DEFERRED)
 
@@ -95,44 +131,48 @@ asks for FS (forward secrecy) on group chat.
 
 ---
 
-## Phase-2 implementation checklist
+## Implementation checklist
 
 Schema (0026 — done):
-- [x] `topic.encrypted_key_pubkey` (legacy field, will be unused in
-      Option B's "embed in payload" mode, but keeping it for
-      forward-compat if we ever switch to Option C)
+- [x] `topic.encrypted_key_pubkey` (informational; wire truth is the
+      inline 32-byte prefix on each `topic_member_key.encryptedKey`)
 - [x] `topic_member_key.(encrypted_key, nonce)`
-- [x] `topic_message.body_version` (1 = v0.2.0 plaintext, 2 = v0.3.0 ciphertext)
+- [x] `topic_message.body_version` (1 = plaintext, 2 = v2 ciphertext)
 
-API (some done — see annotations):
+API (phase 3 — done):
 - [x] `GET /v1/topics/:name/key` — fetch the calling member's sealed copy
-- [ ] `GET /v1/topics/:name/pending-seals` — list members without keys
-- [ ] `POST /v1/topics/:name/seal` — submit a re-sealed copy
+- [x] `GET /v1/topics/:name/pending-seals` — list members without keys
+- [x] `POST /v1/topics/:name/seal` — submit a re-sealed copy
+- [x] `GET /v1/topics/:name/messages` returns `bodyVersion`
+- [x] `GET /v1/topics/:name/stream` emits `bodyVersion`
+- [x] `POST /v1/messages` accepts `bodyVersion` (1|2) + skips regex
+      mention extraction on v2
 
-Broker:
-- [x] `createTopic` generates topic key + seals for creator
-- [ ] `joinTopic` becomes a "pending" insert — no key seal
-- [ ] (optional) WS notification to online topic members when a new
-      joiner arrives, so re-seal latency is sub-second instead of
-      polling-bound
+Broker / web mutation (phase 3 — done):
+- [x] `createTopic` generates topic key + seals for creator with
+      inline-sender-pubkey blob format
+- [x] `ensureGeneralTopic` (web) mirrors the same flow
 
-Client (CLI + web):
-- [ ] On topic open, fetch sealed key, decrypt + cache in memory
-- [ ] On send, encrypt body with topic key, set `body_version: 2`
-- [ ] On render, decrypt v2 messages with cached key; v1 stays
-      base64 plaintext (legacy)
-- [ ] Background re-seal loop — poll for pending joiners, seal,
-      POST
+Client — CLI (phase 3 — done):
+- [x] `services/crypto/topic-key.ts` — fetch + decrypt + encrypt + reseal helpers
+- [x] `topic tail` decrypts v2 messages on render
+- [x] `topic post` encrypts v2 on send via REST POST /v1/messages
+- [x] Background re-seal loop in `topic tail` (30s cadence)
 
-UX:
-- [ ] "waiting for a peer to share the topic key" state when GET key
-      returns 404
-- [ ] "you are the only online member — joiners can't read messages
-      until someone else logs in" warning when sole online holder
-      goes offline
+Client — web (phase 3.5 — DEFERRED):
+- [ ] Browser-side persistent identity (IndexedDB)
+- [ ] `POST /v1/me/peer-pubkey` sync endpoint
+- [ ] Web chat panel encrypt-on-send + decrypt-on-render (currently v1)
 
-The phase-2 commit ships only the schema + creator-seal + GET /key.
-The pending-seals endpoint, seal POST, and client encryption land in
-phase 3 once this spec gets a code review. Mention fan-out from
-phase 1 already works for both v1 and v2 messages, so /v1/notifications
-keeps working through the cutover.
+UX surfaces (phase 3 — done in CLI):
+- [x] "waiting for a peer to share the topic key" warning on tail
+- [ ] (web) "your encryption keys are pending — pair this browser"
+      banner once 3.5 lands
+
+Mention fan-out from phase 1 already works for both v1 and v2
+messages, so `/v1/notifications` keeps working through the cutover.
+
+The phase-3 cut ships full CLI encryption + re-seal flow. Web remains
+on v1 plaintext until 3.5 lands the browser identity layer. Mixed
+CLI+web meshes in the meantime should keep using v1 sends OR accept
+that web members can't read v2 messages.

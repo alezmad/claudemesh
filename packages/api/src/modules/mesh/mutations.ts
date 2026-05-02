@@ -262,10 +262,16 @@ export const ensureGeneralTopic = async (
         recipientX25519,
         senderKp.privateKey,
       );
+      // Embed sender x25519 pubkey as the first 32 bytes so future
+      // re-sealed copies (carrying a different sender) decode the same
+      // way as creator-sealed copies.
+      const blob = new Uint8Array(32 + sealed.length);
+      blob.set(senderKp.publicKey, 0);
+      blob.set(sealed, 32);
       await db.insert(meshTopicMemberKey).values({
         topicId: row.id,
         memberId: owner.id,
-        encryptedKey: sodium.to_base64(sealed, sodium.base64_variants.ORIGINAL),
+        encryptedKey: sodium.to_base64(blob, sodium.base64_variants.ORIGINAL),
         nonce: sodium.to_base64(nonce, sodium.base64_variants.ORIGINAL),
       }).onConflictDoNothing();
     } catch {

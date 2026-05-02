@@ -59,6 +59,13 @@ const sendMessageSchema = z.object({
   nonce: z.string().min(1),
   priority: z.enum(["now", "next", "low"]).optional().default("next"),
   /**
+   * Body format version. 1 = base64-of-plaintext (v0.2.0 placeholder),
+   * 2 = crypto_secretbox under the topic's symmetric key (v0.3.0). The
+   * server does not look inside ciphertext either way; this field
+   * tells readers how to interpret it.
+   */
+  bodyVersion: z.literal(1).or(z.literal(2)).optional().default(1),
+  /**
    * Optional list of `@<displayName>` mentions extracted client-side
    * from the plaintext. Capped at 16 to bound notification fan-out
    * (anti-spam). Server intersects with the mesh roster — anything
@@ -160,6 +167,7 @@ export const v1Router = new Hono<Env>()
         senderMemberId,
         nonce: body.nonce,
         ciphertext: body.ciphertext,
+        bodyVersion: body.bodyVersion,
       })
       .returning({ id: meshTopicMessage.id });
 
@@ -176,12 +184,17 @@ export const v1Router = new Hono<Env>()
       .returning({ id: messageQueue.id });
 
     // Mention fan-out → notification rows. Client-extracted mentions
-    // win when present (post-encryption clients MUST extract and send);
-    // otherwise we regex the base64 plaintext as a transitional fallback.
+    // win when present (v2 ciphertext clients MUST extract and send;
+    // server can't read v2 bodies). v1 plaintext falls back to a regex
+    // on the body so legacy senders don't lose mention notifications.
     let mentionTokens = body.mentions?.map((s) => s.toLowerCase().replace(/^@/, ""));
-    if (!mentionTokens || mentionTokens.length === 0) {
+    if (
+      (!mentionTokens || mentionTokens.length === 0) &&
+      body.bodyVersion === 1
+    ) {
       mentionTokens = extractMentionsFromBase64(body.ciphertext);
     }
+    if (!mentionTokens) mentionTokens = [];
     let notifications = 0;
     if (historyRow && mentionTokens.length > 0) {
       const recipients = await db
@@ -386,6 +399,7 @@ export const v1Router = new Hono<Env>()
           senderName: meshMember.displayName,
           nonce: meshTopicMessage.nonce,
           ciphertext: meshTopicMessage.ciphertext,
+          bodyVersion: meshTopicMessage.bodyVersion,
           createdAt: meshTopicMessage.createdAt,
         })
         .from(meshTopicMessage)
@@ -413,6 +427,7 @@ export const v1Router = new Hono<Env>()
           senderName: r.senderName,
           nonce: r.nonce,
           ciphertext: r.ciphertext,
+          bodyVersion: r.bodyVersion,
           createdAt: r.createdAt.toISOString(),
         })),
       });
@@ -484,6 +499,7 @@ export const v1Router = new Hono<Env>()
               senderName: meshMember.displayName,
               nonce: meshTopicMessage.nonce,
               ciphertext: meshTopicMessage.ciphertext,
+              bodyVersion: meshTopicMessage.bodyVersion,
               createdAt: meshTopicMessage.createdAt,
             })
             .from(meshTopicMessage)
@@ -510,6 +526,7 @@ export const v1Router = new Hono<Env>()
                 senderName: r.senderName,
                 nonce: r.nonce,
                 ciphertext: r.ciphertext,
+                bodyVersion: r.bodyVersion,
                 createdAt: r.createdAt.toISOString(),
               }),
             });
@@ -680,6 +697,178 @@ export const v1Router = new Hono<Env>()
       createdAt: sealed.createdAt.toISOString(),
     });
   })
+
+  // GET /v1/topics/:name/pending-seals — list topic members that don't
+  // yet have a sealed copy of the topic key. Members who hold the key
+  // poll this and re-seal for any pending recipient via POST /seal.
+  //
+  // Returns roster format so the caller can do the crypto:
+  //   { pending: [{ memberId, pubkey, displayName }] }
+  //
+  // Caps at 50 — if more are pending the next poll picks up the rest.
+  // Anyone with read capability + topic scope can list (any holder can
+  // re-seal; the trust model accepts that).
+  .get("/topics/:name/pending-seals", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    const name = c.req.param("name");
+    requireTopicScope(key, name);
+
+    const [topic] = await db
+      .select({
+        id: meshTopic.id,
+        encryptedKeyPubkey: meshTopic.encryptedKeyPubkey,
+      })
+      .from(meshTopic)
+      .where(
+        and(
+          eq(meshTopic.meshId, key.meshId),
+          eq(meshTopic.name, name),
+          isNull(meshTopic.archivedAt),
+        ),
+      );
+    if (!topic) {
+      return c.json({ error: "topic_not_found", topic: name }, 404);
+    }
+    if (!topic.encryptedKeyPubkey) {
+      return c.json({ pending: [], senderPubkey: null });
+    }
+
+    // Member is "pending" iff joined the topic but has no key row yet.
+    // LEFT JOIN topic_member_key on the same (topic, member) pair —
+    // NULL = pending.
+    const rows = await db
+      .select({
+        memberId: meshTopicMember.memberId,
+        pubkey: meshMember.peerPubkey,
+        displayName: meshMember.displayName,
+      })
+      .from(meshTopicMember)
+      .innerJoin(meshMember, eq(meshMember.id, meshTopicMember.memberId))
+      .leftJoin(
+        meshTopicMemberKey,
+        and(
+          eq(meshTopicMemberKey.topicId, meshTopicMember.topicId),
+          eq(meshTopicMemberKey.memberId, meshTopicMember.memberId),
+        ),
+      )
+      .where(
+        and(
+          eq(meshTopicMember.topicId, topic.id),
+          isNull(meshMember.revokedAt),
+          isNull(meshTopicMemberKey.id),
+        ),
+      )
+      .limit(50);
+
+    return c.json({
+      topic: name,
+      topicId: topic.id,
+      senderPubkey: topic.encryptedKeyPubkey,
+      pending: rows,
+    });
+  })
+
+  // POST /v1/topics/:name/seal — submit a re-sealed copy of the topic
+  // key for a specific member. Body: {memberId, encryptedKey, nonce}.
+  // Idempotent on (topicId, memberId) — re-submitting overwrites.
+  //
+  // The CALLER must already hold the topic key (otherwise their seal
+  // would be garbage). Server can't verify that at submission time —
+  // the joiner verifies on first decrypt by attempting crypto_box_open
+  // and discarding the row if it fails. Bad seals waste a round-trip
+  // but can't break the security model.
+  .post(
+    "/topics/:name/seal",
+    validate(
+      "json",
+      z.object({
+        memberId: z.string().min(1),
+        encryptedKey: z.string().min(1),
+        nonce: z.string().min(1),
+      }),
+    ),
+    async (c) => {
+      const key = c.var.apiKey;
+      requireCapability(key, "send");
+      const name = c.req.param("name");
+      requireTopicScope(key, name);
+
+      const body = c.req.valid("json");
+
+      const [topic] = await db
+        .select({
+          id: meshTopic.id,
+          encryptedKeyPubkey: meshTopic.encryptedKeyPubkey,
+        })
+        .from(meshTopic)
+        .where(
+          and(
+            eq(meshTopic.meshId, key.meshId),
+            eq(meshTopic.name, name),
+            isNull(meshTopic.archivedAt),
+          ),
+        );
+      if (!topic) {
+        return c.json({ error: "topic_not_found", topic: name }, 404);
+      }
+      if (!topic.encryptedKeyPubkey) {
+        return c.json(
+          {
+            error: "topic_unencrypted",
+            topic: name,
+            hint: "legacy v0.2.0 topic — no key to seal",
+          },
+          409,
+        );
+      }
+
+      // Recipient must be a non-revoked member of the same mesh AND
+      // already a topic_member (joined the topic). Otherwise we'd let
+      // anyone seal for any member, which the joiner would then accept
+      // on first GET /key — that's a denial-of-content vector.
+      const [recipient] = await db
+        .select({ id: meshMember.id })
+        .from(meshTopicMember)
+        .innerJoin(meshMember, eq(meshMember.id, meshTopicMember.memberId))
+        .where(
+          and(
+            eq(meshTopicMember.topicId, topic.id),
+            eq(meshMember.id, body.memberId),
+            eq(meshMember.meshId, key.meshId),
+            isNull(meshMember.revokedAt),
+          ),
+        );
+      if (!recipient) {
+        return c.json({ error: "recipient_not_in_topic" }, 404);
+      }
+
+      const now = new Date();
+      await db
+        .insert(meshTopicMemberKey)
+        .values({
+          topicId: topic.id,
+          memberId: body.memberId,
+          encryptedKey: body.encryptedKey,
+          nonce: body.nonce,
+        })
+        .onConflictDoUpdate({
+          target: [meshTopicMemberKey.topicId, meshTopicMemberKey.memberId],
+          set: {
+            encryptedKey: body.encryptedKey,
+            nonce: body.nonce,
+            rotatedAt: now,
+          },
+        });
+
+      return c.json({
+        topic: name,
+        topicId: topic.id,
+        memberId: body.memberId,
+        sealedAt: now.toISOString(),
+      });
+    },
+  )
 
   // GET /v1/notifications — recent @-mentions of the viewer across
   // all topics in the key's mesh. Reads from mesh.notification, which

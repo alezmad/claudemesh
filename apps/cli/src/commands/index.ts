@@ -29,4 +29,5 @@ export { runSeedTestMesh } from "./seed-test-mesh.js";
 export { runNotificationList } from "./notification.js";
 export { runMemberList } from "./member.js";
 export { runTopicTail } from "./topic-tail.js";
+export { runTopicPost } from "./topic-post.js";
 export { withMesh } from "./connect.js";

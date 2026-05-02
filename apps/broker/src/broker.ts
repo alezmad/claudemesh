@@ -683,20 +683,28 @@ async function sealTopicKeyForMember(args: {
     recipientX25519,
     args.bundle.senderSecret,
   );
+  // Embed sender x25519 pubkey as the first 32 bytes so re-sealed
+  // copies (which carry their own sender pubkey from a different
+  // member) decode the same way as creator-sealed copies.
+  const blob = new Uint8Array(32 + sealed.length);
+  blob.set(args.bundle.senderPubkey, 0);
+  blob.set(sealed, 32);
+  const encryptedKey = sodium.to_base64(blob, sodium.base64_variants.ORIGINAL);
+  const nonceB64 = sodium.to_base64(nonce, sodium.base64_variants.ORIGINAL);
 
   await db
     .insert(meshTopicMemberKey)
     .values({
       topicId: args.topicId,
       memberId: args.memberId,
-      encryptedKey: sodium.to_base64(sealed, sodium.base64_variants.ORIGINAL),
-      nonce: sodium.to_base64(nonce, sodium.base64_variants.ORIGINAL),
+      encryptedKey,
+      nonce: nonceB64,
     })
     .onConflictDoUpdate({
       target: [meshTopicMemberKey.topicId, meshTopicMemberKey.memberId],
       set: {
-        encryptedKey: sodium.to_base64(sealed, sodium.base64_variants.ORIGINAL),
-        nonce: sodium.to_base64(nonce, sodium.base64_variants.ORIGINAL),
+        encryptedKey,
+        nonce: nonceB64,
         rotatedAt: new Date(),
       },
     });
