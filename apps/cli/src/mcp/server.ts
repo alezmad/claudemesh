@@ -680,14 +680,23 @@ Your message mode is "${messageMode}".
       const prioBadge = msg.priority === "now" ? "[URGENT] " : msg.priority === "low" ? "[low] " : "";
       const kindBadge = msg.kind === "broadcast" ? " (broadcast)" : "";
       const content = `${prioBadge}${fromName}${kindBadge}: ${body}`;
+      // `from_id` MUST be a stable replyable id. Older clients of this
+      // channel have been pasting from_id straight back into
+      // `claudemesh send <id>`; if from_id is the SESSION pubkey it
+      // bounces with "no connected peer" the moment the sender's
+      // session restarts. Send the MEMBER pubkey (stable across
+      // reconnects) as from_id, and keep the ephemeral session pubkey
+      // available under from_session_pubkey for crypto-aware callers.
+      const fromMemberPubkey = msg.senderMemberPubkey ?? fromPubkey;
       try {
         await server.notification({
           method: "notifications/claude/channel",
           params: {
             content,
             meta: {
-              from_id: fromPubkey,
-              from_pubkey: fromPubkey,
+              from_id: fromMemberPubkey,
+              from_pubkey: fromMemberPubkey,
+              from_session_pubkey: fromPubkey,
               from_name: fromName,
               ...(msg.senderMemberId ? { from_member_id: msg.senderMemberId } : {}),
               mesh_slug: client.meshSlug,

@@ -1874,18 +1874,56 @@ async function handleSend(
     !isTopicTargetEarly &&
     !isBroadcastEarly &&
     msg.targetSpec !== "*";
+  // Resolved recipient member ids for direct sends — populated by the
+  // pre-flight finder below and reused by the fan-out loop so a stale
+  // session pubkey still routes to the owning member's live session.
+  const candidateMemberIds: string[] = [];
+
   if (isDirectEarly) {
     // Identify candidate recipient connections — anyone in the mesh whose
     // member or session pubkey matches the target. Then check grants to
     // see if at least one of them has granted the sender `dm`. Without
     // this check, blocked DMs get queued and sit in the DB forever
     // (multicast marks delivered on queue; direct relies on drain-or-push).
-    const candidateMemberIds: string[] = [];
+    //
+    // Replies often target a *session* pubkey that has since rotated
+    // (Claude Code restart, /resume, etc). When that happens we fall
+    // back to a member-pubkey lookup so the reply still finds the same
+    // peer's newest live session instead of bouncing with "not online".
     for (const [, peer] of connections) {
       if (peer.meshId !== conn.meshId) continue;
       if (peer.ws === conn.ws) continue;
       if (peer.memberPubkey === msg.targetSpec || peer.sessionPubkey === msg.targetSpec) {
         candidateMemberIds.push(peer.memberId);
+      }
+    }
+    if (candidateMemberIds.length === 0) {
+      // Fallback: target may be a stale session pubkey. Look up the
+      // owning member from the persistent member table and try again
+      // against the live sessions of that member.
+      try {
+        const [memberRow] = await db
+          .select({ id: meshMember.id, peerPubkey: meshMember.peerPubkey })
+          .from(meshMember)
+          .where(
+            and(
+              eq(meshMember.meshId, conn.meshId),
+              isNull(meshMember.revokedAt),
+              eq(meshMember.peerPubkey, msg.targetSpec),
+            ),
+          )
+          .limit(1);
+        if (memberRow) {
+          for (const [, peer] of connections) {
+            if (peer.meshId !== conn.meshId) continue;
+            if (peer.ws === conn.ws) continue;
+            if (peer.memberId === memberRow.id) {
+              candidateMemberIds.push(peer.memberId);
+            }
+          }
+        }
+      } catch {
+        // Soft-fail; the rejection below still fires if no candidate.
       }
     }
     if (candidateMemberIds.length === 0) {
@@ -2007,6 +2045,7 @@ async function handleSend(
     messageId: persistedTopicMessageId ?? messageId,
     meshId: conn.meshId,
     senderPubkey: conn.sessionPubkey ?? conn.memberPubkey,
+    senderMemberPubkey: conn.memberPubkey,
     senderMemberId: conn.memberId,
     senderName: conn.displayName,
     priority: msg.priority,
@@ -2050,21 +2089,40 @@ async function handleSend(
   }
 
   for (const [pid, peer] of connections) {
-    if (pid === senderPresenceId) continue;
     if (peer.meshId !== conn.meshId) continue;
 
     if (isBroadcast) {
-      // broadcast — skip hidden peers
+      // broadcast/* — skip ALL sibling sessions of the sender's member,
+      // not just the originating presence_id. Sibling sessions share the
+      // member identity but hold a different ephemeral session keypair,
+      // so a self-fan-out can't decrypt the envelope and would surface
+      // a spurious "tampered or wrong keypair" warning in the sender's
+      // own inboxes.
+      if (peer.memberPubkey === conn.memberPubkey) continue;
       if (!peer.visible) continue;
     } else if (groupName) {
-      // group routing — deliver only if peer is in the group; skip hidden
+      // group routing — same self-skip semantics as broadcast: don't
+      // ping your own member's sibling sessions; deliver only to other
+      // members in the group; skip hidden.
+      if (peer.memberPubkey === conn.memberPubkey) continue;
       if (!peer.visible) continue;
       if (!peer.groups.some((g) => g.name === groupName)) continue;
     } else {
-      // direct routing — match by pubkey
-      if (peer.memberPubkey !== msg.targetSpec
-          && peer.sessionPubkey !== msg.targetSpec)
-        continue;
+      // direct routing — keep the per-presence skip so a member CAN
+      // intentionally DM another session of themselves (e.g. mesh
+      // bridges), but match recipients by both ephemeral session
+      // pubkey AND stable member pubkey so replies addressed to a
+      // (now-rotated) old sessionPubkey still land on the latest live
+      // session of the same member. The pre-flight finder above also
+      // pre-resolves stale session pubkeys to their owning member, so
+      // candidateMemberIds is the source of truth here.
+      if (pid === senderPresenceId) continue;
+      const matchesByPubkey =
+        peer.memberPubkey === msg.targetSpec
+        || peer.sessionPubkey === msg.targetSpec;
+      const matchesByResolvedMember =
+        candidateMemberIds.includes(peer.memberId);
+      if (!matchesByPubkey && !matchesByResolvedMember) continue;
     }
 
     // Per-peer capability check — silent drop if recipient hasn't granted

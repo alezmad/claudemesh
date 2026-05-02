@@ -117,7 +117,13 @@ export interface WSPushMessage {
   type: "push";
   messageId: string;
   meshId: string;
+  /** Sender's *session* pubkey — ephemeral, rotates on session restart.
+   *  DMs are sealed against the recipient's session key paired with this.
+   *  For replies prefer `senderMemberPubkey` / `senderMemberId`. */
   senderPubkey: string;
+  /** Sender's *member* pubkey — stable across reconnects/restarts.
+   *  Use this as the canonical reply target. */
+  senderMemberPubkey?: string;
   /** Stable mesh.member id of the sender — survives display-name changes,
    *  use this as the canonical reply target when set. Optional for
    *  legacy/non-topic broker paths that haven't been wired yet. */

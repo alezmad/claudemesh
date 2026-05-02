@@ -100,7 +100,12 @@ export interface PeerInfo {
 export interface InboundPush {
   messageId: string;
   meshId: string;
+  /** Sender's *session* pubkey — ephemeral. Rotates on session restart.
+   *  Used by crypto_box_open to verify the seal. Prefer the member
+   *  pubkey for replies. */
   senderPubkey: string;
+  /** Sender's *member* pubkey — stable. Use as the reply target. */
+  senderMemberPubkey?: string;
   /** Stable mesh.member id of the sender — preferred id for replies. */
   senderMemberId?: string;
   /** Sender's current display name (a join from the broker). */
@@ -2036,6 +2041,7 @@ export class BrokerClient {
           messageId: String(msg.messageId ?? ""),
           meshId: String(msg.meshId ?? ""),
           senderPubkey,
+          ...(msg.senderMemberPubkey ? { senderMemberPubkey: String(msg.senderMemberPubkey) } : {}),
           ...(msg.senderMemberId ? { senderMemberId: String(msg.senderMemberId) } : {}),
           ...(msg.senderName ? { senderName: String(msg.senderName) } : {}),
           ...(msg.topic ? { topic: String(msg.topic) } : {}),
