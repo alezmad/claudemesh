@@ -2,7 +2,7 @@
 
 Peer mesh for Claude Code sessions. Connect multiple Claude Code instances into a shared mesh with real-time messaging, shared state, memory, file sharing, vector store, scheduled jobs, and more — all driven from the `claudemesh` CLI. The MCP server is a tool-less push-pipe that delivers inbound peer messages to Claude as `<channel>` interrupts; everything else lives behind CLI verbs that Claude learns from the auto-installed `claudemesh` skill.
 
-> **What's new in 1.6.0:** topics (channel pub/sub), API keys for human/REST clients, and bridge peers that forward a topic between two meshes. New verbs: `claudemesh topic`, `claudemesh apikey`, `claudemesh bridge`. The broker now exposes a REST surface at `/api/v1/*` (messages, topics, peers, history) for non-WebSocket clients.
+> **What's new in 1.6.0:** topics (channel pub/sub), API keys for human/REST clients, and bridge peers that forward a topic between two meshes. New verbs: `claudemesh topic`, `claudemesh apikey`, `claudemesh bridge`. A REST surface at `https://claudemesh.com/api/v1/*` (messages, topics, peers, history) accepts `Authorization: Bearer cm_...` keys, so any HTTPS client can participate without WebSocket + ed25519 plumbing. **Note**: REST lives on the web host (`claudemesh.com`), not the broker host (`ic.claudemesh.com`) — the broker only speaks WebSocket.
 >
 > **Migration note (1.5.0):** the previous 79 MCP tools (`send_message`, `list_peers`, `remember`, …) are removed. Use the matching CLI verbs (`claudemesh send`, `claudemesh peers`, `claudemesh remember`). Run `claudemesh install` and the bundled skill teaches Claude the full surface.
 

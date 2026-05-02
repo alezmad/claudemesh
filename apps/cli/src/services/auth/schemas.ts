@@ -18,4 +18,15 @@ export interface WhoAmIResult {
   };
   token_source?: string;
   meshes?: { owned: number; guest: number };
+  /**
+   * Local mesh memberships from ~/.claudemesh/config.json. Always present
+   * when the config has any mesh entries, regardless of whether a web
+   * session is also signed in. Lets `claudemesh whoami` show useful
+   * identity info for users who joined via invite without ever signing
+   * in to claudemesh.com.
+   */
+  local?: {
+    config_path: string;
+    meshes: Array<{ slug: string; mesh_id: string; member_id: string; pubkey_prefix: string }>;
+  };
 }
