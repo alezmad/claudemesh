@@ -2906,17 +2906,66 @@ function handleConnection(ws: WebSocket): void {
         }
         case "message_status": {
           const ms = msg as Extract<WSClientMessage, { type: "message_status" }>;
-          // Look up the message in the queue.
-          const [mqRow] = await db
-            .select({
-              id: messageQueue.id,
-              targetSpec: messageQueue.targetSpec,
-              deliveredAt: messageQueue.deliveredAt,
-              meshId: messageQueue.meshId,
-            })
-            .from(messageQueue)
-            .where(eq(messageQueue.id, ms.messageId));
-          if (!mqRow || mqRow.meshId !== conn.meshId) {
+          // Validate id shape — guards against the broker running a wide
+          // LIKE scan for empty/malformed input. ≥8 base62 chars, ≤32.
+          const idStr = String(ms.messageId ?? "");
+          if (idStr.length < 8 || idStr.length > 32 || !/^[A-Za-z0-9]+$/.test(idStr)) {
+            sendError(
+              conn.ws,
+              "invalid_argument",
+              `messageId must be 8-32 base62 chars (got ${idStr.length})`,
+              undefined,
+              _reqId,
+            );
+            break;
+          }
+          // Look up the message in the queue. Accept a prefix when the
+          // caller passed <32 chars (full ids are 32) — convenient for
+          // pasting from a copy-truncated terminal. Mesh scope is
+          // enforced via the meshId WHERE clause so a prefix can't
+          // leak across meshes.
+          const isPrefix = idStr.length < 32;
+          const mqRows = isPrefix
+            ? await db
+                .select({
+                  id: messageQueue.id,
+                  targetSpec: messageQueue.targetSpec,
+                  deliveredAt: messageQueue.deliveredAt,
+                  meshId: messageQueue.meshId,
+                })
+                .from(messageQueue)
+                .where(
+                  and(
+                    eq(messageQueue.meshId, conn.meshId),
+                    sql`${messageQueue.id} LIKE ${idStr + "%"}`,
+                  ),
+                )
+                .limit(2)
+            : await db
+                .select({
+                  id: messageQueue.id,
+                  targetSpec: messageQueue.targetSpec,
+                  deliveredAt: messageQueue.deliveredAt,
+                  meshId: messageQueue.meshId,
+                })
+                .from(messageQueue)
+                .where(eq(messageQueue.id, idStr));
+          if (mqRows.length === 0) {
+            sendError(conn.ws, "not_found", "message not found", undefined, _reqId);
+            break;
+          }
+          if (mqRows.length > 1) {
+            sendError(
+              conn.ws,
+              "ambiguous_prefix",
+              `prefix matched ${mqRows.length} messages — use a longer id`,
+              undefined,
+              _reqId,
+            );
+            break;
+          }
+          const mqRow = mqRows[0]!;
+          if (mqRow.meshId !== conn.meshId) {
             sendError(conn.ws, "not_found", "message not found", undefined, _reqId);
             break;
           }

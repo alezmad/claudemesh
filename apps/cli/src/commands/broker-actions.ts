@@ -20,6 +20,7 @@ import { tryBridge } from "~/services/bridge/client.js";
 import { render } from "~/ui/render.js";
 import { bold, clay, dim } from "~/ui/styles.js";
 import { EXIT } from "~/constants/exit-codes.js";
+import { validateMessageId, renderValidationError } from "~/cli/validators.js";
 
 type StateFlags = { mesh?: string; json?: boolean };
 type PeerStatus = "idle" | "working" | "dnd";
@@ -186,15 +187,50 @@ export async function runForget(id: string | undefined, opts: StateFlags): Promi
 // --- msg-status ---
 
 export async function runMsgStatus(id: string | undefined, opts: StateFlags): Promise<number> {
-  if (!id) {
-    render.err("Usage: claudemesh msg-status <message-id>");
+  // Validate input shape *before* we open a WS connection, so a typo
+  // returns a structured error instead of "not found or timed out".
+  const v = validateMessageId(id);
+  if (!v.ok) {
+    if (opts.json) {
+      console.log(
+        JSON.stringify({
+          ok: false,
+          error: "invalid_argument",
+          field: "messageId",
+          code: v.code,
+          reason: v.reason,
+          expected: v.expected,
+        }),
+      );
+    } else {
+      renderValidationError({
+        verb: "msg-status",
+        input: id ?? "(missing)",
+        result: v,
+      });
+    }
     return EXIT.INVALID_ARGS;
   }
+  const lookupId = v.value.value;
   return await withMesh({ meshSlug: opts.mesh ?? null }, async (client) => {
-    const result = await client.messageStatus(id);
+    const result = await client.messageStatus(lookupId);
     if (!result) {
-      if (opts.json) console.log(JSON.stringify({ id, found: false }));
-      else render.err(`Message ${id} not found or timed out.`);
+      if (opts.json) {
+        console.log(
+          JSON.stringify({
+            ok: false,
+            error: "not_found",
+            id: lookupId,
+            isPrefix: v.value.isPrefix,
+          }),
+        );
+      } else {
+        const hint = v.value.isPrefix
+          ? `   no message id starts with ${dim("\"" + lookupId + "\"")} in this mesh.\n   try: claudemesh msg-status <full-32-char-id>`
+          : `   message ${dim(lookupId.slice(0, 12) + "…")} not in queue (already drained, expired, or never sent in this mesh).`;
+        render.err(`message not found`);
+        process.stderr.write(hint + "\n");
+      }
       return EXIT.NOT_FOUND;
     }
     if (opts.json) {
