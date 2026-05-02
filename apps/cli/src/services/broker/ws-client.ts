@@ -169,6 +169,7 @@ export class BrokerClient {
   // ── API keys (v0.2.0) ──
   private apiKeyCreatedResolvers = new Map<string, { resolve: (r: { id: string; secret: string; label: string; prefix: string; capabilities: Array<"send" | "read" | "state_write" | "admin">; topicScopes: string[] | null; createdAt: string } | null) => void; timer: NodeJS.Timeout }>();
   private apiKeyListResolvers = new Map<string, { resolve: (keys: Array<{ id: string; label: string; prefix: string; capabilities: Array<"send" | "read" | "state_write" | "admin">; topicScopes: string[] | null; createdAt: string; lastUsedAt: string | null; revokedAt: string | null; expiresAt: string | null }>) => void; timer: NodeJS.Timeout }>();
+  private apiKeyRevokeResolvers = new Map<string, { resolve: (r: { ok: true; id: string } | { ok: false; code: string; message: string }) => void; timer: NodeJS.Timeout }>();
   /** Directories from which this peer serves files. Default: [process.cwd()]. */
   private sharedDirs: string[] = [process.cwd()];
   private _serviceCatalog: Array<{ name: string; description: string; status: string; tools: Array<{ name: string; description: string; inputSchema: object }>; deployed_by: string }> = [];
@@ -699,9 +700,22 @@ export class BrokerClient {
     });
   }
 
-  async apiKeyRevoke(id: string): Promise<void> {
-    if (!this.ws || this.ws.readyState !== this.ws.OPEN) return;
-    this.ws.send(JSON.stringify({ type: "apikey_revoke", id }));
+  async apiKeyRevoke(id: string): Promise<{ ok: true; id: string } | { ok: false; code: string; message: string }> {
+    if (!this.ws || this.ws.readyState !== this.ws.OPEN) {
+      return { ok: false, code: "not_connected", message: "broker not connected" };
+    }
+    return new Promise((resolve) => {
+      const reqId = this.makeReqId();
+      this.apiKeyRevokeResolvers.set(reqId, {
+        resolve,
+        timer: setTimeout(() => {
+          if (this.apiKeyRevokeResolvers.delete(reqId)) {
+            resolve({ ok: false, code: "timeout", message: "broker did not respond within 5s" });
+          }
+        }, 5_000),
+      });
+      this.ws!.send(JSON.stringify({ type: "apikey_revoke", id, _reqId: reqId }));
+    });
   }
 
   // --- State ---
@@ -1907,6 +1921,28 @@ export class BrokerClient {
     }
     if (msg.type === "apikey_list_response") {
       this.resolveFromMap(this.apiKeyListResolvers, msgReqId, (msg.keys as any[]) ?? []);
+      return;
+    }
+    if (msg.type === "apikey_revoke_response") {
+      const status = String(msg.status ?? "");
+      if (status === "revoked") {
+        this.resolveFromMap(this.apiKeyRevokeResolvers, msgReqId, {
+          ok: true as const,
+          id: String(msg.id ?? ""),
+        });
+      } else if (status === "not_found") {
+        this.resolveFromMap(this.apiKeyRevokeResolvers, msgReqId, {
+          ok: false as const,
+          code: "not_found",
+          message: "no api key matches that id in this mesh",
+        });
+      } else if (status === "not_unique") {
+        this.resolveFromMap(this.apiKeyRevokeResolvers, msgReqId, {
+          ok: false as const,
+          code: "not_unique",
+          message: `prefix matches ${Number(msg.matches ?? 0)} keys; use the full id`,
+        });
+      }
       return;
     }
     if (msg.type === "push") {

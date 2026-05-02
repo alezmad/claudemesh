@@ -2523,9 +2523,17 @@ function handleConnection(ws: WebSocket): void {
 
         case "apikey_revoke": {
           const ar = msg as Extract<WSClientMessage, { type: "apikey_revoke" }>;
-          if (!ar.id) { sendError(ws, "invalid_args", "id required", _reqId); break; }
-          await revokeApiKey({ meshId: conn.meshId, id: ar.id });
-          log.info("ws apikey_revoke", { presence_id: presenceId, key_id: ar.id });
+          if (!ar.id) { sendError(ws, "invalid_args", "id required", undefined, _reqId); break; }
+          const result = await revokeApiKey({ meshId: conn.meshId, id: ar.id });
+          log.info("ws apikey_revoke", { presence_id: presenceId, key_id: ar.id, status: result.status });
+          const resp: WSServerMessage = {
+            type: "apikey_revoke_response",
+            status: result.status,
+            ...(result.status === "revoked" ? { id: result.id } : {}),
+            ...(result.status === "not_unique" ? { matches: result.matches } : {}),
+            ...(_reqId ? { _reqId } : {}),
+          };
+          conn.ws.send(JSON.stringify(resp));
           break;
         }
 

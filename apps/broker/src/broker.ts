@@ -901,12 +901,51 @@ export async function listApiKeys(meshId: string): Promise<
   }));
 }
 
-/** Revoke an API key. Idempotent. */
-export async function revokeApiKey(args: { meshId: string; id: string }): Promise<void> {
-  await db
-    .update(meshApiKey)
-    .set({ revokedAt: new Date() })
-    .where(and(eq(meshApiKey.meshId, args.meshId), eq(meshApiKey.id, args.id)));
+/**
+ * Revoke an API key. Returns "revoked" with the matched id, or a
+ * structured error.
+ *
+ * Accepts either the full id or a unique prefix (length >= 6) — the
+ * CLI's `apikey list` truncates ids to 8 chars for display, so users
+ * naturally paste the truncated form. Prefix matching is bounded to
+ * the caller's mesh and only succeeds if exactly one key matches;
+ * ambiguous prefixes return `not_unique` so we never silently revoke
+ * the wrong key.
+ *
+ * Idempotent for already-revoked keys (returns "revoked" with the
+ * prior revoked_at).
+ */
+export async function revokeApiKey(args: {
+  meshId: string;
+  id: string;
+}): Promise<
+  | { status: "revoked"; id: string }
+  | { status: "not_found" }
+  | { status: "not_unique"; matches: number }
+> {
+  const candidates = await db
+    .select({ id: meshApiKey.id, revokedAt: meshApiKey.revokedAt })
+    .from(meshApiKey)
+    .where(
+      and(
+        eq(meshApiKey.meshId, args.meshId),
+        // Try exact match first; fall back to prefix.
+        sql`(${meshApiKey.id} = ${args.id} OR ${meshApiKey.id} LIKE ${args.id + "%"})`,
+      ),
+    )
+    .limit(2);
+  if (candidates.length === 0) return { status: "not_found" };
+  if (candidates.length > 1) {
+    return { status: "not_unique", matches: candidates.length };
+  }
+  const matched = candidates[0]!;
+  if (!matched.revokedAt) {
+    await db
+      .update(meshApiKey)
+      .set({ revokedAt: new Date() })
+      .where(eq(meshApiKey.id, matched.id));
+  }
+  return { status: "revoked", id: matched.id };
 }
 
 /**

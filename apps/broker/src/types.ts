@@ -233,6 +233,16 @@ export interface WSApiKeyListResponseMessage {
   _reqId?: string;
 }
 
+export interface WSApiKeyRevokeResponseMessage {
+  type: "apikey_revoke_response";
+  status: "revoked" | "not_found" | "not_unique";
+  /** Full id of the revoked key on success (may differ from input if a prefix was sent). */
+  id?: string;
+  /** How many keys matched on not_unique. */
+  matches?: number;
+  _reqId?: string;
+}
+
 // ── Topics (v0.2.0) ─────────────────────────────────────────────────
 // Topics complement groups: groups are identity tags, topics are
 // conversation scopes. targetSpec for topic-tagged messages is
@@ -1484,6 +1494,7 @@ export type WSServerMessage =
   | WSTopicHistoryResponseMessage
   | WSApiKeyCreatedMessage
   | WSApiKeyListResponseMessage
+  | WSApiKeyRevokeResponseMessage
   | WSStateChangeMessage
   | WSStateResultMessage
   | WSStateListMessage

@@ -112,9 +112,21 @@ export async function runApiKeyRevoke(id: string, flags: ApiKeyFlags): Promise<n
     return EXIT.INVALID_ARGS;
   }
   return await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
-    await client.apiKeyRevoke(id);
-    if (flags.json) console.log(JSON.stringify({ revoked: id }));
-    else render.ok("revoked", clay(id.slice(0, 8)));
+    const result = await client.apiKeyRevoke(id);
+    if (!result.ok) {
+      if (flags.json) {
+        console.log(JSON.stringify({ ok: false, code: result.code, message: result.message }));
+      } else {
+        render.err(`${result.code}: ${result.message}`);
+      }
+      return result.code === "not_found"
+        ? EXIT.NOT_FOUND
+        : result.code === "not_unique"
+          ? EXIT.INVALID_ARGS
+          : EXIT.INTERNAL_ERROR;
+    }
+    if (flags.json) console.log(JSON.stringify({ revoked: result.id }));
+    else render.ok("revoked", clay(result.id.slice(0, 8)));
     return EXIT.SUCCESS;
   });
 }
