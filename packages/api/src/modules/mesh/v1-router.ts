@@ -59,7 +59,6 @@ const historyQuerySchema = z.object({
 });
 
 export const v1Router = new Hono<Env>()
-  .basePath("/v1")
   .use(enforceApiKey)
 
   // POST /v1/messages — send to a topic
