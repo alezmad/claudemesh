@@ -1944,18 +1944,23 @@ async function handleSend(
   // persisted to topic_message in addition to the ephemeral queue, so
   // humans (and opting-in agents) can fetch history on reconnect.
   // Spec: .artifacts/specs/2026-05-02-v0.2.0-scope.md
+  let persistedTopicMessageId: string | null = null;
   if (msg.targetSpec.startsWith("#")) {
     const topicId = msg.targetSpec.slice(1);
-    void appendTopicMessage({
-      topicId,
-      senderMemberId: conn.memberId,
-      senderSessionPubkey: conn.sessionPubkey ?? undefined,
-      nonce: msg.nonce,
-      ciphertext: msg.ciphertext,
-      mentions: msg.mentions,
-    }).catch((e) =>
-      log.warn("appendTopicMessage failed", { topic_id: topicId, err: String(e) }),
-    );
+    try {
+      persistedTopicMessageId = await appendTopicMessage({
+        topicId,
+        senderMemberId: conn.memberId,
+        senderSessionPubkey: conn.sessionPubkey ?? undefined,
+        nonce: msg.nonce,
+        ciphertext: msg.ciphertext,
+        bodyVersion: msg.bodyVersion ?? 1,
+        replyToId: msg.replyToId,
+        mentions: msg.mentions,
+      });
+    } catch (e) {
+      log.warn("appendTopicMessage failed", { topic_id: topicId, err: String(e) });
+    }
   }
 
   void audit(conn.meshId, "message_sent", conn.memberId, conn.displayName, {
@@ -1987,15 +1992,29 @@ async function handleSend(
   const isMulticast = isBroadcast || !!groupName;
 
   // Build the push envelope once (reused for all recipients).
+  const isTopicTarget = msg.targetSpec.startsWith("#");
+  let topicName: string | undefined;
+  if (isTopicTarget) {
+    const topicId = msg.targetSpec.slice(1);
+    const [topicRow] = await db
+      .select({ name: meshTopic.name })
+      .from(meshTopic)
+      .where(eq(meshTopic.id, topicId));
+    if (topicRow) topicName = topicRow.name;
+  }
   const pushEnvelope: WSPushMessage = {
     type: "push",
-    messageId,
+    messageId: persistedTopicMessageId ?? messageId,
     meshId: conn.meshId,
     senderPubkey: conn.sessionPubkey ?? conn.memberPubkey,
+    senderMemberId: conn.memberId,
+    senderName: conn.displayName,
     priority: msg.priority,
     nonce: msg.nonce,
     ciphertext: msg.ciphertext,
     createdAt: new Date().toISOString(),
+    ...(topicName ? { topic: topicName } : {}),
+    ...(msg.replyToId ? { replyToId: msg.replyToId } : {}),
     ...(subtype ? { subtype } : {}),
   };
 
@@ -2449,8 +2468,12 @@ function handleConnection(ws: WebSocket): void {
             messages: history.map((h) => ({
               id: h.id,
               senderPubkey: h.senderPubkey,
+              senderMemberId: h.senderMemberId,
+              senderName: h.senderName,
               nonce: h.nonce,
               ciphertext: h.ciphertext,
+              bodyVersion: h.bodyVersion,
+              ...(h.replyToId ? { replyToId: h.replyToId } : {}),
               createdAt: h.createdAt.toISOString(),
             })),
             ...(_reqId ? { _reqId } : {}),

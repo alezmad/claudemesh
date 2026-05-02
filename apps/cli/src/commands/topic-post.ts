@@ -29,6 +29,8 @@ export interface TopicPostFlags {
   json?: boolean;
   /** Force v1 plaintext send even if the topic is encrypted. */
   plaintext?: boolean;
+  /** Reply-to message id (full or 8+ char prefix). */
+  replyTo?: string;
 }
 
 interface PostResponse {
@@ -37,6 +39,7 @@ interface PostResponse {
   topic: string;
   topicId: string;
   notifications: number;
+  replyToId?: string | null;
 }
 
 export async function runTopicPost(
@@ -101,6 +104,36 @@ export async function runTopicPost(
         }
       }
 
+      // Resolve reply-to: accept full id or 8+ char prefix by querying recent
+      // history once and matching. Server validates same-topic membership.
+      let replyToId: string | undefined;
+      if (flags.replyTo) {
+        if (flags.replyTo.length >= 16) {
+          replyToId = flags.replyTo;
+        } else if (flags.replyTo.length >= 6) {
+          const recent = await request<{
+            messages: Array<{ id: string }>;
+          }>({
+            path: `/api/v1/topics/${encodeURIComponent(cleanName)}/messages?limit=200`,
+            method: "GET",
+            token: secret,
+          });
+          const hit = recent.messages?.find((r) =>
+            r.id.startsWith(flags.replyTo!),
+          );
+          if (!hit) {
+            render.err(
+              `--reply-to ${flags.replyTo}: no recent message id starts with that prefix`,
+            );
+            return EXIT.INVALID_ARGS;
+          }
+          replyToId = hit.id;
+        } else {
+          render.err("--reply-to needs at least 6 characters of the message id");
+          return EXIT.INVALID_ARGS;
+        }
+      }
+
       const result = await request<PostResponse>({
         path: "/api/v1/messages",
         method: "POST",
@@ -111,6 +144,7 @@ export async function runTopicPost(
           nonce,
           bodyVersion,
           ...(mentions.length > 0 ? { mentions } : {}),
+          ...(replyToId ? { replyToId } : {}),
         },
       });
 
@@ -120,9 +154,12 @@ export async function runTopicPost(
       }
 
       const versionTag = bodyVersion === 2 ? green("🔒 v2") : dim("v1");
+      const replyTag = result.replyToId
+        ? `  ${dim("↳ " + result.replyToId.slice(0, 8))}`
+        : "";
       render.ok(
         "posted",
-        `${clay("#" + cleanName)}  ${versionTag}  ${dim(`(${result.notifications} mentions)`)}`,
+        `${clay("#" + cleanName)}  ${versionTag}${replyTag}  ${dim(`(${result.notifications} mentions)`)}`,
       );
       return EXIT.SUCCESS;
     },

@@ -101,6 +101,14 @@ export interface InboundPush {
   messageId: string;
   meshId: string;
   senderPubkey: string;
+  /** Stable mesh.member id of the sender — preferred id for replies. */
+  senderMemberId?: string;
+  /** Sender's current display name (a join from the broker). */
+  senderName?: string;
+  /** Topic name when the push originated from a topic post (vs DM). */
+  topic?: string;
+  /** Server-side id of the parent message when this push is a reply. */
+  replyToId?: string;
   priority: Priority;
   nonce: string;
   ciphertext: string;
@@ -2028,6 +2036,10 @@ export class BrokerClient {
           messageId: String(msg.messageId ?? ""),
           meshId: String(msg.meshId ?? ""),
           senderPubkey,
+          ...(msg.senderMemberId ? { senderMemberId: String(msg.senderMemberId) } : {}),
+          ...(msg.senderName ? { senderName: String(msg.senderName) } : {}),
+          ...(msg.topic ? { topic: String(msg.topic) } : {}),
+          ...(msg.replyToId ? { replyToId: String(msg.replyToId) } : {}),
           priority: (msg.priority as Priority) ?? "next",
           nonce,
           ciphertext,

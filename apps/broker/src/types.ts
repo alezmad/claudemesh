@@ -106,6 +106,10 @@ export interface WSSendMessage {
    * the body when this is absent.
    */
   mentions?: string[];
+  /** Optional id of a previous topic message this one replies to.
+   *  Server validates same-topic membership; FK is set null if parent
+   *  later disappears. Ignored for non-topic targets. */
+  replyToId?: string;
 }
 
 /** Broker → client: an envelope addressed to this peer. */
@@ -114,6 +118,17 @@ export interface WSPushMessage {
   messageId: string;
   meshId: string;
   senderPubkey: string;
+  /** Stable mesh.member id of the sender — survives display-name changes,
+   *  use this as the canonical reply target when set. Optional for
+   *  legacy/non-topic broker paths that haven't been wired yet. */
+  senderMemberId?: string;
+  /** Sender's current display name as a convenience for renderers. */
+  senderName?: string;
+  /** Topic name when the push originates from a topic post (vs DM). */
+  topic?: string;
+  /** Server-side message id of the parent message when this push is a
+   *  reply, so the recipient can render thread context and re-thread. */
+  replyToId?: string;
   priority: Priority;
   nonce: string;
   ciphertext: string;
@@ -345,8 +360,12 @@ export interface WSTopicHistoryResponseMessage {
   messages: Array<{
     id: string;
     senderPubkey: string;
+    senderMemberId?: string;
+    senderName?: string;
     nonce: string;
     ciphertext: string;
+    bodyVersion?: number;
+    replyToId?: string | null;
     createdAt: string;
   }>;
   _reqId?: string;

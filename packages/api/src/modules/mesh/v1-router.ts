@@ -77,6 +77,12 @@ const sendMessageSchema = z.object({
    * MUST send this array.
    */
   mentions: z.array(z.string().min(1).max(64)).max(16).optional(),
+  /**
+   * Optional id of a previous topic message this one replies to. Server
+   * verifies the parent exists in the same topic; otherwise silently
+   * drops the reference (treated as a top-level post).
+   */
+  replyToId: z.string().min(1).max(128).optional(),
 });
 
 /**
@@ -158,6 +164,21 @@ export const v1Router = new Hono<Env>()
     // legacy keys with no issuer.
     const senderMemberId = key.issuedByMemberId ?? ownerMember.id;
 
+    // Validate replyToId belongs to the same topic before insert.
+    let validatedReplyTo: string | null = null;
+    if (body.replyToId) {
+      const [parent] = await db
+        .select({
+          id: meshTopicMessage.id,
+          topicId: meshTopicMessage.topicId,
+        })
+        .from(meshTopicMessage)
+        .where(eq(meshTopicMessage.id, body.replyToId));
+      if (parent && parent.topicId === topic.id) {
+        validatedReplyTo = parent.id;
+      }
+    }
+
     // Persist to history (topic_message) + ephemeral queue (message_queue).
     // Broker's drain loop picks up the queue entry and pushes to live peers.
     const [historyRow] = await db
@@ -168,6 +189,7 @@ export const v1Router = new Hono<Env>()
         nonce: body.nonce,
         ciphertext: body.ciphertext,
         bodyVersion: body.bodyVersion,
+        replyToId: validatedReplyTo,
       })
       .returning({ id: meshTopicMessage.id });
 
@@ -238,6 +260,8 @@ export const v1Router = new Hono<Env>()
       topic: body.topic,
       topicId: topic.id,
       notifications,
+      bodyVersion: body.bodyVersion,
+      ...(validatedReplyTo ? { replyToId: validatedReplyTo } : {}),
     });
   })
 
@@ -400,6 +424,7 @@ export const v1Router = new Hono<Env>()
           nonce: meshTopicMessage.nonce,
           ciphertext: meshTopicMessage.ciphertext,
           bodyVersion: meshTopicMessage.bodyVersion,
+          replyToId: meshTopicMessage.replyToId,
           createdAt: meshTopicMessage.createdAt,
         })
         .from(meshTopicMessage)
@@ -423,11 +448,13 @@ export const v1Router = new Hono<Env>()
         topicId: topic.id,
         messages: rows.map((r) => ({
           id: r.id,
+          senderMemberId: r.senderMemberId,
           senderPubkey: r.senderPubkey,
           senderName: r.senderName,
           nonce: r.nonce,
           ciphertext: r.ciphertext,
           bodyVersion: r.bodyVersion,
+          replyToId: r.replyToId,
           createdAt: r.createdAt.toISOString(),
         })),
       });
@@ -495,11 +522,13 @@ export const v1Router = new Hono<Env>()
           const rows = await db
             .select({
               id: meshTopicMessage.id,
+              senderMemberId: meshTopicMessage.senderMemberId,
               senderPubkey: meshMember.peerPubkey,
               senderName: meshMember.displayName,
               nonce: meshTopicMessage.nonce,
               ciphertext: meshTopicMessage.ciphertext,
               bodyVersion: meshTopicMessage.bodyVersion,
+              replyToId: meshTopicMessage.replyToId,
               createdAt: meshTopicMessage.createdAt,
             })
             .from(meshTopicMessage)
@@ -522,11 +551,13 @@ export const v1Router = new Hono<Env>()
               id: r.id,
               data: JSON.stringify({
                 id: r.id,
+                senderMemberId: r.senderMemberId,
                 senderPubkey: r.senderPubkey,
                 senderName: r.senderName,
                 nonce: r.nonce,
                 ciphertext: r.ciphertext,
                 bodyVersion: r.bodyVersion,
+                replyToId: r.replyToId,
                 createdAt: r.createdAt.toISOString(),
               }),
             });

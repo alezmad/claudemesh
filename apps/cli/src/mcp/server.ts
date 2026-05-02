@@ -293,7 +293,16 @@ export async function startMcpServer(): Promise<void> {
 You are "${myName}"${myRole ? ` (${myRole})` : ""} — a peer in the claudemesh network. Your groups: ${myGroups}. You are one of several Claude Code sessions connected to the same mesh. No orchestrator exists — peers are equals. Your identity comes from your name and group roles, not from a central authority.
 
 ## Responding to messages
-When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATELY. Pause your current task, reply via send_message, then resume. Read from_name, mesh_slug, and priority from the channel attributes. Reply by setting \`to\` to the sender's from_name (display name). Stay in character per your system prompt. Do not ignore low-priority messages — acknowledge them briefly even if you defer action.
+When you receive a <channel source="claudemesh" ...> message, RESPOND IMMEDIATELY. Pause your current task, reply via send_message (or \`claudemesh topic post --reply-to <message_id>\` for topic threads), then resume. Stay in character per your system prompt. Do not ignore low-priority messages — acknowledge them briefly even if you defer action.
+
+The channel attributes carry everything you need to reply — no extra lookups:
+- \`from_name\` — sender display name. Use as the \`to\` arg when replying to a DM.
+- \`from_pubkey\` / \`from_member_id\` — stable ids. Use \`from_member_id\` if the sender's display name might change.
+- \`mesh_slug\` — pass via \`--mesh\` if your default mesh differs.
+- \`priority\` — \`now\` / \`next\` / \`low\`.
+- \`message_id\` — id of THIS message. To thread a reply onto it in a topic, run \`claudemesh topic post <topic> "<text>" --reply-to <message_id>\`.
+- \`topic\` — set when the message arrived through a topic (vs DM). Reply in the same topic.
+- \`reply_to_id\` — set when the incoming message is itself a reply. Render thread context if you re-narrate.
 
 If the channel meta contains \`subtype: reminder\`, this is a scheduled reminder you set for yourself — act on it immediately (no reply needed).
 
@@ -678,13 +687,18 @@ Your message mode is "${messageMode}".
             content,
             meta: {
               from_id: fromPubkey,
+              from_pubkey: fromPubkey,
               from_name: fromName,
+              ...(msg.senderMemberId ? { from_member_id: msg.senderMemberId } : {}),
               mesh_slug: client.meshSlug,
               mesh_id: client.meshId,
               priority: msg.priority,
               sent_at: msg.createdAt,
               delivered_at: msg.receivedAt,
               kind: msg.kind,
+              message_id: msg.messageId,
+              ...(msg.topic ? { topic: msg.topic } : {}),
+              ...(msg.replyToId ? { reply_to_id: msg.replyToId } : {}),
               ...(msg.subtype ? { subtype: msg.subtype } : {}),
             },
           },

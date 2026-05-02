@@ -1491,11 +1491,13 @@ export const meshTopicMessage = meshSchema.table(
      * a v2 message still resolves @-mentions correctly.
      */
     bodyVersion: integer().notNull().default(1),
+    replyToId: text("reply_to_id"),
     createdAt: timestamp().defaultNow().notNull(),
   },
   (t) => [
     index("topic_message_by_topic_time").on(t.topicId, t.createdAt),
     index("topic_message_by_version").on(t.bodyVersion),
+    index("topic_message_by_reply_to").on(t.replyToId),
   ],
 );
 

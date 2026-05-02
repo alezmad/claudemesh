@@ -838,6 +838,13 @@ export async function appendTopicMessage(args: {
   senderSessionPubkey?: string;
   nonce: string;
   ciphertext: string;
+  bodyVersion?: number;
+  /**
+   * Optional id of the parent topic message this one replies to. Server
+   * verifies the parent exists and lives in the same topic; otherwise
+   * silently drops the reference (treated as a top-level post).
+   */
+  replyToId?: string;
   /**
    * Optional client-extracted mention list (lowercased display names
    * without the leading @). Required once per-topic encryption lands —
@@ -846,6 +853,17 @@ export async function appendTopicMessage(args: {
    */
   mentions?: string[];
 }): Promise<string> {
+  let validatedReplyTo: string | null = null;
+  if (args.replyToId) {
+    const [parent] = await db
+      .select({ id: meshTopicMessage.id, topicId: meshTopicMessage.topicId })
+      .from(meshTopicMessage)
+      .where(eq(meshTopicMessage.id, args.replyToId));
+    if (parent && parent.topicId === args.topicId) {
+      validatedReplyTo = parent.id;
+    }
+  }
+
   const [row] = await db
     .insert(meshTopicMessage)
     .values({
@@ -854,6 +872,8 @@ export async function appendTopicMessage(args: {
       senderSessionPubkey: args.senderSessionPubkey ?? null,
       nonce: args.nonce,
       ciphertext: args.ciphertext,
+      bodyVersion: args.bodyVersion ?? 1,
+      replyToId: validatedReplyTo,
     })
     .returning({ id: meshTopicMessage.id });
   if (!row) throw new Error("failed to append topic message");
@@ -958,8 +978,11 @@ export async function topicHistory(args: {
     id: string;
     senderMemberId: string;
     senderPubkey: string;
+    senderName: string;
     nonce: string;
     ciphertext: string;
+    bodyVersion: number;
+    replyToId: string | null;
     createdAt: Date;
   }>
 > {
@@ -971,13 +994,18 @@ export async function topicHistory(args: {
     id: string;
     sender_member_id: string;
     sender_pubkey: string;
+    sender_name: string;
     nonce: string;
     ciphertext: string;
+    body_version: number;
+    reply_to_id: string | null;
     created_at: Date;
   }>(sql`
     SELECT tm.id, tm.sender_member_id,
            COALESCE(tm.sender_session_pubkey, m.peer_pubkey) AS sender_pubkey,
-           tm.nonce, tm.ciphertext, tm.created_at
+           m.display_name AS sender_name,
+           tm.nonce, tm.ciphertext, tm.body_version, tm.reply_to_id,
+           tm.created_at
     FROM mesh.topic_message tm
     JOIN mesh.member m ON m.id = tm.sender_member_id
     WHERE tm.topic_id = ${args.topicId}
@@ -989,16 +1017,22 @@ export async function topicHistory(args: {
     id: string;
     sender_member_id: string;
     sender_pubkey: string;
+    sender_name: string;
     nonce: string;
     ciphertext: string;
+    body_version: number;
+    reply_to_id: string | null;
     created_at: Date;
   }>;
   return rows.map((r) => ({
     id: r.id,
     senderMemberId: r.sender_member_id,
     senderPubkey: r.sender_pubkey,
+    senderName: r.sender_name,
     nonce: r.nonce,
     ciphertext: r.ciphertext,
+    bodyVersion: r.body_version ?? 1,
+    replyToId: r.reply_to_id,
     createdAt: r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
   }));
 }

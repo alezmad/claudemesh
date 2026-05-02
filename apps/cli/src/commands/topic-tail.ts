@@ -27,12 +27,32 @@ export interface TopicTailFlags {
 
 interface TopicMessage {
   id: string;
+  senderMemberId?: string;
   senderPubkey: string;
   senderName: string;
   nonce: string;
   ciphertext: string;
   bodyVersion?: number;
+  replyToId?: string | null;
   createdAt: string;
+}
+
+/** Bounded recent-message cache used to render reply-context lines. */
+type RenderedSnippet = { name: string; snippet: string };
+const RECENT_CACHE_MAX = 256;
+function rememberRendered(
+  cache: Map<string, RenderedSnippet>,
+  m: TopicMessage,
+  text: string,
+): void {
+  cache.set(m.id, {
+    name: m.senderName || m.senderPubkey.slice(0, 8),
+    snippet: text.replace(/\s+/g, " ").slice(0, 60),
+  });
+  if (cache.size > RECENT_CACHE_MAX) {
+    const firstKey = cache.keys().next().value;
+    if (firstKey) cache.delete(firstKey);
+  }
 }
 
 interface HistoryResponse {
@@ -79,16 +99,27 @@ async function printMessage(
   m: TopicMessage,
   topicKey: Uint8Array | null,
   json: boolean,
+  cache: Map<string, RenderedSnippet>,
 ): Promise<void> {
   const text = await decryptForRender(m, topicKey);
   if (json) {
     console.log(JSON.stringify({ ...m, message: text }));
+    rememberRendered(cache, m, text);
     return;
   }
   const v2Marker = (m.bodyVersion ?? 1) === 2 ? dim("🔒 ") : "";
+  if (m.replyToId) {
+    const parent = cache.get(m.replyToId);
+    const ref = parent
+      ? `${parent.name}: "${parent.snippet}${parent.snippet.length === 60 ? "…" : ""}"`
+      : `${m.replyToId.slice(0, 8)}…`;
+    process.stdout.write(`  ${dim("↳ in reply to " + ref)}\n`);
+  }
+  const idTag = dim(`#${m.id.slice(0, 8)}`);
   process.stdout.write(
-    `  ${dim(fmtTime(m.createdAt))}  ${bold(m.senderName || m.senderPubkey.slice(0, 8))}  ${v2Marker}${text}\n`,
+    `  ${dim(fmtTime(m.createdAt))}  ${bold(m.senderName || m.senderPubkey.slice(0, 8))}  ${idTag}  ${v2Marker}${text}\n`,
   );
+  rememberRendered(cache, m, text);
 }
 
 interface SseEvent {
@@ -153,6 +184,7 @@ export async function runTopicTail(name: string, flags: TopicTailFlags): Promise
         topicName: cleanName,
       });
       const topicKey = keyResult.ok ? keyResult.topicKey ?? null : null;
+      const snippetCache = new Map<string, RenderedSnippet>();
 
       // Re-seal background loop. While we hold the topic key, every
       // 30s we look for newly-joined members who don't have a sealed
@@ -241,7 +273,7 @@ export async function runTopicTail(name: string, flags: TopicTailFlags): Promise
           }
           // History is newest-first; reverse for chronological display.
           for (const m of history.messages.slice().reverse()) {
-            await printMessage(m, topicKey, flags.json ?? false);
+            await printMessage(m, topicKey, flags.json ?? false, snippetCache);
           }
         } catch (err) {
           render.warn(`backfill failed: ${(err as Error).message}`);
@@ -283,7 +315,7 @@ export async function runTopicTail(name: string, flags: TopicTailFlags): Promise
           if (ev.event === "message") {
             try {
               const m = JSON.parse(ev.data) as TopicMessage;
-              await printMessage(m, topicKey, flags.json ?? false);
+              await printMessage(m, topicKey, flags.json ?? false, snippetCache);
             } catch {
               // skip malformed
             }
