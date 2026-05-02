@@ -1095,7 +1095,15 @@ export function TopicChatPanel({
         <span>SSE · 2s push</span>
         <span>key valid until {fmtTime(apiKeyExpiresAt)}</span>
         <span className="ml-auto">
-          v0.2.0 · plaintext base64 · per-topic crypto in v0.3.0
+          {keyState === "ready"
+            ? "v0.3.0 · 🔒 e2e encrypted (crypto_secretbox)"
+            : keyState === "not_sealed"
+              ? "v0.3.0 · waiting for re-seal · v1 plaintext fallback"
+              : keyState === "topic_unencrypted"
+                ? "v1 plaintext base64 · click enable to upgrade"
+                : keyState === "loading"
+                  ? "loading topic key…"
+                  : "v0.3.0 · key state: error"}
         </span>
       </div>
     </div>
