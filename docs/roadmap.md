@@ -201,9 +201,21 @@ Spec: `.artifacts/specs/2026-05-02-roadmap.md`.
 For teams that want to run their own broker, encrypt at the topic
 level, or wire claudemesh to messaging surfaces beyond Claude Code.
 
-- **Per-topic HKDF encryption** — symmetric keys derived from
-  `mesh.root_key + topic.id`. Kills the "broker can read your
-  messages" wart. Today's `ciphertext` field is base64 plaintext.
+- **Per-topic encryption — phase 1: notification table** — write-
+  time `@-mention` fan-out via `mesh.notification`, replacing the
+  regex-on-decoded-ciphertext scan. Survives the cutover to real
+  ciphertext. *Shipped 2026-05-02 (migration 0025).*
+- **Per-topic encryption — phase 2: schema + creator seal** —
+  topics generate a 32-byte symmetric key on creation; broker
+  seals via `crypto_box` for the creator. New columns:
+  `topic.encrypted_key_pubkey`, `topic_message.body_version`, and a
+  `topic_member_key` table for sealed per-member copies. New API:
+  `GET /v1/topics/:name/key`. *Shipped 2026-05-02 (migration 0026).*
+  Spec at `.artifacts/specs/2026-05-02-topic-key-onboarding.md`.
+- **Per-topic encryption — phase 3: member-driven re-seal** —
+  pending-seals endpoint, seal POST, client-side decrypt-on-render,
+  encrypt-on-send. After phase 3 lands the broker holds ciphertext
+  only.
 - **Self-hosted broker packaging** — one-command Docker compose,
   Postgres included. The new migration runner (v1.6.x) makes this
   practical.
