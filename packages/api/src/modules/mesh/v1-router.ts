@@ -240,21 +240,46 @@ export const v1Router = new Hono<Env>()
   )
 
   // GET /v1/peers — connected peers in the key's mesh
+  // Dedupe by memberId — a member can have multiple active presence
+  // rows (one per session). Status reflects the most recent presence;
+  // summary/groups come from the latest row.
   .get("/peers", async (c) => {
     const key = c.var.apiKey;
     requireCapability(key, "read");
     const rows = await db
       .select({
+        memberId: meshMember.id,
         pubkey: meshMember.peerPubkey,
         displayName: meshMember.displayName,
         status: presence.status,
         summary: presence.summary,
         groups: presence.groups,
+        connectedAt: presence.connectedAt,
       })
       .from(presence)
       .innerJoin(meshMember, eq(presence.memberId, meshMember.id))
       .where(
         and(eq(meshMember.meshId, key.meshId), isNull(presence.disconnectedAt)),
-      );
-    return c.json({ peers: rows });
+      )
+      .orderBy(desc(presence.connectedAt));
+    const seen = new Set<string>();
+    const peers: Array<{
+      pubkey: string;
+      displayName: string;
+      status: string;
+      summary: string | null;
+      groups: unknown;
+    }> = [];
+    for (const r of rows) {
+      if (seen.has(r.memberId)) continue;
+      seen.add(r.memberId);
+      peers.push({
+        pubkey: r.pubkey,
+        displayName: r.displayName,
+        status: r.status,
+        summary: r.summary,
+        groups: r.groups,
+      });
+    }
+    return c.json({ peers });
   });
