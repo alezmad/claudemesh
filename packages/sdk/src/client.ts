@@ -365,6 +365,32 @@ export class MeshClient extends EventEmitter {
     this.ws.send(JSON.stringify({ type: "set_status", status }));
   }
 
+  // --- Topics (v0.2.0) ---
+  // Conversational primitive within a mesh. To receive topic-tagged
+  // messages, you must subscribe via `joinTopic`.
+
+  async createTopic(args: {
+    name: string;
+    description?: string;
+    visibility?: "public" | "private" | "dm";
+  }): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "topic_create", ...args }));
+  }
+
+  async joinTopic(
+    topic: string,
+    role?: "lead" | "member" | "observer",
+  ): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "topic_join", topic, role }));
+  }
+
+  async leaveTopic(topic: string): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: "topic_leave", topic }));
+  }
+
   // --- Internals ---
 
   private makeReqId(): string {

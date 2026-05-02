@@ -99,6 +99,13 @@ export function classifyInvocation(command: string, positionals: string[]): Invo
       const writeVerbs = new Set(["create", "revoke"]);
       return { resource: "apikey", verb, isWrite: writeVerbs.has(verb) };
     }
+    case "bridge": {
+      // bridge verbs: run (long-lived forwarder) | init (print template).
+      // `run` is a write at the mesh level since it joins both meshes
+      // and posts messages on their topics.
+      const verb = sub || "init";
+      return { resource: "bridge", verb, isWrite: verb === "run" };
+    }
 
     // Platform — sub is the verb.
     case "vector": case "graph": case "context": case "stream":

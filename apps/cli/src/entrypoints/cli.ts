@@ -107,6 +107,10 @@ API keys  (REST + external WS auth, v0.2.0)
   claudemesh apikey list             show keys (status, last-used, scope)
   claudemesh apikey revoke <id>      revoke a key
 
+Bridge  (forward a topic between two meshes, v0.2.0)
+  claudemesh bridge init             print config template
+  claudemesh bridge run <config>     run bridge as a long-lived process
+
 Topic  (conversation scope, v0.2.0)
   claudemesh topic create <name>   create a topic [--description --visibility]
   claudemesh topic list            list topics in the mesh
@@ -511,6 +515,23 @@ async function main(): Promise<void> {
       else if (sub === "pause") { const { runClockPause } = await import("~/commands/platform-actions.js"); process.exit(await runClockPause(f)); }
       else if (sub === "resume") { const { runClockResume } = await import("~/commands/platform-actions.js"); process.exit(await runClockResume(f)); }
       else { const { runClock } = await import("~/commands/broker-actions.js"); process.exit(await runClock(f)); }
+      break;
+    }
+
+    // bridge — forward a topic between two meshes (v0.2.0)
+    case "bridge": {
+      const sub = positionals[0];
+      if (sub === "run") {
+        const { runBridge } = await import("~/commands/bridge.js");
+        process.exit(await runBridge(positionals[1] ?? ""));
+      } else if (sub === "init" || sub === "config") {
+        const { bridgeConfigTemplate } = await import("~/commands/bridge.js");
+        console.log(bridgeConfigTemplate());
+        process.exit(EXIT.SUCCESS);
+      } else {
+        console.error("Usage: claudemesh bridge <run <config.yaml> | init>");
+        process.exit(EXIT.INVALID_ARGS);
+      }
       break;
     }
 

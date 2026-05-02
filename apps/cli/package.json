@@ -55,6 +55,7 @@
     "zod": "4.1.13"
   },
   "devDependencies": {
+    "@claudemesh/sdk": "workspace:*",
     "@turbostarter/eslint-config": "workspace:*",
     "@turbostarter/prettier-config": "workspace:*",
     "@turbostarter/tsconfig": "workspace:*",
