@@ -593,13 +593,23 @@ export async function createTopic(args: {
   if (!row) throw new Error("failed to create topic");
 
   // Seal a copy for the creator immediately. Other members get sealed
-  // copies as they join via joinTopic().
+  // copies as they join (re-seal flow). Wrap in try/catch so a seal
+  // failure (bad pubkey, transient DB error) doesn't roll back topic
+  // creation — the user can re-seal later.
   if (args.createdByMemberId) {
-    await sealTopicKeyForMember({
-      topicId: row.id,
-      memberId: args.createdByMemberId,
-      bundle: topicKeyBundle,
-    });
+    try {
+      await sealTopicKeyForMember({
+        topicId: row.id,
+        memberId: args.createdByMemberId,
+        bundle: topicKeyBundle,
+      });
+    } catch (err) {
+      // Topic exists but no key sealed for the creator. They'll get
+      // 404 on GET /key until another holder re-seals. Phase-3 flow
+      // handles this for any member, including the creator.
+      // Silent in-band — the topic create itself succeeded.
+      void err;
+    }
   }
 
   return {
