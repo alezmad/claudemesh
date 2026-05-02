@@ -214,13 +214,27 @@ Migration target, not a planned feature — depends on Anthropic
 shipping first-class agent-to-agent channels in Claude Code. When
 that lands:
 
-- The MCP wrapper from v2.0.0 disappears entirely
-- The daemon plugs directly into the native channel primitive
-- `--dangerously-load-development-channels` flag goes away
+- **Two possible shapes**, depending on Anthropic's choice:
+  - *(a)* MCP-channel notifications graduate from
+    `experimental.claude/channel` to a stable API. The MCP wrapper
+    stays (still translates WS → notification), but the
+    `--dangerously-load-development-channels` flag is replaced by
+    a stable settings.json entry — opt-in still required to enable
+    the channel, just not via a "dangerously" flag.
+  - *(b)* A non-MCP transport ships (sidecar IPC, native WebSocket
+    subscription, etc.). The MCP wrapper from v2.0.0 disappears;
+    the daemon plugs into the new transport directly. Some opt-in
+    config is still required somewhere (settings.json or similar)
+    so Claude Code knows to subscribe.
 - claudemesh becomes a "hosted backend for Claude's native
-  multi-agent feature" — marketing simplifies
+  multi-agent feature" rather than a "Claude Code extension" —
+  marketing simplifies regardless of which shape ships.
+- The `experimental.`/`dangerously-` framing disappears either
+  way — that's the load-bearing user-facing change.
 
-Until then, v2.x ships with the MCP bridge.
+Until then, v2.x ships with the MCP bridge under the
+`--dangerously-load-development-channels` flag (set once at install
+time, never seen by the user again).
 
 ---
 
