@@ -1855,16 +1855,22 @@ async function handleSend(
     return;
   }
 
-  // Pre-flight: for direct sends (not @group, not *), verify at least one
-  // matching connected peer exists BEFORE queueing. Prevents silent drops
-  // when a user sends to a typo, their own pubkey with no other session,
-  // or a peer who has disconnected. The CLI's resolveClient already guards
-  // name-based targets; this catches raw-pubkey and CLI-bypassing clients.
+  // Pre-flight: for direct sends (not @group, not #topic, not *), verify
+  // at least one matching connected peer exists BEFORE queueing. Prevents
+  // silent drops when a user sends to a typo, their own pubkey with no
+  // other session, or a peer who has disconnected. The CLI's
+  // resolveClient already guards name-based targets; this catches
+  // raw-pubkey and CLI-bypassing clients.
   const isGroupTargetEarly = msg.targetSpec.startsWith("@");
+  const isTopicTargetEarly = msg.targetSpec.startsWith("#");
   const isBroadcastEarly =
     msg.targetSpec === "*" ||
     (isGroupTargetEarly && msg.targetSpec === "@all");
-  const isDirectEarly = !isGroupTargetEarly && !isBroadcastEarly && msg.targetSpec !== "*";
+  const isDirectEarly =
+    !isGroupTargetEarly &&
+    !isTopicTargetEarly &&
+    !isBroadcastEarly &&
+    msg.targetSpec !== "*";
   if (isDirectEarly) {
     // Identify candidate recipient connections — anyone in the mesh whose
     // member or session pubkey matches the target. Then check grants to
