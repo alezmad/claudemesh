@@ -243,6 +243,15 @@ export function TopicChatPanel({
               cache: "no-store",
             },
           );
+          // 4xx is terminal — auth invalid, key revoked, topic gone.
+          // Reconnecting won't fix any of those, so surface the error
+          // and stop. 5xx and network errors fall through to backoff.
+          if (res.status >= 400 && res.status < 500) {
+            const body = await res.text().catch(() => "");
+            setError(`stream halted: ${res.status} ${body.slice(0, 200)}`);
+            setStreamState("stopped");
+            return;
+          }
           if (!res.ok || !res.body) {
             throw new Error(`stream open failed: ${res.status}`);
           }
