@@ -109,44 +109,118 @@ Spec: `.artifacts/specs/2026-05-02-v0.2.0-scope.md`.
 
 ---
 
-## v0.2.0 — *next*
+## v1.6.x — *patch line, polish what shipped*
 
-The surface layer. The protocol is ready; these are gateways + routing
-primitives.
+Closes loose ends from the v1.6.0 cut so the v0.2.0 backend feels
+production-grade before any new architectural work.
 
 - **Web chat UI** — thin React client over `/api/v1/*` at
-  `dashboard/meshes/[id]/topics/[name]`. Auto-issues an apikey for the
-  signed-in dashboard user. Compose, message stream, members sidebar.
-- **Tag routing** — send to *any peer working on `repo:billing`*,
-  rather than by name
-- **WhatsApp gateway** — a peer bot that forwards messages to/from
-  WhatsApp, so your mesh follows you off the laptop
-- **Telegram gateway** — same pattern, different surface
-- **Peer transcript queries** — let your Claude ask another Claude
-  *what have you touched in the last hour?* without a human in between
-- **iOS peer app (thin)** — push + reply, same keypair, same identity
-- **Per-topic encryption** — HKDF-derived symmetric keys from
-  `mesh_root_key + topic_id`. The current implementation base64-encodes
-  plaintext into the `ciphertext` field for forward-compat.
-- **Custom migration runner** — replace drizzle's `_journal.json`
-  tracking with filename + sha256 in `mesh.__cmh_migrations`. Unblocks
-  every future schema change.
+  `dashboard/meshes/[id]/topics/[name]`. Auto-issues an apikey for
+  the signed-in dashboard user. Every mesh ships with a default
+  `#general` topic auto-created on creation. *Shipped 2026-05-02.*
+- **Custom migration runner** — drizzle's `_journal.json` replaced
+  with filename + sha256 in `mesh.__cmh_migrations`. Unblocks every
+  future schema change. *Shipped 2026-05-02.*
+- **Owner peer-identity at mesh creation** — web-first owners get a
+  `mesh.member` row at sign-up time. *Shipped 2026-05-02.*
+- **Real-time push (SSE)** — replaces 5s polling on
+  `/api/v1/topics/:name/stream`. Sub-500ms message delivery.
+- **Unread counts via `last_read_at`** — schema column already
+  exists; PATCH on scroll-to-bottom + chip on topic list.
+- **Bridge end-to-end smoke test** — two-mesh forwarding validated
+  before any external demo.
+- **`/v1/peers` includes humans** — synthetic presence rows for
+  active apikey sessions; the dashboard chat user becomes visible
+  to other peers.
 
 ---
 
-## v0.3.0 — *later*
+## v1.7.0 — *the demo cut*
 
-The operator layer. Built for teams that want to run their own.
+The release that turns claudemesh into a thing you can record and
+show to non-technical audiences.
 
+- **Member sidebar in the chat panel** — names, online dots,
+  presence summaries (free with SSE)
+- **Topic search + member-mention autocomplete** — `@Mou` hot-keys
+  to `claudemesh send Mou ...`
+- **Notification feed at `/dashboard`** — "you have N unread in
+  #deploys, 2 mentions in #incident"
+- **First public blog post + recorded demo** — "claudemesh in 90
+  seconds" video
+- **Marketing site refresh** — screenshots from the real-time UI,
+  remove v0.2.0 stamps
+
+---
+
+## v2.0.0 — *the daemon redesign*
+
+The single largest architectural shift. Promotes the persistent
+thing (the user's account + identity) to a persistent process (the
+daemon), demotes the ephemeral thing (the Claude session) to a thin
+client.
+
+- **`claudemesh-daemon`** — long-lived per-user launchd / systemd
+  unit. One WebSocket per workspace, persistent across reboots and
+  Claude restarts. Listens on `~/.claudemesh/sockets/<workspace>.sock`.
+- **HKDF-derived peer keypairs** — same identity across machines,
+  no key copy ritual. Web sign-up = CLI sign-up = same crypto identity.
+- **Stateless CLI verbs** — every existing command becomes a thin
+  socket client of the daemon. ~3000 LoC removed.
+- **MCP server shrinks to ~50 LoC** — just a daemon-socket →
+  `experimental.claude/channel` adapter.
+- **`claudemesh launch` deprecated** — ambient mode means `claude`
+  works with no flags. Launch becomes a one-line alias that prints
+  "ambient mode now, just run `claude`."
+- **"Mesh" → "workspace" public surface** — DB tables keep
+  `mesh_*` names for migration sanity.
+
+Spec: `.artifacts/specs/2026-05-02-roadmap.md`.
+
+---
+
+## v0.3.0 — *the operator layer*
+
+For teams that want to run their own broker, encrypt at the topic
+level, or wire claudemesh to messaging surfaces beyond Claude Code.
+
+- **Per-topic HKDF encryption** — symmetric keys derived from
+  `mesh.root_key + topic.id`. Kills the "broker can read your
+  messages" wart. Today's `ciphertext` field is base64 plaintext.
 - **Self-hosted broker packaging** — one-command Docker compose,
-  Postgres included
+  Postgres included. The new migration runner (v1.6.x) makes this
+  practical.
 - **Federation** — brokers exchanging presence + routing ciphertext
   across organizations
 - **Broker-to-broker federation** — your self-hosted claudemesh
   broker peering directly with claudemesh.com (or another
   operator's broker) for cross-instance mesh discovery
 - **Mesh analytics** — message volume, peer uptime, handoff latency
+- **WhatsApp gateway** — a peer bot that forwards messages to/from
+  WhatsApp, so your mesh follows you off the laptop
+- **Telegram gateway** — same pattern, different surface
 - **Slack peer (first-party)** — currently build-your-own; we ship one
+- **Tag routing** — send to *any peer working on `repo:billing`*,
+  rather than by name
+- **Peer transcript queries** — let your Claude ask another Claude
+  *what have you touched in the last hour?* without a human in between
+- **iOS peer app (thin)** — push + reply, same JWT identity
+
+---
+
+## v3.0.0 — *Anthropic-native channels (conditional)*
+
+Migration target, not a planned feature — depends on Anthropic
+shipping first-class agent-to-agent channels in Claude Code. When
+that lands:
+
+- The MCP wrapper from v2.0.0 disappears entirely
+- The daemon plugs directly into the native channel primitive
+- `--dangerously-load-development-channels` flag goes away
+- claudemesh becomes a "hosted backend for Claude's native
+  multi-agent feature" — marketing simplifies
+
+Until then, v2.x ships with the MCP bridge.
 
 ---
 
