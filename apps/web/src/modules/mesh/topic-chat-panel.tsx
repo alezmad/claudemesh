@@ -13,6 +13,18 @@ interface TopicMessage {
   createdAt: string;
 }
 
+interface MeshMember {
+  memberId: string;
+  pubkey: string;
+  displayName: string;
+  role: string;
+  isHuman: boolean;
+  joinedAt: string;
+  online: boolean;
+  status: string;
+  summary: string | null;
+}
+
 interface Props {
   topicName: string;
   topicId: string;
@@ -122,6 +134,7 @@ export function TopicChatPanel({
   apiKeyExpiresAt,
 }: Props) {
   const [messages, setMessages] = useState<TopicMessage[]>([]);
+  const [members, setMembers] = useState<MeshMember[]>([]);
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -183,6 +196,31 @@ export function TopicChatPanel({
     void loadHistory();
     void markRead();
   }, [loadHistory, markRead]);
+
+  // Roster — refresh every 20s so online state stays roughly current.
+  // Tighter cadence isn't worth a dedicated SSE channel for v1.6.x.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/v1/members", {
+          headers,
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const json = (await res.json()) as { members: MeshMember[] };
+        if (!cancelled) setMembers(json.members);
+      } catch {
+        // Soft-fail — sidebar will just show whatever we last had.
+      }
+    };
+    void load();
+    const t = setInterval(load, 20_000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [headers]);
 
   // SSE subscription with auto-reconnect. AbortController unwinds the
   // stream when the component unmounts or the topic/key changes.
@@ -310,6 +348,8 @@ export function TopicChatPanel({
           ? "reconnecting…"
           : "stopped";
 
+  const onlineCount = members.filter((m) => m.online).length;
+
   return (
     <div className="flex h-[70vh] flex-col overflow-hidden rounded-[var(--cm-radius-lg)] border border-[var(--cm-border)] bg-[var(--cm-bg)]">
       {/* Header — mono strip, clay-pulse dot, metadata right */}
@@ -328,6 +368,8 @@ export function TopicChatPanel({
         </span>
       </div>
 
+      {/* Body — message stream + member sidebar */}
+      <div className="flex flex-1 overflow-hidden">
       {/* Message stream */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
         {messages.length === 0 ? (
@@ -362,6 +404,93 @@ export function TopicChatPanel({
             ))}
           </ol>
         )}
+      </div>
+
+      {/* Member sidebar — roster with online dot */}
+      <aside className="hidden w-[180px] shrink-0 flex-col border-l border-[var(--cm-border)] bg-[var(--cm-bg-elevated)]/30 lg:flex">
+        <div
+          className="border-b border-[var(--cm-border)] px-3 py-2 text-[10px] uppercase tracking-[0.14em] text-[var(--cm-fg-tertiary)]"
+          style={monoStyle}
+        >
+          {onlineCount}/{members.length} online
+        </div>
+        <ol className="flex-1 overflow-y-auto py-2">
+          {members.length === 0 ? (
+            <li
+              className="px-3 py-4 text-center text-[10px] text-[var(--cm-fg-tertiary)]"
+              style={monoStyle}
+            >
+              loading…
+            </li>
+          ) : (
+            <>
+              {members.filter((m) => m.online).map((m) => (
+                <li
+                  key={m.memberId}
+                  className="group flex items-center gap-2 px-3 py-1.5"
+                  title={m.summary ?? `${m.role} · ${m.pubkey.slice(0, 12)}…`}
+                >
+                  <span
+                    className={
+                      "inline-block h-1.5 w-1.5 shrink-0 rounded-full " +
+                      (m.status === "dnd"
+                        ? "bg-[#c46686]"
+                        : m.status === "working"
+                          ? "bg-[var(--cm-clay)]"
+                          : "bg-emerald-500")
+                    }
+                  />
+                  <span
+                    className="truncate text-[11px] text-[var(--cm-fg)]"
+                    style={monoStyle}
+                  >
+                    {m.displayName}
+                  </span>
+                  {!m.isHuman ? (
+                    <span
+                      className="text-[8px] uppercase tracking-[0.1em] text-[var(--cm-fg-tertiary)]"
+                      style={monoStyle}
+                    >
+                      bot
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+              {onlineCount > 0 && onlineCount < members.length ? (
+                <li
+                  className="mt-3 border-t border-[var(--cm-border)] px-3 pb-1 pt-3 text-[9px] uppercase tracking-[0.14em] text-[var(--cm-fg-tertiary)]"
+                  style={monoStyle}
+                >
+                  offline · {members.length - onlineCount}
+                </li>
+              ) : null}
+              {members.filter((m) => !m.online).map((m) => (
+                <li
+                  key={m.memberId}
+                  className="flex items-center gap-2 px-3 py-1.5 opacity-50"
+                  title={`${m.role} · ${m.pubkey.slice(0, 12)}…`}
+                >
+                  <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--cm-fg-tertiary)]" />
+                  <span
+                    className="truncate text-[11px] text-[var(--cm-fg-secondary)]"
+                    style={monoStyle}
+                  >
+                    {m.displayName}
+                  </span>
+                  {!m.isHuman ? (
+                    <span
+                      className="text-[8px] uppercase tracking-[0.1em] text-[var(--cm-fg-tertiary)]"
+                      style={monoStyle}
+                    >
+                      bot
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </>
+          )}
+        </ol>
+      </aside>
       </div>
 
       {/* Compose */}

@@ -444,6 +444,69 @@ export const v1Router = new Hono<Env>()
     });
   })
 
+  // GET /v1/members — every (non-revoked) member of the key's mesh,
+  // decorated with online status from presence. Unlike /v1/peers this
+  // includes humans/agents that haven't opened a WS session yet —
+  // useful for Discord-style member sidebars where roster matters more
+  // than live activity.
+  .get("/members", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    const rows = await db
+      .select({
+        memberId: meshMember.id,
+        pubkey: meshMember.peerPubkey,
+        displayName: meshMember.displayName,
+        role: meshMember.role,
+        joinedAt: meshMember.joinedAt,
+        userId: meshMember.userId,
+      })
+      .from(meshMember)
+      .where(
+        and(eq(meshMember.meshId, key.meshId), isNull(meshMember.revokedAt)),
+      )
+      .orderBy(asc(meshMember.joinedAt));
+    const onlineRows = await db
+      .select({
+        memberId: presence.memberId,
+        status: presence.status,
+        summary: presence.summary,
+      })
+      .from(presence)
+      .innerJoin(meshMember, eq(presence.memberId, meshMember.id))
+      .where(
+        and(eq(meshMember.meshId, key.meshId), isNull(presence.disconnectedAt)),
+      )
+      .orderBy(desc(presence.connectedAt));
+    const onlineByMember = new Map<
+      string,
+      { status: string; summary: string | null }
+    >();
+    for (const r of onlineRows) {
+      if (onlineByMember.has(r.memberId)) continue;
+      onlineByMember.set(r.memberId, {
+        status: r.status,
+        summary: r.summary,
+      });
+    }
+    return c.json({
+      members: rows.map((r) => {
+        const live = onlineByMember.get(r.memberId);
+        return {
+          memberId: r.memberId,
+          pubkey: r.pubkey,
+          displayName: r.displayName,
+          role: r.role,
+          isHuman: r.userId !== null,
+          joinedAt: r.joinedAt.toISOString(),
+          online: !!live,
+          status: live?.status ?? "offline",
+          summary: live?.summary ?? null,
+        };
+      }),
+    });
+  })
+
   // GET /v1/peers — connected peers in the key's mesh
   // Dedupe by memberId — a member can have multiple active presence
   // rows (one per session). Status reflects the most recent presence;
