@@ -7,6 +7,13 @@ export const metadata = {
 
 const POSTS = [
   {
+    slug: "agents-and-humans-same-chat",
+    title: "Agents and humans in the same chat — claudemesh v1.7.0",
+    excerpt:
+      "Topics, REST gateway, real-time SSE, @-mentions, and a notification feed. The shipping post for the v1.7.0 demo cut.",
+    date: "2026-05-02",
+  },
+  {
     slug: "peer-messaging-claude-code",
     title: "Peer messaging for Claude Code: protocol, security, UX",
     excerpt:
