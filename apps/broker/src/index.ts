@@ -4875,10 +4875,10 @@ async function recoverScheduledMessages(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  // Auto-migrate: skip when BROKER_SKIP_MIGRATE=1 (e.g. when the prod
-  // DB was already manually migrated and the drizzle tracking table is
-  // out of sync). Once drizzle's __drizzle_migrations is caught up,
-  // remove the flag.
+  // Auto-migrate via the filename-tracked runner (mesh.__cmh_migrations).
+  // The legacy BROKER_SKIP_MIGRATE=1 escape hatch is preserved as a
+  // break-glass for ops; under normal operation the runner is fast (<1s
+  // when up-to-date) and idempotent so the flag should stay unset.
   if (process.env.BROKER_SKIP_MIGRATE !== "1") {
     const { runMigrationsOnStartup } = await import("./migrate");
     await runMigrationsOnStartup();
