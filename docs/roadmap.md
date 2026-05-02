@@ -212,10 +212,17 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   `topic_member_key` table for sealed per-member copies. New API:
   `GET /v1/topics/:name/key`. *Shipped 2026-05-02 (migration 0026).*
   Spec at `.artifacts/specs/2026-05-02-topic-key-onboarding.md`.
-- **Per-topic encryption — phase 3: member-driven re-seal** —
-  pending-seals endpoint, seal POST, client-side decrypt-on-render,
-  encrypt-on-send. After phase 3 lands the broker holds ciphertext
-  only.
+- **Per-topic encryption — phase 3 (CLI)** — pending-seals endpoint,
+  seal POST, CLI `services/crypto/topic-key.ts`, `claudemesh topic
+  post` for encrypted REST sends, decrypt-on-render in `topic tail`,
+  30s background re-seal loop. Wire format: `<32-byte sender x25519
+  pubkey> || crypto_box(topic_key)` so re-sealed copies decode like
+  creator-sealed copies. *Shipped 2026-05-02 in CLI v1.8.0.*
+- **Per-topic encryption — phase 3.5 (web)** — browser-side persistent
+  ed25519 identity in IndexedDB + `POST /v1/me/peer-pubkey` sync +
+  web chat encrypt-on-send / decrypt-on-render. Web stays on v1
+  plaintext until this lands; the existing CLI re-seal loop will pick
+  up web members the moment they have a real pubkey.
 - **Self-hosted broker packaging** — one-command Docker compose,
   Postgres included. The new migration runner (v1.6.x) makes this
   practical.
