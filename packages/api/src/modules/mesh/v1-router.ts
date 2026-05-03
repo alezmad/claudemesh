@@ -496,13 +496,6 @@ export const v1Router = new Hono<Env>()
     });
   })
 
-  // GET /v1/diagnostics-fresh-2026-05-03 — fresh path probe.
-  .get("/diagnostics-fresh-2026-05-03", async (c) => {
-    const key = c.var.apiKey;
-    requireCapability(key, "read");
-    return c.json({ ok: true, ts: Date.now() });
-  })
-
   // GET /v1/me/topics — cross-mesh topic list for the caller's user.
   //
   // For each topic across every mesh the user belongs to, returns
