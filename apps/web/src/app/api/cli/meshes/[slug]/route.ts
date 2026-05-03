@@ -93,19 +93,36 @@ export async function PATCH(
     return NextResponse.json({ error: "name too long (max 80 chars)" }, { status: 400 });
   }
 
-  // Only the owner can rename. The slug is the public identifier; we
-  // match (slug, ownerUserId) to scope the update.
-  const [updated] = await db
-    .update(mesh)
-    .set({ name: newName })
-    .where(and(eq(mesh.slug, slug), eq(mesh.ownerUserId, payload.sub)))
-    .returning({ slug: mesh.slug, name: mesh.name });
+  // Look up the mesh first so we can distinguish "doesn't exist"
+  // (404) from "exists but you don't own it" (403). The CLI was
+  // collapsing both into a bare "API error 404" — unhelpful when
+  // the user has multiple accounts and signs in to the wrong one.
+  const [existing] = await db
+    .select({ ownerUserId: mesh.ownerUserId })
+    .from(mesh)
+    .where(eq(mesh.slug, slug))
+    .limit(1);
 
-  if (!updated) {
+  if (!existing) {
     return NextResponse.json(
-      { error: "mesh not found or you are not the owner" },
+      { error: `mesh "${slug}" not found` },
       { status: 404 },
     );
   }
+  if (existing.ownerUserId !== payload.sub) {
+    return NextResponse.json(
+      {
+        error: `you are signed in as a different account than the owner of "${slug}". Run \`claudemesh logout && claudemesh login\` and pick the owning account.`,
+      },
+      { status: 403 },
+    );
+  }
+
+  const [updated] = await db
+    .update(mesh)
+    .set({ name: newName })
+    .where(eq(mesh.slug, slug))
+    .returning({ slug: mesh.slug, name: mesh.name });
+
   return NextResponse.json(updated);
 }

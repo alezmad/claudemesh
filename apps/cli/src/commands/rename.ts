@@ -1,13 +1,13 @@
 import { rename as renameMesh } from "~/services/mesh/facade.js";
 import { getStoredToken } from "~/services/auth/facade.js";
+import { ApiError } from "~/services/api/facade.js";
 import { bold, dim, green, icons } from "~/ui/styles.js";
 import { EXIT } from "~/constants/exit-codes.js";
 
 export async function rename(slug: string, newName: string): Promise<number> {
-  // Rename hits the account-scoped /api/my/meshes endpoint, which requires a
-  // web session token (~/.claudemesh/auth.json). Joining a mesh via invite
-  // does NOT create that token — it only writes a per-mesh apikey to
-  // config.json. Detect this case up front so the error is actionable.
+  // Rename requires a web session token (~/.claudemesh/auth.json). Joining
+  // a mesh via invite does NOT create that token — it only writes a per-mesh
+  // apikey to config.json. Detect this case up front so the error is actionable.
   const auth = getStoredToken();
   if (!auth) {
     console.error(`  ${icons.cross} Renaming a mesh requires a claudemesh.com account session.`);
@@ -22,6 +22,18 @@ export async function rename(slug: string, newName: string): Promise<number> {
     console.log(`  ${green(icons.check)} Renamed "${slug}" to "${newName}"`);
     return EXIT.SUCCESS;
   } catch (err) {
+    if (err instanceof ApiError) {
+      // Server returns { error: "..." } for actionable messages
+      // (not the owner, mesh missing, expired token). Surface the
+      // body — the bare HTTP code alone hides why it failed.
+      const body = err.body as { error?: string } | undefined;
+      const detail = body?.error ?? err.statusText;
+      console.error(`  ${icons.cross} ${detail}`);
+      if (err.status === 401) return EXIT.AUTH_FAILED;
+      if (err.status === 403) return EXIT.PERMISSION_DENIED;
+      if (err.status === 404) return EXIT.NOT_FOUND;
+      return EXIT.INTERNAL_ERROR;
+    }
     console.error(`  ${icons.cross} Failed: ${err instanceof Error ? err.message : err}`);
     return EXIT.INTERNAL_ERROR;
   }
