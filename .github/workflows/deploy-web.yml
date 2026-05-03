@@ -59,7 +59,7 @@ jobs:
             exit 1
           fi
           response=$(curl -sS -w "\n%{http_code}" -X GET \
-            "http://100.122.34.28:8000/api/v1/deploy?uuid=${APP_UUID}" \
+            "http://100.122.34.28:8000/api/v1/deploy?uuid=${APP_UUID}&force=true" \
             -H "Authorization: Bearer ${COOLIFY_TOKEN}")
           status=$(echo "$response" | tail -n1)
           body=$(echo "$response" | sed '$d')
