@@ -1,0 +1,71 @@
+name: Deploy claudemesh-web
+
+# Triggers a Coolify deploy of the apps/web Next.js app on the OVH VPS.
+# Coolify only auto-deploys the broker (it watches the gitea-vps mirror);
+# the web app needs an explicit poke. This workflow is the poke.
+#
+# The Coolify dashboard is bound to a Tailscale-only address
+# (100.122.34.28:8000), so the runner first joins the tailnet via
+# an OAuth-issued ephemeral node, then hits Coolify's deploy API.
+#
+# Path filter: redeploy on changes to the web app, the API package
+# (bundled into the web build), or any shared package the web app
+# transpiles. Anything else (broker-only, cli-only, docs) skips it.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/web/**"
+      - "packages/api/**"
+      - "packages/db/**"
+      - "packages/auth/**"
+      - "packages/ui/**"
+      - "packages/i18n/**"
+      - "packages/shared/**"
+      - "packages/email/**"
+      - "packages/billing/**"
+      - "packages/storage/**"
+      - "packages/monitoring-web/**"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/deploy-web.yml"
+  workflow_dispatch:
+
+# Coalesce rapid pushes — only one deploy in flight at a time, and
+# if a newer push lands while one is queued, the older one is
+# cancelled. Avoids the "5 commits, 5 deploys" stampede.
+concurrency:
+  group: deploy-web
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Trigger Coolify deploy
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          APP_UUID: p68x1e3k4xmrjmblca5ybe09
+        run: |
+          if [ -z "$COOLIFY_TOKEN" ]; then
+            echo "::error::COOLIFY_TOKEN secret is not set"
+            exit 1
+          fi
+          response=$(curl -sS -w "\n%{http_code}" -X GET \
+            "http://100.122.34.28:8000/api/v1/deploy?uuid=${APP_UUID}" \
+            -H "Authorization: Bearer ${COOLIFY_TOKEN}")
+          status=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
+          echo "HTTP $status"
+          echo "$body"
+          if [ "$status" != "200" ]; then
+            echo "::error::Coolify returned HTTP $status"
+            exit 1
+          fi

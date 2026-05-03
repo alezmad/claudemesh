@@ -20,11 +20,12 @@ Peer mesh for Claude Code sessions. Broker + CLI + MCP server.
 
 ## Deploy
 
-- **Broker:** `git push gitea-vps main` triggers Coolify auto-deploy. Manual: `curl -s -X GET "http://100.122.34.28:8000/api/v1/deploy?uuid=mcn8m74tbxfxbplmyb40b2ia" -H "Authorization: Bearer 3|K2vkSJzdUA69rj22CKZc5z0YB6pkY43GLEonti3UzcnqVJj6WhrqqYTAng6DzMUi"`. Pending migrations apply automatically on startup.
+- **Broker:** `git push gitea-vps main` triggers Coolify auto-deploy via the gitea webhook. Pending migrations apply automatically on startup.
+- **Web:** Coolify on the OVH VPS (`claudemesh.com` resolves to `135.125.191.245`, NOT Vercel — the `apps/web/Dockerfile` is what Coolify builds). Auto-deploys via `.github/workflows/deploy-web.yml` on push to `main` when paths under `apps/web/**` or `packages/{api,db,auth,ui,i18n,shared,email,billing,storage,monitoring-web}/**` change. The workflow joins the tailnet via Tailscale OAuth, then hits the Coolify API.
+- **Manual deploy** (if the workflow is broken or the path filter missed something) — Coolify dashboard at `http://100.122.34.28:8000` (Tailscale only). Token in `COOLIFY_TOKEN` repo secret. App UUIDs: broker `mcn8m74tbxfxbplmyb40b2ia`, web `p68x1e3k4xmrjmblca5ybe09`.
 - **CLI:**
-  - npm: `cd apps/cli && npm publish --tag alpha --access public --no-git-checks --ignore-scripts`
+  - npm: `cd apps/cli && npm publish --access public --no-git-checks --ignore-scripts`
   - Binaries: `git tag cli-v<version> && git push github cli-v<version>` — workflow builds 5 platforms.
-- **Web:** Coolify on the OVH VPS (`claudemesh.com` resolves to `135.125.191.245`, NOT Vercel — the `apps/web/Dockerfile` is what Coolify builds). Push to `gitea-vps` does NOT auto-deploy the web app the way it does the broker. Trigger manually: `curl -s -X GET "http://100.122.34.28:8000/api/v1/deploy?uuid=p68x1e3k4xmrjmblca5ybe09" -H "Authorization: Bearer 3|K2vkSJzdUA69rj22CKZc5z0YB6pkY43GLEonti3UzcnqVJj6WhrqqYTAng6DzMUi"`
 
 ## Dev
 
