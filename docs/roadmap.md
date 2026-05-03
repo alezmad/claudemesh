@@ -298,6 +298,17 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   default returns last 30d). CLI: omitting `--mesh` on each
   verb routes through the matching aggregator. *Shipped
   2026-05-03 in CLI v1.16.0.*
+- **v0.6.1 — `claudemesh rename` actually works** — adds the
+  missing endpoint `PATCH /api/cli/meshes/:slug` on the web app.
+  Lives under `/api/cli/*` (not `/api/my/*`) because the CLI's
+  device-code JWT is signed with `CLI_SYNC_SECRET` and can't
+  authenticate against better-auth's `enforceAuth` middleware —
+  the new route validates the JWT inline using the same HMAC-SHA256
+  pattern as `/api/cli-sync-token`. Owner-only (matches on
+  `mesh.slug` AND `mesh.ownerUserId`). CLI calls the new path
+  instead of the old `/api/my/meshes/:slug`. Closes the
+  "API error 401: Unauthorized" the user hit after a successful
+  `claudemesh login`. *Shipped 2026-05-03 in CLI v1.19.1 + web.*
 - **v0.6.0 — `claudemesh file share / get` + same-host fast path** —
   CLI parity for the file-sharing surface that was already on the
   broker side (HTTP `/upload`, WS `get_file` / `list_files`) but

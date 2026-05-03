@@ -20,8 +20,11 @@ export async function createMesh(
 }
 
 export async function renameMesh(token: string, slug: string, newName: string) {
+  // Routed through /api/cli/* (not /api/my/*) because the CLI JWT
+  // can't authenticate against the better-auth-protected myRouter.
+  // The /api/cli/meshes/:slug route validates the JWT inline.
   return request<{ slug: string; name: string }>({
-    path: `/api/my/meshes/${slug}`,
+    path: `/api/cli/meshes/${slug}`,
     method: "PATCH",
     body: { name: newName },
     token,
