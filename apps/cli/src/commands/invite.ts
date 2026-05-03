@@ -39,7 +39,7 @@ export async function invite(
       // Show picker
       console.log("\n  Select mesh to share:\n");
       config.meshes.forEach((m, i) => {
-        console.log(`    ${bold(String(i + 1) + ")")} ${m.slug} ${dim("(" + m.name + ")")}`);
+        console.log(`    ${bold(String(i + 1) + ")")} ${m.slug}`);
       });
       console.log("");
       const choice = await prompt("  Choice [1]: ") || "1";

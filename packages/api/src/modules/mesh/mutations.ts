@@ -136,10 +136,13 @@ export const createMyMesh = async ({
     s.base64_variants.URLSAFE_NO_PADDING,
   );
 
+  // v0.7.0 collapse: mesh.name always == mesh.slug. Input.name is
+  // accepted from create UIs (dashboard, CLI) and used to derive the
+  // slug; we drop the original spelling so name and slug never drift.
   const [created] = await db
     .insert(mesh)
     .values({
-      name: input.name,
+      name: slug,
       slug,
       visibility: input.visibility,
       transport: input.transport,

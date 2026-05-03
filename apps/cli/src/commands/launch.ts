@@ -49,8 +49,7 @@ async function pickMesh(meshes: JoinedMesh[]): Promise<JoinedMesh> {
 
   console.log("\n  Select mesh:");
   meshes.forEach((m, i) => {
-    const label = m.name && m.name !== m.slug ? `${m.name}  \x1b[2m(${m.slug})\x1b[0m` : m.slug;
-    console.log(`    ${i + 1}) ${label}`);
+    console.log(`    ${i + 1}) ${m.slug}`);
   });
   console.log("");
 
@@ -219,9 +218,7 @@ async function runLaunchWizard(opts: {
     spinner.stop();
     const choice = await menuSelect({
       title: "Select mesh",
-      items: opts.meshes.map((m) =>
-        m.name && m.name !== m.slug ? `${m.name}  \x1b[2m(${m.slug})\x1b[0m` : m.slug,
-      ),
+      items: opts.meshes.map((m) => m.slug),
       row,
     });
     mesh = opts.meshes[choice]!;
@@ -229,8 +226,7 @@ async function runLaunchWizard(opts: {
     for (let i = 0; i < opts.meshes.length + 1; i++) {
       writeCentered(row + i, " ");
     }
-    const meshLabel = mesh.name && mesh.name !== mesh.slug ? `${mesh.name} (${mesh.slug})` : mesh.slug;
-    writeCentered(row, `Mesh      ${tGreen("✓")} ${meshLabel}`);
+    writeCentered(row, `Mesh      ${tGreen("✓")} ${mesh.slug}`);
     spinner.start();
     row++;
   }

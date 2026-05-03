@@ -298,6 +298,23 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   default returns last 30d). CLI: omitting `--mesh` on each
   verb routes through the matching aggregator. *Shipped
   2026-05-03 in CLI v1.16.0.*
+- **v0.7.0 — collapse `mesh.name` and `mesh.slug` into one identifier** —
+  pre-launch correction of a piece of generic SaaS scaffolding that
+  was earning no keep here. Every visible surface (CLI picker,
+  `--mesh` flag, dashboard sidebar, broker presence rows) already
+  keyed on slug; `name` was a parallel string that confused users
+  on rename ("I renamed it but nothing visible changed"). Now: slug
+  IS the identifier. `claudemesh rename <old-slug> <new-slug>` is
+  the entire rename surface — there is no separate display name.
+  CLI picker drops the `(parens)`. Server `PATCH /api/cli/meshes/:slug`
+  body becomes `{ slug }`; the route writes both columns to keep
+  them in sync. New mesh creation derives slug from input.name and
+  stores `name = slug`. The `mesh.name` DB column is kept for now
+  (avoids touching ~25 reader sites in queries.ts / v1-router.ts /
+  dashboard pages) and always equals slug; a follow-up migration
+  drops it. The just-shipped `claudemesh slug` verb (v0.6.2) is
+  removed — its semantics merge into `rename`. *Shipped 2026-05-03
+  in CLI v1.21.0 + web.*
 - **v0.6.2 — `claudemesh slug <old> <new>`** — change a mesh's
   URL-safe slug (the identifier the CLI picker, `--mesh` flag,
   and dashboard sidebar all key on). Slugs are NOT globally

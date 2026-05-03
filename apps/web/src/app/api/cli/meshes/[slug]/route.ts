@@ -79,20 +79,15 @@ export async function PATCH(
   }
 
   const { slug } = await params;
-  let body: { name?: string; slug?: string };
+  let body: { slug?: string };
   try {
-    body = (await request.json()) as { name?: string; slug?: string };
+    body = (await request.json()) as { slug?: string };
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  const newName = body.name?.trim();
   const newSlug = body.slug?.trim();
-
-  if (!newName && !newSlug) {
-    return NextResponse.json({ error: "name or slug is required" }, { status: 400 });
-  }
-  if (newName !== undefined && newName.length > 80) {
-    return NextResponse.json({ error: "name too long (max 80 chars)" }, { status: 400 });
+  if (!newSlug) {
+    return NextResponse.json({ error: "slug is required" }, { status: 400 });
   }
   // Slug regex matches the CLI's pre-flight check. Lowercase only,
   // must start with alnum, may contain hyphens, 2-32 chars total.
@@ -100,7 +95,7 @@ export async function PATCH(
   // comment on mesh.slug — so we don't enforce a uniqueness collision
   // here. Local CLI configs key on slug, so the picker collides
   // locally; that's the user's call.
-  if (newSlug !== undefined && !/^[a-z0-9][a-z0-9-]{1,31}$/.test(newSlug)) {
+  if (!/^[a-z0-9][a-z0-9-]{1,31}$/.test(newSlug)) {
     return NextResponse.json(
       { error: "slug must be 2-32 chars, lowercase alnum + hyphens, start with alnum" },
       { status: 400 },
@@ -132,15 +127,14 @@ export async function PATCH(
     );
   }
 
-  const patch: { name?: string; slug?: string } = {};
-  if (newName !== undefined) patch.name = newName;
-  if (newSlug !== undefined) patch.slug = newSlug;
-
+  // Soft-collapse: name and slug are a single concept user-facing,
+  // so we always sync name = slug. mesh.name column stays for now
+  // (avoids touching ~25 reader sites); a future migration drops it.
   const [updated] = await db
     .update(mesh)
-    .set(patch)
+    .set({ slug: newSlug, name: newSlug })
     .where(eq(mesh.slug, slug))
-    .returning({ slug: mesh.slug, name: mesh.name });
+    .returning({ slug: mesh.slug });
 
   return NextResponse.json(updated);
 }

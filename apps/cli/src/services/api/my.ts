@@ -19,20 +19,13 @@ export async function createMesh(
   return post<{ id: string; slug: string; name: string }>("/api/my/meshes", body, token);
 }
 
-export async function renameMesh(token: string, slug: string, newName: string) {
+export async function renameMesh(token: string, oldSlug: string, newSlug: string) {
   // Routed through /api/cli/* (not /api/my/*) because the CLI JWT
   // can't authenticate against the better-auth-protected myRouter.
   // The /api/cli/meshes/:slug route validates the JWT inline.
-  return request<{ slug: string; name: string }>({
-    path: `/api/cli/meshes/${slug}`,
-    method: "PATCH",
-    body: { name: newName },
-    token,
-  });
-}
-
-export async function reslugMesh(token: string, oldSlug: string, newSlug: string) {
-  return request<{ slug: string; name: string }>({
+  // v0.7.0 collapse: rename = change slug. mesh.name kept in sync
+  // server-side (column stays for now, value mirrors slug).
+  return request<{ slug: string }>({
     path: `/api/cli/meshes/${oldSlug}`,
     method: "PATCH",
     body: { slug: newSlug },

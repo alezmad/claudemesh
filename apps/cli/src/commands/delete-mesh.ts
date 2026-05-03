@@ -45,7 +45,7 @@ export async function deleteMesh(slug: string, opts: { yes?: boolean } = {}): Pr
     }
     render.section("select mesh to remove");
     config.meshes.forEach((m, i) => {
-      process.stdout.write(`    ${bold(String(i + 1) + ")")} ${clay(m.slug)} ${dim("(" + m.name + ")")}\n`);
+      process.stdout.write(`    ${bold(String(i + 1) + ")")} ${clay(m.slug)}\n`);
     });
     render.blank();
     const choice = await prompt(`  ${dim("choice:")} `);
