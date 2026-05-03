@@ -45,6 +45,23 @@ claudemesh send "<from_name>" "..." --mesh "<mesh_slug>"
 
 If the parent Claude session was launched via `claudemesh launch`, an MCP push-pipe is running and holds the per-mesh WS connection. CLI invocations dial `~/.claudemesh/sockets/<mesh-slug>.sock` and reuse that warm connection (~200ms total round-trip including Node.js startup). If no push-pipe is running (cron, scripts, hooks fired outside a session), the CLI opens its own WS, which takes ~500-700ms cold. **You don't manage this** — every verb auto-detects and falls through.
 
+### Daemon path (v0.9.0, opt-in, fastest)
+
+`claudemesh daemon up [--mesh <slug>]` starts a persistent per-user runtime that holds the broker WS, a durable SQLite outbox/inbox, and listens on `~/.claudemesh/daemon/daemon.sock` (UDS) plus an optional loopback TCP. When the daemon socket is present, every verb routes through it first (~1ms IPC) before falling back to bridge / cold paths. The send envelope carries a caller-stable `client_message_id`, so a `claudemesh send` that started before a daemon crash survives the restart via the on-disk outbox.
+
+Lifecycle:
+
+```bash
+claudemesh daemon up --mesh <slug>                     # foreground
+claudemesh daemon install-service --mesh <slug>        # macOS launchd / Linux systemd-user
+claudemesh daemon status [--json]                      # health + pid
+claudemesh daemon outbox list [--failed|--pending|...] # local queue inspection
+claudemesh daemon outbox requeue <id>                  # re-enqueue an aborted/dead row
+claudemesh daemon down                                 # SIGTERM + wait
+```
+
+`claudemesh install` (MCP + hooks registration) and the daemon are independent — install does not start the daemon, and the daemon does not require install. Run both for the warmest path: install gives you the in-session push-pipe, daemon gives you cross-invocation persistence and a survivable outbox.
+
 ## Spawning new sessions (no wizard)
 
 `claudemesh launch` is the canonical way to start a new Claude Code session connected to claudemesh. Pass every required flag up front so no interactive prompt fires — that's what makes the verb scriptable from tmux send-keys, AppleScript/iTerm spawn helpers, hooks, cron, and the `claudemesh launch` you call from inside another session. **Always use this verb, never `claude` directly with hand-rolled flags** — it sets up the per-session ed25519 keypair, exports `CLAUDEMESH_DISPLAY_NAME`, isolates the mesh config in a tmpdir, and passes the `--dangerously-load-development-channels server:claudemesh` plumbing that the MCP push-pipe needs.

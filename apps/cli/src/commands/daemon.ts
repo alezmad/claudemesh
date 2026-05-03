@@ -22,6 +22,8 @@ export async function runDaemonCommand(
 ): Promise<number> {
   switch (sub) {
     case undefined:
+      return printDaemonUsage();
+
     case "up":
     case "start":
       return runDaemon({
@@ -30,6 +32,11 @@ export async function runDaemonCommand(
         mesh: opts.mesh,
         displayName: opts.displayName,
       });
+
+    case "help":
+    case "--help":
+    case "-h":
+      return printDaemonUsage();
 
     case "status":
       return runStatus(opts);
@@ -54,10 +61,45 @@ export async function runDaemonCommand(
       return runUninstallService(opts);
 
     default:
-      process.stderr.write(`unknown daemon subcommand: ${sub}\n`);
-      process.stderr.write(`usage: claudemesh daemon [up|status|version|down|accept-host|outbox|install-service|uninstall-service]\n`);
+      process.stderr.write(`unknown daemon subcommand: ${sub}\n\n`);
+      printDaemonUsage(process.stderr);
       return 2;
   }
+}
+
+function printDaemonUsage(stream: NodeJS.WritableStream = process.stdout): number {
+  stream.write(`claudemesh daemon — long-lived peer mesh runtime (v0.9.0)
+
+USAGE
+  claudemesh daemon <command> [options]
+
+COMMANDS
+  up | start                   start the daemon in the foreground
+  status                       show running pid + IPC health
+  version                      ipc + schema version of the running daemon
+  down | stop                  stop the running daemon (SIGTERM, then wait)
+  accept-host                  pin the current host fingerprint
+  outbox list                  list local outbox rows (newest first)
+  outbox requeue <id>          re-enqueue an aborted / dead outbox row
+  install-service --mesh <s>   write launchd (macOS) / systemd-user (Linux) unit
+  uninstall-service            remove the platform service unit
+
+OPTIONS
+  --mesh <slug>                attach to / target this mesh
+  --name <displayName>         override CLAUDEMESH_DISPLAY_NAME
+  --no-tcp                     disable the loopback TCP listener (UDS only)
+  --public-health              expose /v1/health unauthenticated on TCP
+  --json                       machine-readable output where supported
+
+OUTBOX FLAGS (for 'daemon outbox list')
+  --pending --inflight --done --failed --aborted   filter by status
+
+OUTBOX FLAGS (for 'daemon outbox requeue')
+  --new-client-id <id>         mint the new row with this client_message_id
+
+See ${"https://claudemesh.com/docs"} for the full daemon spec.
+`);
+  return 0;
 }
 
 interface OutboxRowResp {

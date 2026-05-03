@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.22.1 (2026-05-03) — daemon docs + help
+
+- Root `claudemesh --help` now lists the `daemon` subcommand suite under
+  its own section (was missing in 1.22.0).
+- `claudemesh daemon` (no subcommand) now prints a usage block instead of
+  silently launching the daemon. `daemon help|--help|-h` work too.
+- Bundled SKILL.md gained a "Daemon path (v0.9.0, opt-in, fastest)"
+  section explaining the runtime, lifecycle commands, and how it relates
+  to `claudemesh install` (independent — not auto-started).
+
 ## 1.22.0 (2026-05-03) — daemon v0.9.0
 
 ### New: `claudemesh daemon` — long-lived peer mesh runtime

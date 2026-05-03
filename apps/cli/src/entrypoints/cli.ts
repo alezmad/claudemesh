@@ -180,6 +180,17 @@ Security
   claudemesh backup [file]         encrypt config → portable recovery file
   claudemesh restore <file>        restore config from a backup file
 
+Daemon  (long-lived peer mesh runtime, v0.9.0)
+  claudemesh daemon up             start daemon (alias: start) [--mesh <slug>] [--no-tcp]
+  claudemesh daemon status         show running pid + IPC health [--json]
+  claudemesh daemon down           stop daemon (alias: stop)
+  claudemesh daemon version        ipc + schema version of running daemon
+  claudemesh daemon outbox list    list local outbox rows [--failed|--pending|--inflight|--done]
+  claudemesh daemon outbox requeue <id>   re-enqueue an aborted/dead row [--new-client-id <id>]
+  claudemesh daemon accept-host    pin current host fingerprint
+  claudemesh daemon install-service --mesh <slug>   write launchd / systemd-user unit
+  claudemesh daemon uninstall-service               remove the unit
+
 Setup
   claudemesh install               register MCP server + hooks
   claudemesh uninstall             remove MCP server + hooks
