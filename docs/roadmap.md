@@ -289,13 +289,15 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   now route through `/v1/me/topics` and `/v1/me/notifications`
   instead of prompting. `--mesh foo` keeps the per-mesh
   behavior. *Shipped 2026-05-03 in CLI v1.15.0.*
-- **v0.5.0 phase 2+ — default-aggregation for `task list`,
-  `state list`, `memory recall`** — needs `/v1/me/tasks`,
-  `/v1/me/state`, `/v1/me/memory` aggregator endpoints first.
-  Each subsystem's per-mesh keying scheme decides whether
-  aggregation is straight union (state) or needs ranking
-  (memory recall — vector similarity across meshes is non-
-  trivial).
+- **v0.5.0 phase 2 — default-aggregation for `task list`,
+  `state list`, `memory recall`** — three new aggregator
+  endpoints land: `/v1/me/tasks` (open + claimed by default,
+  `?status=all|open|claimed|completed`), `/v1/me/state`
+  (every key/value across meshes, `?key=foo` filters), and
+  `/v1/me/memory?q=` (ILIKE on content + tags, no-query
+  default returns last 30d). CLI: omitting `--mesh` on each
+  verb routes through the matching aggregator. *Shipped
+  2026-05-03 in CLI v1.16.0.*
 - **v0.3.2 — multi-session DM routing + broadcast self-loopback** —
   fixes two production bugs: (1) replies via `claudemesh send
   <from_id>` rejected with "no connected peer" when the sender's

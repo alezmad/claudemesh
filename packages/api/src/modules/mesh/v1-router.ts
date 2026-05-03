@@ -31,7 +31,10 @@ import {
   mesh,
   meshApiKey,
   meshMember,
+  meshMemory,
   meshNotification,
+  meshState,
+  meshTask,
   meshTopic,
   meshTopicMember,
   meshTopicMemberKey,
@@ -902,6 +905,278 @@ export const v1Router = new Hono<Env>()
         topics: topicHits.length,
         messages: messages.length,
       },
+    });
+  })
+
+  // GET /v1/me/tasks — cross-mesh task list.
+  //
+  // Default: open + claimed (status != "completed"). ?status=all
+  // to include completed; ?status=open|claimed|completed to scope.
+  // 30-day window on completed tasks. Sorted: open first (priority
+  // desc), then claimed, then completed (most recent first). Cap 200.
+  .get("/me/tasks", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+    const [issuer] = await db
+      .select({ userId: meshMember.userId })
+      .from(meshMember)
+      .where(eq(meshMember.id, key.issuedByMemberId));
+    if (!issuer?.userId) {
+      return c.json({ error: "issuer_member_has_no_user" }, 400);
+    }
+
+    const memberships = await db
+      .select({ meshId: meshMember.meshId, meshSlug: mesh.slug })
+      .from(meshMember)
+      .innerJoin(mesh, eq(mesh.id, meshMember.meshId))
+      .where(
+        and(
+          eq(meshMember.userId, issuer.userId),
+          isNull(meshMember.revokedAt),
+          isNull(mesh.archivedAt),
+        ),
+      );
+    if (memberships.length === 0) {
+      return c.json({ tasks: [], totals: { open: 0, claimed: 0, completed: 0 } });
+    }
+
+    const meshIds = memberships.map((m) => m.meshId);
+    const meshSlugBy = new Map(memberships.map((m) => [m.meshId, m.meshSlug]));
+    const statusFilter = c.req.query("status") ?? "active"; // active = open+claimed
+    const statusSet =
+      statusFilter === "all"
+        ? null
+        : statusFilter === "active"
+          ? new Set(["open", "claimed"])
+          : new Set(statusFilter.split(",").map((s) => s.trim()));
+
+    const completedWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const rows = await db
+      .select({
+        id: meshTask.id,
+        meshId: meshTask.meshId,
+        title: meshTask.title,
+        assignee: meshTask.assignee,
+        claimedByName: meshTask.claimedByName,
+        priority: meshTask.priority,
+        status: meshTask.status,
+        tags: meshTask.tags,
+        result: meshTask.result,
+        createdByName: meshTask.createdByName,
+        createdAt: meshTask.createdAt,
+        claimedAt: meshTask.claimedAt,
+        completedAt: meshTask.completedAt,
+      })
+      .from(meshTask)
+      .where(
+        and(
+          inArray(meshTask.meshId, meshIds),
+          // Bound the completed-task scan; open/claimed have no time filter.
+          ...(statusSet === null || statusSet.has("completed")
+            ? []
+            : [sql`${meshTask.status} != 'completed'`]),
+          ...(statusFilter === "active"
+            ? [sql`${meshTask.status} != 'completed'`]
+            : []),
+          // Hide stale completed tasks beyond the window unless explicitly all.
+          ...(statusFilter === "all"
+            ? []
+            : [
+                sql`(${meshTask.status} != 'completed' OR ${meshTask.completedAt} > ${completedWindow})`,
+              ]),
+        ),
+      )
+      .orderBy(
+        sql`case ${meshTask.status} when 'open' then 0 when 'claimed' then 1 else 2 end`,
+        desc(meshTask.createdAt),
+      )
+      .limit(200);
+
+    const filtered = statusSet
+      ? rows.filter((r) => statusSet.has(r.status))
+      : rows;
+
+    const tasks = filtered.map((r) => ({
+      id: r.id,
+      meshId: r.meshId,
+      meshSlug: meshSlugBy.get(r.meshId) ?? "?",
+      title: r.title,
+      assignee: r.assignee,
+      claimedByName: r.claimedByName,
+      priority: r.priority,
+      status: r.status,
+      tags: r.tags ?? [],
+      result: r.result,
+      createdByName: r.createdByName,
+      createdAt: r.createdAt.toISOString(),
+      claimedAt: r.claimedAt ? r.claimedAt.toISOString() : null,
+      completedAt: r.completedAt ? r.completedAt.toISOString() : null,
+    }));
+
+    const totals = {
+      open: tasks.filter((t) => t.status === "open").length,
+      claimed: tasks.filter((t) => t.status === "claimed").length,
+      completed: tasks.filter((t) => t.status === "completed").length,
+    };
+    return c.json({ tasks, totals });
+  })
+
+  // GET /v1/me/state — cross-mesh shared-state map.
+  //
+  // Returns every (mesh, key, value) row across the user's meshes,
+  // sorted by most-recently-updated. ?key=foo filters to a specific
+  // key across meshes (useful for "where do I have a `release` flag?").
+  // Cap 500 — state is meant to be small per mesh.
+  .get("/me/state", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+    const [issuer] = await db
+      .select({ userId: meshMember.userId })
+      .from(meshMember)
+      .where(eq(meshMember.id, key.issuedByMemberId));
+    if (!issuer?.userId) {
+      return c.json({ error: "issuer_member_has_no_user" }, 400);
+    }
+
+    const memberships = await db
+      .select({ meshId: meshMember.meshId, meshSlug: mesh.slug })
+      .from(meshMember)
+      .innerJoin(mesh, eq(mesh.id, meshMember.meshId))
+      .where(
+        and(
+          eq(meshMember.userId, issuer.userId),
+          isNull(meshMember.revokedAt),
+          isNull(mesh.archivedAt),
+        ),
+      );
+    if (memberships.length === 0) {
+      return c.json({ entries: [], totals: { entries: 0, meshes: 0 } });
+    }
+
+    const meshIds = memberships.map((m) => m.meshId);
+    const meshSlugBy = new Map(memberships.map((m) => [m.meshId, m.meshSlug]));
+    const keyFilter = c.req.query("key");
+
+    const rows = await db
+      .select({
+        meshId: meshState.meshId,
+        key: meshState.key,
+        value: meshState.value,
+        updatedByName: meshState.updatedByName,
+        updatedAt: meshState.updatedAt,
+      })
+      .from(meshState)
+      .where(
+        and(
+          inArray(meshState.meshId, meshIds),
+          ...(keyFilter ? [eq(meshState.key, keyFilter)] : []),
+        ),
+      )
+      .orderBy(desc(meshState.updatedAt))
+      .limit(500);
+
+    const entries = rows.map((r) => ({
+      meshId: r.meshId,
+      meshSlug: meshSlugBy.get(r.meshId) ?? "?",
+      key: r.key,
+      value: r.value,
+      updatedByName: r.updatedByName,
+      updatedAt: r.updatedAt.toISOString(),
+    }));
+
+    return c.json({
+      entries,
+      totals: {
+        entries: entries.length,
+        meshes: new Set(entries.map((e) => e.meshId)).size,
+      },
+    });
+  })
+
+  // GET /v1/me/memory?q=... — cross-mesh memory recall.
+  //
+  // ILIKE search over content + tags across every joined mesh,
+  // excluding forgotten rows. Sorted by recency. Empty q returns
+  // recent (last 30d) memories across all meshes. Cap 200.
+  .get("/me/memory", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+    const [issuer] = await db
+      .select({ userId: meshMember.userId })
+      .from(meshMember)
+      .where(eq(meshMember.id, key.issuedByMemberId));
+    if (!issuer?.userId) {
+      return c.json({ error: "issuer_member_has_no_user" }, 400);
+    }
+
+    const memberships = await db
+      .select({ meshId: meshMember.meshId, meshSlug: mesh.slug })
+      .from(meshMember)
+      .innerJoin(mesh, eq(mesh.id, meshMember.meshId))
+      .where(
+        and(
+          eq(meshMember.userId, issuer.userId),
+          isNull(meshMember.revokedAt),
+          isNull(mesh.archivedAt),
+        ),
+      );
+    if (memberships.length === 0) {
+      return c.json({ memories: [], totals: { entries: 0 } });
+    }
+
+    const meshIds = memberships.map((m) => m.meshId);
+    const meshSlugBy = new Map(memberships.map((m) => [m.meshId, m.meshSlug]));
+    const q = (c.req.query("q") ?? "").trim();
+    const qPattern = q ? `%${q.toLowerCase()}%` : null;
+    const recencyWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const rows = await db
+      .select({
+        id: meshMemory.id,
+        meshId: meshMemory.meshId,
+        content: meshMemory.content,
+        tags: meshMemory.tags,
+        rememberedByName: meshMemory.rememberedByName,
+        rememberedAt: meshMemory.rememberedAt,
+      })
+      .from(meshMemory)
+      .where(
+        and(
+          inArray(meshMemory.meshId, meshIds),
+          isNull(meshMemory.forgottenAt),
+          ...(qPattern
+            ? [
+                sql`(lower(${meshMemory.content}) like ${qPattern} or exists (select 1 from unnest(${meshMemory.tags}) as t where lower(t) like ${qPattern}))`,
+              ]
+            : [gt(meshMemory.rememberedAt, recencyWindow)]),
+        ),
+      )
+      .orderBy(desc(meshMemory.rememberedAt))
+      .limit(200);
+
+    const memories = rows.map((r) => ({
+      id: r.id,
+      meshId: r.meshId,
+      meshSlug: meshSlugBy.get(r.meshId) ?? "?",
+      content: r.content,
+      tags: r.tags ?? [],
+      rememberedByName: r.rememberedByName,
+      rememberedAt: r.rememberedAt.toISOString(),
+    }));
+
+    return c.json({
+      query: q,
+      memories,
+      totals: { entries: memories.length },
     });
   })
 

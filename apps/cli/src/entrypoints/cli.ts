@@ -323,13 +323,30 @@ async function main(): Promise<void> {
     case "state": {
       const sub = positionals[0];
       if (sub === "set") { const { runStateSet } = await import("~/commands/state.js"); await runStateSet({}, positionals[1] ?? "", positionals[2] ?? ""); }
-      else if (sub === "list") { const { runStateList } = await import("~/commands/state.js"); await runStateList({}); }
+      else if (sub === "list") {
+        // v0.5.0 phase 2: aggregate across every mesh when --mesh is omitted.
+        if (!flags.mesh) {
+          const { runMeState } = await import("~/commands/me.js");
+          process.exit(await runMeState({ json: !!flags.json, key: flags.key as string | undefined }));
+        }
+        const { runStateList } = await import("~/commands/state.js");
+        await runStateList({});
+      }
       else { const { runStateGet } = await import("~/commands/state.js"); await runStateGet({}, positionals[0] ?? ""); }
       break;
     }
     case "info": { const { runInfo } = await import("~/commands/info.js"); await runInfo({}); break; }
     case "remember": { const { remember } = await import("~/commands/remember.js"); process.exit(await remember(positionals.join(" "), { mesh: flags.mesh as string, tags: flags.tags as string, json: !!flags.json })); break; }
-    case "recall": { const { recall } = await import("~/commands/recall.js"); process.exit(await recall(positionals.join(" "), { mesh: flags.mesh as string, json: !!flags.json })); break; }
+    case "recall": {
+      // v0.5.0 phase 2: aggregate across every mesh when --mesh is omitted.
+      if (!flags.mesh) {
+        const { runMeMemory } = await import("~/commands/me.js");
+        process.exit(await runMeMemory({ json: !!flags.json, query: positionals.join(" ") }));
+      }
+      const { recall } = await import("~/commands/recall.js");
+      process.exit(await recall(positionals.join(" "), { mesh: flags.mesh as string, json: !!flags.json }));
+      break;
+    }
     case "forget": { const { runForget } = await import("~/commands/broker-actions.js"); process.exit(await runForget(positionals[0], { mesh: flags.mesh as string, json: !!flags.json })); break; }
     case "remind": { const { runRemind } = await import("~/commands/remind.js"); await runRemind({ mesh: flags.mesh as string }, positionals); break; }
     // (profile case moved to resource-aliases block below for sub-command extensibility)
@@ -774,7 +791,15 @@ async function main(): Promise<void> {
       const f = { mesh: flags.mesh as string, json: !!flags.json };
       if (sub === "claim") { const { runTaskClaim } = await import("~/commands/broker-actions.js"); process.exit(await runTaskClaim(positionals[1], f)); }
       else if (sub === "complete") { const { runTaskComplete } = await import("~/commands/broker-actions.js"); process.exit(await runTaskComplete(positionals[1], positionals.slice(2).join(" ") || undefined, f)); }
-      else if (sub === "list") { const { runTaskList } = await import("~/commands/platform-actions.js"); process.exit(await runTaskList({ ...f, status: flags.status as string, assignee: flags.assignee as string })); }
+      else if (sub === "list") {
+        // v0.5.0 phase 2: aggregate across every mesh when --mesh is omitted.
+        if (!f.mesh) {
+          const { runMeTasks } = await import("~/commands/me.js");
+          process.exit(await runMeTasks({ json: f.json, status: flags.status as string | undefined }));
+        }
+        const { runTaskList } = await import("~/commands/platform-actions.js");
+        process.exit(await runTaskList({ ...f, status: flags.status as string, assignee: flags.assignee as string }));
+      }
       else if (sub === "create") { const { runTaskCreate } = await import("~/commands/platform-actions.js"); process.exit(await runTaskCreate(positionals.slice(1).join(" "), { ...f, assignee: flags.assignee as string, priority: flags.priority as string, tags: flags.tags as string })); }
       else { console.error("Usage: claudemesh task <create|list|claim|complete>"); process.exit(EXIT.INVALID_ARGS); }
       break;

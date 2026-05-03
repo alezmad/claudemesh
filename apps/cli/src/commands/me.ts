@@ -510,6 +510,237 @@ function highlightMatch(text: string, query: string): string {
   return `${before}${yellow(match)}${after}`;
 }
 
+interface WorkspaceTask {
+  id: string;
+  meshId: string;
+  meshSlug: string;
+  title: string;
+  assignee: string | null;
+  claimedByName: string | null;
+  priority: string;
+  status: string;
+  tags: string[];
+  result: string | null;
+  createdByName: string | null;
+  createdAt: string;
+  claimedAt: string | null;
+  completedAt: string | null;
+}
+
+interface WorkspaceTasksResponse {
+  tasks: WorkspaceTask[];
+  totals: { open: number; claimed: number; completed: number };
+}
+
+export interface MeTasksFlags extends MeFlags {
+  status?: string;
+}
+
+export async function runMeTasks(flags: MeTasksFlags): Promise<number> {
+  return withRestKey(
+    {
+      meshSlug: resolveMeshForMint(flags.mesh),
+      purpose: "workspace-tasks",
+      capabilities: ["read"],
+    },
+    async ({ secret }) => {
+      const params = new URLSearchParams();
+      if (flags.status) params.set("status", flags.status);
+      const path =
+        "/api/v1/me/tasks" +
+        (params.toString() ? `?${params.toString()}` : "");
+      const ws = await request<WorkspaceTasksResponse>({
+        path,
+        token: secret,
+      });
+
+      if (flags.json) {
+        console.log(JSON.stringify(ws, null, 2));
+        return EXIT.SUCCESS;
+      }
+
+      render.section(
+        `${clay("tasks")} — ${dim(
+          `${ws.totals.open} open · ${ws.totals.claimed} in-flight · ${ws.totals.completed} done`,
+        )}`,
+      );
+
+      if (ws.tasks.length === 0) {
+        process.stdout.write(dim("  no tasks in window\n"));
+        return EXIT.SUCCESS;
+      }
+
+      const slugWidth = Math.max(...ws.tasks.map((t) => t.meshSlug.length), 6);
+      for (const t of ws.tasks) {
+        const slug = dim(t.meshSlug.padEnd(slugWidth));
+        const status =
+          t.status === "open"
+            ? yellow("open    ")
+            : t.status === "claimed"
+              ? cyan("working ")
+              : green("done    ");
+        const prio =
+          t.priority === "urgent"
+            ? yellow("!")
+            : t.priority === "low"
+              ? dim("·")
+              : " ";
+        const claimer = t.claimedByName ? dim(` ← ${t.claimedByName}`) : "";
+        process.stdout.write(
+          `  ${slug} ${prio} ${status}  ${t.title}${claimer}\n`,
+        );
+      }
+      return EXIT.SUCCESS;
+    },
+  );
+}
+
+interface WorkspaceStateEntry {
+  meshId: string;
+  meshSlug: string;
+  key: string;
+  value: unknown;
+  updatedByName: string | null;
+  updatedAt: string;
+}
+
+interface WorkspaceStateResponse {
+  entries: WorkspaceStateEntry[];
+  totals: { entries: number; meshes: number };
+}
+
+export interface MeStateFlags extends MeFlags {
+  key?: string;
+}
+
+export async function runMeState(flags: MeStateFlags): Promise<number> {
+  return withRestKey(
+    {
+      meshSlug: resolveMeshForMint(flags.mesh),
+      purpose: "workspace-state",
+      capabilities: ["read"],
+    },
+    async ({ secret }) => {
+      const params = new URLSearchParams();
+      if (flags.key) params.set("key", flags.key);
+      const path =
+        "/api/v1/me/state" +
+        (params.toString() ? `?${params.toString()}` : "");
+      const ws = await request<WorkspaceStateResponse>({
+        path,
+        token: secret,
+      });
+
+      if (flags.json) {
+        console.log(JSON.stringify(ws, null, 2));
+        return EXIT.SUCCESS;
+      }
+
+      render.section(
+        `${clay("state")} — ${ws.totals.entries} entr${ws.totals.entries === 1 ? "y" : "ies"} ${dim(
+          `across ${ws.totals.meshes} mesh${ws.totals.meshes === 1 ? "" : "es"}`,
+        )}`,
+      );
+
+      if (ws.entries.length === 0) {
+        process.stdout.write(dim("  no state entries\n"));
+        return EXIT.SUCCESS;
+      }
+
+      const slugWidth = Math.max(...ws.entries.map((e) => e.meshSlug.length), 6);
+      const keyWidth = Math.max(...ws.entries.map((e) => e.key.length), 8);
+      for (const e of ws.entries) {
+        const slug = dim(e.meshSlug.padEnd(slugWidth));
+        const key = cyan(e.key.padEnd(keyWidth));
+        const valueStr =
+          typeof e.value === "string"
+            ? e.value
+            : JSON.stringify(e.value);
+        const trimmed =
+          valueStr.length > 80 ? valueStr.slice(0, 80) + "…" : valueStr;
+        const ago = dim(formatRelativeTime(e.updatedAt));
+        process.stdout.write(`  ${slug}  ${key}  ${trimmed}  ${ago}\n`);
+      }
+      return EXIT.SUCCESS;
+    },
+  );
+}
+
+interface WorkspaceMemory {
+  id: string;
+  meshId: string;
+  meshSlug: string;
+  content: string;
+  tags: string[];
+  rememberedByName: string | null;
+  rememberedAt: string;
+}
+
+interface WorkspaceMemoryResponse {
+  query: string;
+  memories: WorkspaceMemory[];
+  totals: { entries: number };
+}
+
+export interface MeMemoryFlags extends MeFlags {
+  query?: string;
+}
+
+export async function runMeMemory(flags: MeMemoryFlags): Promise<number> {
+  return withRestKey(
+    {
+      meshSlug: resolveMeshForMint(flags.mesh),
+      purpose: "workspace-memory",
+      capabilities: ["read"],
+    },
+    async ({ secret }) => {
+      const params = new URLSearchParams();
+      if (flags.query) params.set("q", flags.query);
+      const path =
+        "/api/v1/me/memory" +
+        (params.toString() ? `?${params.toString()}` : "");
+      const ws = await request<WorkspaceMemoryResponse>({
+        path,
+        token: secret,
+      });
+
+      if (flags.json) {
+        console.log(JSON.stringify(ws, null, 2));
+        return EXIT.SUCCESS;
+      }
+
+      const headerLabel = flags.query
+        ? `recall — "${flags.query}"`
+        : "recall — last 30 days";
+      render.section(
+        `${clay(headerLabel)}  ${dim(`${ws.totals.entries} match${ws.totals.entries === 1 ? "" : "es"}`)}`,
+      );
+
+      if (ws.memories.length === 0) {
+        process.stdout.write(dim("  no memories\n"));
+        return EXIT.SUCCESS;
+      }
+
+      const slugWidth = Math.max(
+        ...ws.memories.map((m) => m.meshSlug.length),
+        6,
+      );
+      for (const m of ws.memories) {
+        const slug = dim(m.meshSlug.padEnd(slugWidth));
+        const ago = dim(formatRelativeTime(m.rememberedAt));
+        const tags =
+          m.tags.length > 0
+            ? "  " + dim("[" + m.tags.join(", ") + "]")
+            : "";
+        const content =
+          m.content.length > 240 ? m.content.slice(0, 240) + "…" : m.content;
+        process.stdout.write(`  ${slug}  ${ago}${tags}\n     ${content}\n`);
+      }
+      return EXIT.SUCCESS;
+    },
+  );
+}
+
 function formatRelativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   const now = Date.now();
