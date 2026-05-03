@@ -953,7 +953,9 @@ export const v1Router = new Hono<Env>()
           ? new Set(["open", "claimed"])
           : new Set(statusFilter.split(",").map((s) => s.trim()));
 
-    const completedWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const completedWindowIso = new Date(
+      Date.now() - 30 * 24 * 60 * 60 * 1000,
+    ).toISOString();
     const rows = await db
       .select({
         id: meshTask.id,
@@ -974,18 +976,14 @@ export const v1Router = new Hono<Env>()
       .where(
         and(
           inArray(meshTask.meshId, meshIds),
-          // Bound the completed-task scan; open/claimed have no time filter.
-          ...(statusSet === null || statusSet.has("completed")
-            ? []
-            : [sql`${meshTask.status} != 'completed'`]),
-          ...(statusFilter === "active"
-            ? [sql`${meshTask.status} != 'completed'`]
-            : []),
-          // Hide stale completed tasks beyond the window unless explicitly all.
+          // For "active" (default) and any non-"all" status filter:
+          // hide completed tasks older than 30 days. completedAt is
+          // null on open/claimed, so "completed_at IS NULL OR > window"
+          // keeps everything non-completed plus recent completions.
           ...(statusFilter === "all"
             ? []
             : [
-                sql`(${meshTask.status} != 'completed' OR ${meshTask.completedAt} > ${completedWindow})`,
+                sql`(${meshTask.completedAt} IS NULL OR ${meshTask.completedAt} > ${completedWindowIso}::timestamp)`,
               ]),
         ),
       )
