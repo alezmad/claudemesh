@@ -564,6 +564,8 @@ async function maybePushQueuedMessages(
       nonce: m.nonce,
       ciphertext: m.ciphertext,
       createdAt: m.createdAt.toISOString(),
+      ...(m.clientMessageId    ? { client_message_id:   m.clientMessageId }    : {}),
+      ...(m.requestFingerprint ? { request_fingerprint: m.requestFingerprint } : {}),
     };
     sendToPeer(presenceId, push);
     metrics.messagesRoutedTotal.inc({ priority: m.priority });
@@ -1968,6 +1970,12 @@ async function handleSend(
     }
   }
 
+  // v0.9.0 daemon clients attach a stable idempotency id and the canonical
+  // request fingerprint per spec §4.2/§4.4. Forward both verbatim; legacy
+  // callers omit them and the columns are nullable.
+  const clientMessageId = (msg as { client_message_id?: string }).client_message_id;
+  const requestFingerprint = (msg as { request_fingerprint?: string }).request_fingerprint;
+
   const messageId = await queueMessage({
     meshId: conn.meshId,
     senderMemberId: conn.memberId,
@@ -1976,6 +1984,8 @@ async function handleSend(
     priority: msg.priority,
     nonce: msg.nonce,
     ciphertext: msg.ciphertext,
+    clientMessageId: clientMessageId && clientMessageId.length > 0 ? clientMessageId : undefined,
+    requestFingerprint: requestFingerprint && requestFingerprint.length > 0 ? requestFingerprint : undefined,
   });
 
   // Topic-tagged messages (targetSpec starts with `#<topicId>`) get

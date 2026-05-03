@@ -359,6 +359,14 @@ export const messageQueue = meshSchema.table("message_queue", {
   createdAt: timestamp().defaultNow().notNull(),
   deliveredAt: timestamp(),
   expiresAt: timestamp(),
+  // v0.9.0 daemon: caller-supplied idempotency id (spec §4.2). Nullable
+  // for legacy traffic. Sprint 7+ promotes it to a partial-unique index
+  // and adds the mesh.client_message_dedupe table for atomic accept.
+  clientMessageId: text("client_message_id"),
+  // v0.9.0 daemon: 32-byte sha256 of the canonical request shape (spec
+  // §4.4), hex-encoded. Nullable for legacy traffic. Brokers that want
+  // to enforce idempotency on retries will read this column.
+  requestFingerprint: text("request_fingerprint"),
 });
 
 /**
@@ -1658,10 +1666,10 @@ export type InsertMeshNotification = typeof meshNotification.$inferInsert;
  * ──────────────────────────────────────────────────────────────────────── */
 
 export const apiKeyCapabilityEnum = meshSchema.enum("api_key_capability", [
-  "send",        // POST /messages
-  "read",        // GET /messages, /peers, /state
+  "send", // POST /messages
+  "read", // GET /messages, /peers, /state
   "state_write", // POST /state
-  "admin",       // issue/revoke other keys, delete topics, etc.
+  "admin", // issue/revoke other keys, delete topics, etc.
 ]);
 
 export const meshApiKey = meshSchema.table(
@@ -1679,7 +1687,7 @@ export const meshApiKey = meshSchema.table(
     secretPrefix: text().notNull(),
     /** Granted capabilities. Empty = no permissions; key is a stub. */
     capabilities: jsonb()
-      .$type<Array<"send" | "read" | "state_write" | "admin">>()
+      .$type<("send" | "read" | "state_write" | "admin")[]>()
       .notNull()
       .default([]),
     /**

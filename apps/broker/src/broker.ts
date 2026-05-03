@@ -2261,6 +2261,10 @@ export interface QueueParams {
   nonce: string;
   ciphertext: string;
   expiresAt?: Date;
+  /** Daemon idempotency id (spec §4.2). Optional; pre-daemon callers omit. */
+  clientMessageId?: string;
+  /** Canonical request fingerprint hex (spec §4.4). Optional; pre-daemon callers omit. */
+  requestFingerprint?: string;
 }
 
 /** Insert an E2E envelope into the mesh's message queue. */
@@ -2276,6 +2280,8 @@ export async function queueMessage(params: QueueParams): Promise<string> {
       nonce: params.nonce,
       ciphertext: params.ciphertext,
       expiresAt: params.expiresAt,
+      clientMessageId: params.clientMessageId ?? null,
+      requestFingerprint: params.requestFingerprint ?? null,
     })
     .returning({ id: messageQueue.id });
   if (!row) throw new Error("failed to queue message");
@@ -2323,6 +2329,9 @@ export async function drainForMember(
     createdAt: Date;
     senderMemberId: string;
     senderPubkey: string;
+    /** v0.9.0 daemon fields; null for legacy traffic. */
+    clientMessageId: string | null;
+    requestFingerprint: string | null;
   }>
 > {
   const priorities = deliverablePriorities(status);
@@ -2384,6 +2393,8 @@ export async function drainForMember(
     created_at: string | Date;
     sender_member_id: string;
     sender_pubkey: string;
+    client_message_id: string | null;
+    request_fingerprint: string | null;
   }>(sql`
     WITH claimed AS (
       UPDATE mesh.message_queue AS mq
@@ -2402,6 +2413,7 @@ export async function drainForMember(
       AND m.id = mq.sender_member_id
       RETURNING mq.id, mq.priority, mq.nonce, mq.ciphertext,
                mq.created_at, mq.sender_member_id,
+               mq.client_message_id, mq.request_fingerprint,
                COALESCE(mq.sender_session_pubkey, m.peer_pubkey) AS sender_pubkey
     )
     SELECT * FROM claimed ORDER BY created_at ASC, id ASC
@@ -2415,6 +2427,8 @@ export async function drainForMember(
     created_at: string | Date;
     sender_member_id: string;
     sender_pubkey: string;
+    client_message_id: string | null;
+    request_fingerprint: string | null;
   }>;
   if (!rows || rows.length === 0) return [];
   return rows.map((r) => ({
@@ -2426,6 +2440,8 @@ export async function drainForMember(
       r.created_at instanceof Date ? r.created_at : new Date(r.created_at),
     senderMemberId: r.sender_member_id,
     senderPubkey: r.sender_pubkey,
+    clientMessageId: r.client_message_id ?? null,
+    requestFingerprint: r.request_fingerprint ?? null,
   }));
 }
 

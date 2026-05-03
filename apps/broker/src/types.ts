@@ -139,6 +139,12 @@ export interface WSPushMessage {
   nonce: string;
   ciphertext: string;
   createdAt: string;
+  /** v0.9.0 daemon fields. Echoed when the sender's send envelope
+   *  carried them (spec §4.2/§4.4). Receivers use `client_message_id`
+   *  for idempotent inbox dedupe and `request_fingerprint` for
+   *  defense-in-depth verification. Both null on legacy traffic. */
+  client_message_id?: string | null;
+  request_fingerprint?: string | null;
   /** Optional semantic tag — "reminder" when delivered by the scheduler,
    *  "system" for broker-originated topology events (peer join/leave). */
   subtype?: "reminder" | "system";
