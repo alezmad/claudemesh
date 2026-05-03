@@ -31,6 +31,15 @@ export async function renameMesh(token: string, slug: string, newName: string) {
   });
 }
 
+export async function reslugMesh(token: string, oldSlug: string, newSlug: string) {
+  return request<{ slug: string; name: string }>({
+    path: `/api/cli/meshes/${oldSlug}`,
+    method: "PATCH",
+    body: { slug: newSlug },
+    token,
+  });
+}
+
 export async function createInvite(
   token: string,
   meshSlug: string,

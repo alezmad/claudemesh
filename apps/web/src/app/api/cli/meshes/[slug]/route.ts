@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 import { db } from "@turbostarter/db/server";
 import { mesh } from "@turbostarter/db/schema/mesh";
@@ -79,18 +79,32 @@ export async function PATCH(
   }
 
   const { slug } = await params;
-  let body: { name?: string };
+  let body: { name?: string; slug?: string };
   try {
-    body = (await request.json()) as { name?: string };
+    body = (await request.json()) as { name?: string; slug?: string };
   } catch {
     return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });
   }
   const newName = body.name?.trim();
-  if (!newName) {
-    return NextResponse.json({ error: "name is required" }, { status: 400 });
+  const newSlug = body.slug?.trim();
+
+  if (!newName && !newSlug) {
+    return NextResponse.json({ error: "name or slug is required" }, { status: 400 });
   }
-  if (newName.length > 80) {
+  if (newName !== undefined && newName.length > 80) {
     return NextResponse.json({ error: "name too long (max 80 chars)" }, { status: 400 });
+  }
+  // Slug regex matches the CLI's pre-flight check. Lowercase only,
+  // must start with alnum, may contain hyphens, 2-32 chars total.
+  // Slugs are NOT globally unique (mesh.id is canonical) — see schema
+  // comment on mesh.slug — so we don't enforce a uniqueness collision
+  // here. Local CLI configs key on slug, so the picker collides
+  // locally; that's the user's call.
+  if (newSlug !== undefined && !/^[a-z0-9][a-z0-9-]{1,31}$/.test(newSlug)) {
+    return NextResponse.json(
+      { error: "slug must be 2-32 chars, lowercase alnum + hyphens, start with alnum" },
+      { status: 400 },
+    );
   }
 
   // Look up the mesh first so we can distinguish "doesn't exist"
@@ -118,9 +132,13 @@ export async function PATCH(
     );
   }
 
+  const patch: { name?: string; slug?: string } = {};
+  if (newName !== undefined) patch.name = newName;
+  if (newSlug !== undefined) patch.slug = newSlug;
+
   const [updated] = await db
     .update(mesh)
-    .set({ name: newName })
+    .set(patch)
     .where(eq(mesh.slug, slug))
     .returning({ slug: mesh.slug, name: mesh.name });
 

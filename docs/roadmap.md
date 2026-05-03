@@ -298,6 +298,18 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   default returns last 30d). CLI: omitting `--mesh` on each
   verb routes through the matching aggregator. *Shipped
   2026-05-03 in CLI v1.16.0.*
+- **v0.6.2 — `claudemesh slug <old> <new>`** — change a mesh's
+  URL-safe slug (the identifier the CLI picker, `--mesh` flag,
+  and dashboard sidebar all key on). Slugs are NOT globally
+  unique — `mesh.id` is canonical — so the route only validates
+  the regex (`^[a-z0-9][a-z0-9-]{1,31}$`); it does not enforce
+  cross-user uniqueness. The CLI does refuse a local collision
+  (two joined meshes with the same slug would make the picker
+  ambiguous). On success, local config rewrites the slug in
+  place; other peers heal on next `claudemesh sync`. Server-side
+  reuses the existing `PATCH /api/cli/meshes/:slug` route — body
+  now accepts `{ name?, slug? }`. *Shipped 2026-05-03 in CLI
+  v1.20.0 + web.*
 - **v0.6.1 — `claudemesh rename` actually works** — adds the
   missing endpoint `PATCH /api/cli/meshes/:slug` on the web app.
   Lives under `/api/cli/*` (not `/api/my/*`) because the CLI's

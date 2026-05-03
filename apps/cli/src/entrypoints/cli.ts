@@ -73,7 +73,8 @@ Mesh
   claudemesh launch [slug]         launch Claude Code on a mesh (alias: connect)
   claudemesh list                  show your meshes (alias: ls)
   claudemesh delete [slug]         delete a mesh (alias: rm)
-  claudemesh rename <slug> <name>  rename a mesh
+  claudemesh rename <slug> <name>  rename a mesh's display name (slug stays)
+  claudemesh slug <old> <new>      change a mesh's slug (URL-safe identifier)
   claudemesh share [email]         share mesh (invite link / send email)
 
 Peer (resource form, recommended)
@@ -312,6 +313,7 @@ async function main(): Promise<void> {
     case "list": case "ls": { const { runList } = await import("~/commands/list.js"); await runList(); break; }
     case "delete": case "rm": { const { deleteMesh } = await import("~/commands/delete-mesh.js"); process.exit(await deleteMesh(positionals[0] ?? "", { yes: !!flags.y || !!flags.yes })); break; }
     case "rename": { const { rename } = await import("~/commands/rename.js"); process.exit(await rename(positionals[0] ?? "", positionals[1] ?? "")); break; }
+    case "slug": { const { slug } = await import("~/commands/slug.js"); process.exit(await slug(positionals[0] ?? "", positionals[1] ?? "")); break; }
     case "share": case "invite": { const { invite } = await import("~/commands/invite.js"); process.exit(await invite(positionals[0], { mesh: flags.mesh as string, json: !!flags.json })); break; }
     case "disconnect": { const { runDisconnect } = await import("~/commands/kick.js"); process.exit(await runDisconnect(positionals[0], { mesh: flags.mesh as string, stale: flags.stale as string, all: !!flags.all })); break; }
     case "kick": { const { runKick } = await import("~/commands/kick.js"); process.exit(await runKick(positionals[0], { mesh: flags.mesh as string, stale: flags.stale as string, all: !!flags.all })); break; }
