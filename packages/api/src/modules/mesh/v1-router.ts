@@ -623,6 +623,114 @@ export const v1Router = new Hono<Env>()
     });
   })
 
+  // GET /v1/me/activity — cross-mesh recent message stream.
+  //
+  // Topic messages from any mesh the user belongs to in a 24-hour
+  // default window (?since=ISO override). Excludes messages the
+  // caller authored themselves — this is "what's happening that I
+  // missed", not a self-audit log. Returns sender + topic + mesh
+  // context plus a snippet (v1) or ciphertext (v2). Sorted desc by
+  // createdAt, capped at 200 rows.
+  .get("/me/activity", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+    const [issuer] = await db
+      .select({ userId: meshMember.userId })
+      .from(meshMember)
+      .where(eq(meshMember.id, key.issuedByMemberId));
+    if (!issuer?.userId) {
+      return c.json({ error: "issuer_member_has_no_user" }, 400);
+    }
+
+    const memberships = await db
+      .select({ memberId: meshMember.id, meshId: meshMember.meshId })
+      .from(meshMember)
+      .innerJoin(mesh, eq(mesh.id, meshMember.meshId))
+      .where(
+        and(
+          eq(meshMember.userId, issuer.userId),
+          isNull(meshMember.revokedAt),
+          isNull(mesh.archivedAt),
+        ),
+      );
+
+    if (memberships.length === 0) {
+      return c.json({ activity: [], totals: { events: 0 } });
+    }
+
+    const myMemberIds = memberships.map((m) => m.memberId);
+    const meshIds = memberships.map((m) => m.meshId);
+    const sinceParam = c.req.query("since");
+    const sinceDate = sinceParam
+      ? new Date(sinceParam)
+      : new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const senderMember = aliasedTable(meshMember, "sender_member");
+    const rows = await db
+      .select({
+        messageId: meshTopicMessage.id,
+        topicId: meshTopicMessage.topicId,
+        topicName: meshTopic.name,
+        meshId: meshTopic.meshId,
+        meshSlug: mesh.slug,
+        meshName: mesh.name,
+        senderName: senderMember.displayName,
+        senderMemberId: meshTopicMessage.senderMemberId,
+        ciphertext: meshTopicMessage.ciphertext,
+        bodyVersion: meshTopicMessage.bodyVersion,
+        createdAt: meshTopicMessage.createdAt,
+      })
+      .from(meshTopicMessage)
+      .innerJoin(meshTopic, eq(meshTopic.id, meshTopicMessage.topicId))
+      .innerJoin(mesh, eq(mesh.id, meshTopic.meshId))
+      .leftJoin(
+        senderMember,
+        eq(senderMember.id, meshTopicMessage.senderMemberId),
+      )
+      .where(
+        and(
+          inArray(meshTopic.meshId, meshIds),
+          isNull(meshTopic.archivedAt),
+          gt(meshTopicMessage.createdAt, sinceDate),
+          notInArray(meshTopicMessage.senderMemberId, myMemberIds),
+        ),
+      )
+      .orderBy(desc(meshTopicMessage.createdAt))
+      .limit(200);
+
+    const decode = (b64: string) => {
+      try {
+        return Buffer.from(b64, "base64").toString("utf-8");
+      } catch {
+        return "";
+      }
+    };
+
+    const activity = rows.map((r) => ({
+      messageId: r.messageId,
+      topicId: r.topicId,
+      topicName: r.topicName,
+      meshId: r.meshId,
+      meshSlug: r.meshSlug,
+      meshName: r.meshName,
+      senderName: r.senderName ?? "?",
+      senderMemberId: r.senderMemberId,
+      snippet:
+        r.bodyVersion === 1 ? decode(r.ciphertext).slice(0, 240) : null,
+      ciphertext: r.bodyVersion === 2 ? r.ciphertext : null,
+      bodyVersion: r.bodyVersion,
+      createdAt: r.createdAt.toISOString(),
+    }));
+
+    return c.json({
+      activity,
+      totals: { events: activity.length },
+    });
+  })
+
   // GET /v1/me/topics — cross-mesh topic list for the caller's user.
   //
   // For each topic across every mesh the user belongs to, returns

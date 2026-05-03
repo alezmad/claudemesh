@@ -294,6 +294,86 @@ export async function runMeNotifications(
   );
 }
 
+interface WorkspaceActivity {
+  messageId: string;
+  topicId: string;
+  topicName: string;
+  meshId: string;
+  meshSlug: string;
+  meshName: string;
+  senderName: string;
+  senderMemberId: string;
+  snippet: string | null;
+  ciphertext: string | null;
+  bodyVersion: number;
+  createdAt: string;
+}
+
+interface WorkspaceActivityResponse {
+  activity: WorkspaceActivity[];
+  totals: { events: number };
+}
+
+export interface MeActivityFlags extends MeFlags {
+  since?: string;
+}
+
+export async function runMeActivity(flags: MeActivityFlags): Promise<number> {
+  return withRestKey(
+    {
+      meshSlug: flags.mesh ?? null,
+      purpose: "workspace-activity",
+      capabilities: ["read"],
+    },
+    async ({ secret }) => {
+      const params = new URLSearchParams();
+      if (flags.since) params.set("since", flags.since);
+      const path =
+        "/api/v1/me/activity" +
+        (params.toString() ? `?${params.toString()}` : "");
+      const ws = await request<WorkspaceActivityResponse>({
+        path,
+        token: secret,
+      });
+
+      if (flags.json) {
+        console.log(JSON.stringify(ws, null, 2));
+        return EXIT.SUCCESS;
+      }
+
+      render.section(
+        `${clay("activity")} — ${ws.totals.events} ${dim(
+          flags.since ? `since ${flags.since}` : "in the last 24h",
+        )}`,
+      );
+
+      if (ws.activity.length === 0) {
+        process.stdout.write(dim("  quiet — no activity in window\n"));
+        return EXIT.SUCCESS;
+      }
+
+      const slugWidth = Math.max(
+        ...ws.activity.map((a) => a.meshSlug.length),
+        6,
+      );
+
+      for (const a of ws.activity) {
+        const slug = dim(a.meshSlug.padEnd(slugWidth));
+        const topic = cyan(`#${a.topicName}`);
+        const sender = a.senderName ?? "?";
+        const ago = formatRelativeTime(a.createdAt);
+        const snippet =
+          a.snippet ?? (a.ciphertext ? dim("[encrypted]") : dim("[empty]"));
+        process.stdout.write(
+          `  ${slug}  ${topic}  ${dim(sender + " ·")} ${dim(ago)}\n` +
+            `     ${snippet.length > 200 ? snippet.slice(0, 200) + "…" : snippet}\n`,
+        );
+      }
+      return EXIT.SUCCESS;
+    },
+  );
+}
+
 function formatRelativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   const now = Date.now();

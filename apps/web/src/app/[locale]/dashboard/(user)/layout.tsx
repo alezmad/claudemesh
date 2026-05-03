@@ -36,6 +36,11 @@ const menu = [
         icon: Icons.Bell,
       },
       {
+        title: "activity",
+        href: pathsConfig.dashboard.user.activity,
+        icon: Icons.Activity,
+      },
+      {
         title: "invites",
         href: pathsConfig.dashboard.user.invites,
         icon: Icons.Link,

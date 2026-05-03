@@ -264,11 +264,21 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   `/dashboard/notifications` with a "show all" toggle, matching
   the universe page's mention card aesthetic. *Shipped 2026-05-03
   in CLI v1.12.0.*
-- **v0.4.0 phase 4+ — `me activity`, `me search`** — remaining
-  aggregating verbs over `/v1/me/*` mirroring the existing
-  per-mesh reads. Default aggregation rule for existing read verbs
-  (`task list`, `state list`, `memory recall`) when no `--mesh` is
-  passed.
+- **v0.4.0 phase 4 — `claudemesh me activity` + dashboard
+  parity** — `GET /v1/me/activity` returns recent topic messages
+  across every joined mesh in a 24h default window
+  (`?since=ISO`), excluding messages the caller authored
+  themselves ("what's happening that I missed"). CLI verb prints
+  a condensed feed; web `/dashboard/activity` clusters
+  consecutive messages from the same topic into thread blocks
+  with sender + relative timestamp. *Shipped 2026-05-03 in CLI
+  v1.13.0.*
+- **v0.4.0 phase 5 — `me search`** — final aggregating verb.
+  Cross-mesh full-text search across decrypted (v1) snippets +
+  topic names + sender names + memory entries. Default
+  aggregation rule for existing read verbs (`task list`, `state
+  list`, `memory recall`) when no `--mesh` is passed lands here
+  too.
 - **v0.3.2 — multi-session DM routing + broadcast self-loopback** —
   fixes two production bugs: (1) replies via `claudemesh send
   <from_id>` rejected with "no connected peer" when the sender's

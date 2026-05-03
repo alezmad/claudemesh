@@ -105,6 +105,7 @@ const pathsConfig = {
       },
       topics: `${DASHBOARD_PREFIX}/topics`,
       notifications: `${DASHBOARD_PREFIX}/notifications`,
+      activity: `${DASHBOARD_PREFIX}/activity`,
       invites: `${DASHBOARD_PREFIX}/invites`,
       settings: {
         index: `${DASHBOARD_PREFIX}/settings`,
