@@ -78,12 +78,14 @@ export const mesh = meshSchema.table("mesh", {
   id: text().primaryKey().notNull().$defaultFn(generateId),
   name: text().notNull(),
   /**
-   * Cosmetic slug derived from name at creation. NOT unique, NOT used for
-   * identity — `mesh.id` is the canonical identifier everywhere (URLs,
-   * invites, broker lookups). Kept for display/debugging only. Two meshes
-   * can freely share a slug.
+   * URL-safe identifier — globally unique across all meshes (constraint
+   * `mesh_slug_unique` on the DB). `mesh.id` (UUID) remains the canonical
+   * primary key for FKs and broker routing, but slug is the identifier
+   * users see and type (CLI picker, --mesh flag, dashboard sidebar).
+   * v0.7.0 collapsed this with mesh.name; both columns now hold the
+   * same value, and a follow-up migration drops mesh.name.
    */
-  slug: text().notNull(),
+  slug: text().notNull().unique(),
   ownerUserId: text()
     .references(() => user.id, { onDelete: "cascade", onUpdate: "cascade" })
     .notNull(),

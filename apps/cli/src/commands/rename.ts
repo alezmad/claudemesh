@@ -63,6 +63,7 @@ export async function rename(oldSlug: string, newSlug: string): Promise<number> 
       if (err.status === 401) return EXIT.AUTH_FAILED;
       if (err.status === 403) return EXIT.PERMISSION_DENIED;
       if (err.status === 404) return EXIT.NOT_FOUND;
+      if (err.status === 409) return EXIT.ALREADY_EXISTS;
       if (err.status === 400) return EXIT.INVALID_ARGS;
       return EXIT.INTERNAL_ERROR;
     }

@@ -130,11 +130,26 @@ export async function PATCH(
   // Soft-collapse: name and slug are a single concept user-facing,
   // so we always sync name = slug. mesh.name column stays for now
   // (avoids touching ~25 reader sites); a future migration drops it.
-  const [updated] = await db
-    .update(mesh)
-    .set({ slug: newSlug, name: newSlug })
-    .where(eq(mesh.slug, slug))
-    .returning({ slug: mesh.slug });
-
-  return NextResponse.json(updated);
+  //
+  // The DB has a unique constraint on mesh.slug (mesh_slug_unique)
+  // even though the schema comment incorrectly claims "NOT unique" —
+  // catch the duplicate-key error and surface it as 409 instead of
+  // a generic 500.
+  try {
+    const [updated] = await db
+      .update(mesh)
+      .set({ slug: newSlug, name: newSlug })
+      .where(eq(mesh.slug, slug))
+      .returning({ slug: mesh.slug });
+    return NextResponse.json(updated);
+  } catch (e) {
+    const err = e as { cause?: { constraint_name?: string; code?: string } };
+    if (err.cause?.constraint_name === "mesh_slug_unique" || err.cause?.code === "23505") {
+      return NextResponse.json(
+        { error: `slug "${newSlug}" is already taken` },
+        { status: 409 },
+      );
+    }
+    throw e;
+  }
 }
