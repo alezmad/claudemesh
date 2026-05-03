@@ -48,6 +48,7 @@ export async function withRestKey<T>(
     if (process.env.CLAUDEMESH_DEBUG_PROBE) {
       const probeUrls = [
         "https://claudemesh.com/api/v1/me/workspace",
+        "https://claudemesh.com/api/v1/me/ping",
         "https://claudemesh.com/api/v1/me/topics",
       ];
       for (const u of probeUrls) {
