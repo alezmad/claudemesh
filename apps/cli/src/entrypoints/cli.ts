@@ -159,6 +159,8 @@ Platform
   claudemesh vault list|delete                         encrypted secrets
   claudemesh watch list|remove                         URL change watchers
   claudemesh webhook list|delete                       outbound HTTP triggers
+  claudemesh file share <path> [--to peer]             upload (or local-host fast path if --to matches)
+  claudemesh file get <id> [--out path]                download by id
   claudemesh file list|status|delete                   shared mesh files
   claudemesh mesh-mcp list|call|catalog                deployed mesh-MCP servers
   claudemesh clock set|pause|resume                    mesh logical clock
@@ -576,10 +578,24 @@ async function main(): Promise<void> {
     case "file": {
       const sub = positionals[0];
       const f = { mesh: flags.mesh as string, json: !!flags.json };
-      if (sub === "list") { const { runFileList } = await import("~/commands/platform-actions.js"); process.exit(await runFileList({ ...f, query: positionals[1] })); }
+      if (sub === "share") {
+        const { runFileShare } = await import("~/commands/file.js");
+        process.exit(await runFileShare(positionals[1] ?? "", {
+          ...f,
+          to: flags.to as string | undefined,
+          tags: flags.tags as string | undefined,
+          message: flags.message as string | undefined,
+          upload: !!flags.upload,
+        }));
+      }
+      else if (sub === "get") {
+        const { runFileGet } = await import("~/commands/file.js");
+        process.exit(await runFileGet(positionals[1] ?? "", { ...f, out: flags.out as string | undefined }));
+      }
+      else if (sub === "list") { const { runFileList } = await import("~/commands/platform-actions.js"); process.exit(await runFileList({ ...f, query: positionals[1] })); }
       else if (sub === "status") { const { runFileStatus } = await import("~/commands/platform-actions.js"); process.exit(await runFileStatus(positionals[1] ?? "", f)); }
       else if (sub === "delete") { const { runFileDelete } = await import("~/commands/platform-actions.js"); process.exit(await runFileDelete(positionals[1] ?? "", f)); }
-      else { console.error("Usage: claudemesh file <list|status|delete>"); process.exit(EXIT.INVALID_ARGS); }
+      else { console.error("Usage: claudemesh file <share|get|list|status|delete>"); process.exit(EXIT.INVALID_ARGS); }
       break;
     }
     case "mesh-mcp": {

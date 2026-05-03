@@ -298,6 +298,26 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   default returns last 30d). CLI: omitting `--mesh` on each
   verb routes through the matching aggregator. *Shipped
   2026-05-03 in CLI v1.16.0.*
+- **v0.6.0 — `claudemesh file share / get` + same-host fast path** —
+  CLI parity for the file-sharing surface that was already on the
+  broker side (HTTP `/upload`, WS `get_file` / `list_files`) but
+  reachable only through MCP-style docstrings that referenced
+  unimplemented tools. Two new verbs:
+  - `claudemesh file share <path> [--to peer] [--message "..."] [--upload]`
+  - `claudemesh file get <id> [--out path]`
+  When `--to <peer>` resolves to a session running on the same
+  hostname, the CLI skips MinIO entirely and DMs the absolute
+  filepath — receiver reads it directly off disk. Saves bandwidth
+  and bucket space for the common "two Claude sessions on one
+  laptop" case. Falls back to encrypted upload when the target is
+  remote, when sharing with the whole mesh (no `--to`), or when
+  `--upload` forces it. Cap: 50 MB on the network path (broker-
+  enforced); same-host fast path has no cap (no bytes traverse).
+  Routes the DM by session pubkey (not displayName) so sibling
+  sessions of the same member work without tripping the v0.5.1
+  self-DM guard. Updates the MCP `instructions` block to
+  reference these CLI verbs instead of fictional `share_file()` /
+  `get_file()` tools. *Shipped 2026-05-03 in CLI v1.19.0.*
 - **v0.5.2 — `claudemesh skill` prints the bundled SKILL.md** —
   zero-install access for the protocol reference. SKILL.md is
   embedded into the CLI bundle at build time via Bun's

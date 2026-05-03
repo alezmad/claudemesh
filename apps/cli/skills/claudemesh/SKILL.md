@@ -451,11 +451,29 @@ claudemesh webhook delete <name>
 ### `file` — shared mesh files
 
 ```bash
-claudemesh file list [search-query]  # list files
-claudemesh file status <file-id>     # who has accessed
+claudemesh file share <path>                       # upload to mesh (visible to all members)
+claudemesh file share <path> --to <peer>           # share with one peer (same-host fast path if co-located)
+claudemesh file share <path> --to <peer> --message "see line 42"
+claudemesh file share <path> --upload              # force network upload, skip same-host fast path
+claudemesh file get <file-id>                      # download by id (saves to ./<name>)
+claudemesh file get <file-id> --out /tmp/foo.bin   # download to explicit path
+claudemesh file list [search-query]                # browse mesh files
+claudemesh file status <file-id>                   # who has accessed
 claudemesh file delete <file-id>
-# Upload + retrieval currently via MCP `share_file` / `get_file` (binary streams)
 ```
+
+**Same-host fast path** (v0.6.0+): when `--to <peer>` resolves to a session
+running on the same hostname as you, `claudemesh file share` skips MinIO
+entirely and sends a DM with the absolute filepath. The receiver reads it
+directly off disk. No 50 MB cap, no upload latency, nothing in the bucket.
+Falls back to encrypted upload when the peer is remote, or always when
+`--upload` is set. Routes by session pubkey, so sibling sessions of the
+same member work without tripping the self-DM guard.
+
+**Network upload cap**: 50 MB. Same-host fast path has no cap.
+
+**`--to` accepts**: display name, member pubkey, session pubkey, or any
+≥8-char prefix of a pubkey. Prefer pubkey when multiple peers share a name.
 
 ### `mesh-mcp` — call MCP servers other peers deployed to the mesh
 

@@ -324,11 +324,11 @@ If the channel meta contains \`subtype: reminder\`, this is a scheduled reminder
 | remember(content, tags?) | Store persistent knowledge with optional tags. |
 | recall(query) | Full-text search over mesh memory. |
 | forget(id) | Soft-delete a memory entry. |
-| share_file(path, name?, tags?) | Share a persistent file with the mesh. |
-| get_file(id, save_to) | Download a shared file to a local path. |
-| list_files(query?, from?) | Find files shared in the mesh. |
-| file_status(id) | Check who has accessed a file. |
-| delete_file(id) | Remove a shared file from the mesh. |
+| claudemesh file share <path> [--to peer] [--tags a,b] | Share a file with the mesh, or DM it to a specific peer. Same-host fast path: when --to matches a peer on this machine, sends an absolute filepath instead of uploading (no MinIO round-trip). |
+| claudemesh file get <id> [--out path] | Download a shared file by id. |
+| claudemesh file list [query] | Find files shared in the mesh. |
+| claudemesh file status <id> | Check who has accessed a file. |
+| claudemesh file delete <id> | Remove a shared file from the mesh. |
 | vector_store(collection, text, metadata?) | Store embedding in per-mesh Qdrant collection. |
 | vector_search(collection, query, limit?) | Semantic search over stored embeddings. |
 | vector_delete(collection, id) | Remove an embedding. |
