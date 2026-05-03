@@ -8,7 +8,7 @@ import {
   meshTopicMember,
   meshTopicMessage,
 } from "@turbostarter/db/schema/mesh";
-import { and, asc, count, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 
 import { pathsConfig } from "~/config/paths";
 import { getSession } from "~/lib/auth/server";
@@ -107,7 +107,7 @@ export default async function WorkspaceTopicsPage() {
           .where(
             and(
               inArray(meshTopicMessage.topicId, topicIds),
-              sql`${meshTopicMessage.senderMemberId} <> ALL(${myMemberIds})`,
+              notInArray(meshTopicMessage.senderMemberId, myMemberIds),
               or(
                 isNull(meshTopicMember.lastReadAt),
                 sql`${meshTopicMessage.createdAt} > ${meshTopicMember.lastReadAt}`,

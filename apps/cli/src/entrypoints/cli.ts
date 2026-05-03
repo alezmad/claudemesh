@@ -123,6 +123,7 @@ Topic  (conversation scope, v0.2.0)
   claudemesh topic tail <topic>    live SSE tail [--limit --forward-only]
   claudemesh topic post <t> <msg>  encrypted REST post (v0.3.0 v2) [--reply-to <id>]
   claudemesh send "#topic" "msg"   send to a topic (WS path, v1 plaintext)
+  claudemesh skill                 print the bundled SKILL.md to stdout
   claudemesh me                    cross-mesh workspace overview (v0.4.0)
   claudemesh me topics             cross-mesh topic list [--unread]
   claudemesh me notifications      cross-mesh @-mentions [--all] [--since=ISO]
@@ -538,10 +539,14 @@ async function main(): Promise<void> {
     case "skill": {
       const sub = positionals[0];
       const f = { mesh: flags.mesh as string, json: !!flags.json };
-      if (sub === "list") { const { runSkillList } = await import("~/commands/platform-actions.js"); process.exit(await runSkillList({ ...f, query: positionals[1] })); }
+      // No subcommand → print the bundled SKILL.md to stdout. Lets a
+      // fresh user pipe `claudemesh skill | claude --skill-add -`
+      // without copying anything into ~/.claude/skills (v1.18.0).
+      if (!sub) { const { runSkill } = await import("~/commands/skill.js"); process.exit(await runSkill()); }
+      else if (sub === "list") { const { runSkillList } = await import("~/commands/platform-actions.js"); process.exit(await runSkillList({ ...f, query: positionals[1] })); }
       else if (sub === "get") { const { runSkillGet } = await import("~/commands/platform-actions.js"); process.exit(await runSkillGet(positionals[1] ?? "", f)); }
       else if (sub === "remove") { const { runSkillRemove } = await import("~/commands/platform-actions.js"); process.exit(await runSkillRemove(positionals[1] ?? "", f)); }
-      else { console.error("Usage: claudemesh skill <list|get|remove>"); process.exit(EXIT.INVALID_ARGS); }
+      else { console.error("Usage: claudemesh skill              (print bundled SKILL.md)\n       claudemesh skill <list|get|remove>"); process.exit(EXIT.INVALID_ARGS); }
       break;
     }
     case "vault": {

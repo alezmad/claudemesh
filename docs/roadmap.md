@@ -298,6 +298,15 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   default returns last 30d). CLI: omitting `--mesh` on each
   verb routes through the matching aggregator. *Shipped
   2026-05-03 in CLI v1.16.0.*
+- **v0.5.2 — `claudemesh skill` prints the bundled SKILL.md** —
+  zero-install access for the protocol reference. SKILL.md is
+  embedded into the CLI bundle at build time via Bun's
+  text-import attribute, so `claudemesh skill` works on a
+  fresh `npm i -g` or the prebuilt binary without any
+  `~/.claude/skills/` setup. Pipe it: `claudemesh skill |
+  claude --skill-add -`. Existing `claudemesh skill <list|get|
+  remove>` subcommands (mesh-shared skills) preserved. *Shipped
+  2026-05-03 in CLI v1.18.0.*
 - **v0.5.1 — peer list self-marking + send self-DM guard** —
   `peer list` now tags rows from the caller's own member with
   `(this session)` or `(your other session)`, so a paste from

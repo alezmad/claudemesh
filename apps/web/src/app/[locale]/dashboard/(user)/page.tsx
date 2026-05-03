@@ -14,7 +14,7 @@ import {
   meshTopicMember,
   meshTopicMessage,
 } from "@turbostarter/db/schema/mesh";
-import { aliasedTable, and, count, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { aliasedTable, and, count, desc, eq, gt, inArray, isNull, notInArray, or, sql } from "drizzle-orm";
 
 import { appConfig } from "~/config/app";
 import { pathsConfig } from "~/config/paths";
@@ -110,7 +110,7 @@ export default async function UniversePage() {
           and(
             inArray(meshTopic.meshId, meshIds),
             isNull(meshTopic.archivedAt),
-            sql`${meshTopicMessage.senderMemberId} <> ALL(${myMemberIds})`,
+            notInArray(meshTopicMessage.senderMemberId, myMemberIds),
             or(
               isNull(meshTopicMember.lastReadAt),
               sql`${meshTopicMessage.createdAt} > ${meshTopicMember.lastReadAt}`,
