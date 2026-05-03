@@ -170,6 +170,45 @@ show to non-technical audiences. CLI v1.7.0 published to npm
 
 ---
 
+## v0.9.0 — *daemon foundation* — *shipped*
+
+The bridge release that lands the persistent local runtime without
+the v2.0.0 surgery. Existing flows (`claudemesh launch`, MCP, cold
+sends) keep working unchanged; opt-in by running `claudemesh daemon
+up` and the rest of the CLI starts routing through the local socket.
+
+- **`claudemesh daemon up`** — long-lived process holding one broker
+  WS per attached mesh, durable outbox/inbox in SQLite, IPC over UDS
+  (+ optional loopback TCP w/ bearer), SSE event stream.
+- **Caller-stable idempotency** — every send carries a
+  `client_message_id` and a canonical `request_fingerprint`
+  (sha256 over envelope shape). Broker persists both on
+  `mesh.message_queue` and echoes them on push. Receiving daemons
+  dedupe their inbox by `client_message_id`.
+- **§4.5.1 IPC duplicate-lookup table** — 11 cases × 5 statuses ×
+  match/mismatch covered by 15 unit tests.
+- **`claudemesh send` daemon routing** — daemon path tried first
+  when its UDS exists; falls back to bridge / cold path otherwise.
+  JSON output gains `via:"daemon"`.
+- **Service install** — `daemon install-service --mesh <slug>` writes
+  a launchd LaunchAgent on macOS / systemd-user unit on Linux.
+  Refuses CI envs unless `--allow-ci-persistent`.
+- **Outbox CLI** — `daemon outbox list [--failed|--pending|...]`,
+  `daemon outbox requeue <id>`. Atomic abort+insert with
+  `superseded_by` chain on requeue.
+- **Host-fingerprint pin** — `daemon accept-host` records a
+  sha256(machine-id || first-stable-mac) on first run; later restarts
+  refuse if the fingerprint shifts (accidental-clone detection).
+- **Sprint 7 deferred** — broker-side dedupe enforcement (partial
+  unique index on `(mesh_id, client_message_id)`,
+  `mesh.client_message_dedupe` atomic-accept table) intentionally
+  postponed; tracked at `.artifacts/shipped/2026-05-03-daemon-spec-
+  broker-hardening-followups.md`.
+
+Locked spec: `.artifacts/shipped/2026-05-03-daemon-spec-v0.9.0.md`.
+
+---
+
 ## v2.0.0 — *the daemon redesign*
 
 The single largest architectural shift. Promotes the persistent

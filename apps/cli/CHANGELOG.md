@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.22.0 (2026-05-03) — daemon v0.9.0
+
+### New: `claudemesh daemon` — long-lived peer mesh runtime
+
+Persistent local process that holds the broker WS, durable outbox/inbox in
+SQLite, IPC over UDS (+ optional loopback TCP with bearer token), and SSE
+event stream. Surrogates wire-up; `claudemesh send` and friends route
+through the daemon when its socket is present, falling back to the
+existing bridge / cold paths otherwise.
+
+Subcommands:
+- `daemon up|start [--mesh <slug>] [--name ...] [--no-tcp] [--public-health]`
+- `daemon status [--json]`, `daemon down|stop`, `daemon version`
+- `daemon outbox list [--failed|--pending|--inflight|--done]`
+- `daemon outbox requeue <id> [--new-client-id <id>]`
+- `daemon accept-host` (per-host fingerprint pin)
+- `daemon install-service --mesh <slug>` (macOS launchd / Linux systemd-user)
+- `daemon uninstall-service`
+
+Idempotency end-to-end:
+- Caller-stable `client_message_id` + canonical `request_fingerprint`
+  (sha256 of envelope_version || dest_kind || dest_ref || reply_to ||
+  priority || canonical_meta_json || body_hash) attach on every send.
+- Broker persists both on `mesh.message_queue` (migration 0028, additive
+  + nullable) and echoes them on push, so receiving daemons dedupe their
+  inbox by `client_message_id`.
+- §4.5.1 IPC duplicate-lookup table (11 cases × no-row / 5 statuses ×
+  match/mismatch) covered by 15 unit tests.
+
+Crash recovery:
+- Outbox row transitions: `pending` → `inflight` → `done` / `dead` /
+  `aborted`. `BEGIN IMMEDIATE` serializes daemon-local writes; the drain
+  worker is wakeable via promise-replacement and backs off failed sends.
+- Decrypt path tries session secret key, then member secret key, then
+  base64 fallback, so legacy unencrypted pushes still inbox cleanly.
+
+Sprint 7 (broker-side dedupe enforcement: partial unique index +
+`mesh.client_message_dedupe` atomic-accept table) is intentionally
+deferred — see `.artifacts/shipped/2026-05-03-daemon-spec-broker-
+hardening-followups.md`.
+
 ## 1.0.0-alpha.0 (2026-04-13)
 
 ### Architecture
