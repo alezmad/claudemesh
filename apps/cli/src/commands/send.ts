@@ -22,6 +22,11 @@ export interface SendFlags {
   mesh?: string;
   priority?: string;
   json?: boolean;
+  /** Allow sending to a target that resolves to one of the caller's
+   * own sessions. Off by default — trying to message your own
+   * sibling session is almost always an accident (copying a hex
+   * pubkey from `peer list` without realizing it was your own row). */
+  self?: boolean;
 }
 
 export async function runSend(flags: SendFlags, to: string, message: string): Promise<void> {
@@ -41,6 +46,23 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
   const meshSlug =
     flags.mesh ??
     (config.meshes.length === 1 ? config.meshes[0]!.slug : null);
+
+  // Self-DM safety check: if target is a 64-char hex that matches the
+  // caller's own member pubkey (or any of the caller's session/member
+  // entries), refuse without --self. Catches the common pasted-from-
+  // peer-list-not-realizing-it-was-mine footgun.
+  if (!flags.self && meshSlug) {
+    const joined = config.meshes.find((m) => m.slug === meshSlug);
+    if (joined && /^[0-9a-f]{64}$/i.test(to) && to.toLowerCase() === joined.pubkey.toLowerCase()) {
+      render.err(
+        `Target "${to.slice(0, 16)}…" is your own member pubkey on mesh "${meshSlug}".`,
+      );
+      render.hint(
+        "Pass --self to message a sibling session of your own member, or pick a different peer's pubkey.",
+      );
+      process.exit(1);
+    }
+  }
 
   // Warm path — only when mesh is unambiguous.
   if (meshSlug) {

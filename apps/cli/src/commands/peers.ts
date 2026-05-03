@@ -26,6 +26,10 @@ export interface PeersFlags {
 
 interface PeerRecord {
   pubkey: string;
+  /** Stable member pubkey (independent of session). When sender shares
+   * this with a peer, they're talking to the same person across all
+   * their open sessions. */
+  memberPubkey?: string;
   displayName: string;
   status?: string;
   summary?: string;
@@ -34,6 +38,13 @@ interface PeerRecord {
   channel?: string;
   model?: string;
   cwd?: string;
+  /** True when this peer is one of the caller's own member's sessions.
+   * Set in the cli (not the broker) by comparing memberPubkey against
+   * the caller's stable JoinedMesh.pubkey. */
+  isSelf?: boolean;
+  /** When isSelf is true, true if this is the exact session running
+   * the command (vs a sibling session of the same member). */
+  isThisSession?: boolean;
   [k: string]: unknown;
 }
 
@@ -52,19 +63,51 @@ function projectFields(record: PeerRecord, fields: string[]): Record<string, unk
 }
 
 async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
+  const config = readConfig();
+  const joined = config.meshes.find((m) => m.slug === slug);
+  const selfMemberPubkey = joined?.pubkey ?? null;
+
   // Try warm path first.
   const bridged = await tryBridge(slug, "peers");
   if (bridged && bridged.ok) {
-    return bridged.result as PeerRecord[];
+    const peers = bridged.result as PeerRecord[];
+    return peers.map((p) => annotateSelf(p, selfMemberPubkey, null));
   }
   // Cold path — open our own WS.
   let result: PeerRecord[] = [];
   await withMesh({ meshSlug: slug }, async (client) => {
-    const all = await client.listPeers();
-    const selfPubkey = client.getSessionPubkey();
-    result = (selfPubkey ? all.filter((p) => p.pubkey !== selfPubkey) : all) as unknown as PeerRecord[];
+    const all = (await client.listPeers()) as unknown as PeerRecord[];
+    const selfSessionPubkey = client.getSessionPubkey();
+    result = all.map((p) =>
+      annotateSelf(p, selfMemberPubkey, selfSessionPubkey),
+    );
   });
   return result;
+}
+
+/**
+ * Tag each peer record with `isSelf` / `isThisSession` so the renderer
+ * (and downstream code that picks targets, e.g. `claudemesh send`) can
+ * tell sender's own sessions from real peers. The broker has always
+ * surfaced a sender's siblings as separate rows because they're separate
+ * presence rows; the cli just hadn't been making that visible.
+ */
+function annotateSelf(
+  peer: PeerRecord,
+  selfMemberPubkey: string | null,
+  selfSessionPubkey: string | null,
+): PeerRecord {
+  const isSelf = !!(
+    selfMemberPubkey &&
+    peer.memberPubkey &&
+    peer.memberPubkey === selfMemberPubkey
+  );
+  const isThisSession = !!(
+    isSelf &&
+    selfSessionPubkey &&
+    peer.pubkey === selfSessionPubkey
+  );
+  return { ...peer, isSelf, isThisSession };
 }
 
 export async function runPeers(flags: PeersFlags): Promise<void> {
@@ -122,7 +165,14 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
         const metaStr = meta.length ? dim(` (${meta.join(", ")})`) : "";
         const summary = p.summary ? dim(`  — ${p.summary}`) : "";
         const pubkeyTag = dim(` · ${p.pubkey.slice(0, 16)}…`);
-        render.info(`${statusDot} ${name}${groups}${metaStr}${pubkeyTag}${summary}`);
+        const selfTag = p.isThisSession
+          ? dim(" ") + yellow("(this session)")
+          : p.isSelf
+            ? dim(" ") + yellow("(your other session)")
+            : "";
+        render.info(
+          `${statusDot} ${name}${selfTag}${groups}${metaStr}${pubkeyTag}${summary}`,
+        );
         if (p.cwd) render.info(dim(`   cwd: ${p.cwd}`));
       }
     } catch (e) {

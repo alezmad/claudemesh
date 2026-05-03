@@ -318,7 +318,7 @@ async function main(): Promise<void> {
 
     // Messaging
     case "peers": { const { runPeers } = await import("~/commands/peers.js"); await runPeers({ mesh: flags.mesh as string, json: flags.json as boolean | string | undefined }); break; }
-    case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json }, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
+    case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self }, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
     case "inbox": { const { runInbox } = await import("~/commands/inbox.js"); await runInbox({ json: !!flags.json }); break; }
     case "state": {
       const sub = positionals[0];

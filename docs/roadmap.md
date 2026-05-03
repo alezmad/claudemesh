@@ -298,6 +298,14 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   default returns last 30d). CLI: omitting `--mesh` on each
   verb routes through the matching aggregator. *Shipped
   2026-05-03 in CLI v1.16.0.*
+- **v0.5.1 — peer list self-marking + send self-DM guard** —
+  `peer list` now tags rows from the caller's own member with
+  `(this session)` or `(your other session)`, so a paste from
+  `peer list --json` doesn't silently target your own sibling.
+  `claudemesh send` rejects targets that resolve to the
+  caller's own member pubkey unless `--self` is passed. Closes
+  the "DM looped back to my own inbox" footgun reported on
+  v1.11.0. *Shipped 2026-05-03 in CLI v1.17.0.*
 - **v0.3.2 — multi-session DM routing + broadcast self-loopback** —
   fixes two production bugs: (1) replies via `claudemesh send
   <from_id>` rejected with "no connected peer" when the sender's
