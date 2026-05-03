@@ -219,7 +219,9 @@ async function runLaunchWizard(opts: {
     spinner.stop();
     const choice = await menuSelect({
       title: "Select mesh",
-      items: opts.meshes.map(m => m.slug),
+      items: opts.meshes.map((m) =>
+        m.name && m.name !== m.slug ? `${m.name}  \x1b[2m(${m.slug})\x1b[0m` : m.slug,
+      ),
       row,
     });
     mesh = opts.meshes[choice]!;
@@ -227,7 +229,8 @@ async function runLaunchWizard(opts: {
     for (let i = 0; i < opts.meshes.length + 1; i++) {
       writeCentered(row + i, " ");
     }
-    writeCentered(row, `Mesh      ${tGreen("✓")} ${mesh.slug}`);
+    const meshLabel = mesh.name && mesh.name !== mesh.slug ? `${mesh.name} (${mesh.slug})` : mesh.slug;
+    writeCentered(row, `Mesh      ${tGreen("✓")} ${meshLabel}`);
     spinner.start();
     row++;
   }
