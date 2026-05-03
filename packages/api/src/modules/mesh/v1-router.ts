@@ -731,6 +731,180 @@ export const v1Router = new Hono<Env>()
     });
   })
 
+  // GET /v1/me/search?q=... — cross-mesh full-text search.
+  //
+  // Matches against:
+  //   - topic names (every mesh the caller belongs to)
+  //   - sender display names (whose messages match)
+  //   - v1 message snippets (decoded base64 plaintext, ILIKE)
+  // v2 messages can only match by topic name / sender name —
+  // the server doesn't hold their topic keys. Limit 50 per
+  // category. Empty query returns empty arrays without an error
+  // so the dashboard can render the page on first load.
+  .get("/me/search", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+    const q = (c.req.query("q") ?? "").trim();
+    const limit = Math.min(
+      Math.max(parseInt(c.req.query("limit") ?? "50", 10) || 50, 1),
+      200,
+    );
+
+    const [issuer] = await db
+      .select({ userId: meshMember.userId })
+      .from(meshMember)
+      .where(eq(meshMember.id, key.issuedByMemberId));
+    if (!issuer?.userId) {
+      return c.json({ error: "issuer_member_has_no_user" }, 400);
+    }
+
+    if (q.length < 2) {
+      return c.json({
+        query: q,
+        topics: [],
+        messages: [],
+        totals: { topics: 0, messages: 0 },
+      });
+    }
+
+    const memberships = await db
+      .select({ memberId: meshMember.id, meshId: meshMember.meshId })
+      .from(meshMember)
+      .innerJoin(mesh, eq(mesh.id, meshMember.meshId))
+      .where(
+        and(
+          eq(meshMember.userId, issuer.userId),
+          isNull(meshMember.revokedAt),
+          isNull(mesh.archivedAt),
+        ),
+      );
+
+    if (memberships.length === 0) {
+      return c.json({
+        query: q,
+        topics: [],
+        messages: [],
+        totals: { topics: 0, messages: 0 },
+      });
+    }
+
+    const meshIds = memberships.map((m) => m.meshId);
+    const pattern = `%${q.toLowerCase()}%`;
+
+    const topicHits = await db
+      .select({
+        id: meshTopic.id,
+        name: meshTopic.name,
+        description: meshTopic.description,
+        meshId: meshTopic.meshId,
+        meshSlug: mesh.slug,
+        meshName: mesh.name,
+      })
+      .from(meshTopic)
+      .innerJoin(mesh, eq(mesh.id, meshTopic.meshId))
+      .where(
+        and(
+          inArray(meshTopic.meshId, meshIds),
+          isNull(meshTopic.archivedAt),
+          sql`lower(${meshTopic.name}) like ${pattern}`,
+        ),
+      )
+      .orderBy(asc(meshTopic.name))
+      .limit(limit);
+
+    // For message search we pull a wider window of recent messages
+    // and filter by ILIKE against the base64 ciphertext OR the
+    // decoded plaintext (for v1). PG can't decode base64 in a
+    // pattern match cheaply, so we fetch + filter in JS. 30-day
+    // window keeps the scan bounded.
+    const senderMember = aliasedTable(meshMember, "sender_member");
+    const messageWindow = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const candidates = await db
+      .select({
+        messageId: meshTopicMessage.id,
+        topicId: meshTopicMessage.topicId,
+        topicName: meshTopic.name,
+        meshId: meshTopic.meshId,
+        meshSlug: mesh.slug,
+        senderName: senderMember.displayName,
+        ciphertext: meshTopicMessage.ciphertext,
+        bodyVersion: meshTopicMessage.bodyVersion,
+        createdAt: meshTopicMessage.createdAt,
+      })
+      .from(meshTopicMessage)
+      .innerJoin(meshTopic, eq(meshTopic.id, meshTopicMessage.topicId))
+      .innerJoin(mesh, eq(mesh.id, meshTopic.meshId))
+      .leftJoin(
+        senderMember,
+        eq(senderMember.id, meshTopicMessage.senderMemberId),
+      )
+      .where(
+        and(
+          inArray(meshTopic.meshId, meshIds),
+          isNull(meshTopic.archivedAt),
+          gt(meshTopicMessage.createdAt, messageWindow),
+        ),
+      )
+      .orderBy(desc(meshTopicMessage.createdAt))
+      .limit(2000);
+
+    const decode = (b64: string) => {
+      try {
+        return Buffer.from(b64, "base64").toString("utf-8");
+      } catch {
+        return "";
+      }
+    };
+
+    const qLower = q.toLowerCase();
+    const messages: Array<{
+      messageId: string;
+      topicId: string;
+      topicName: string;
+      meshId: string;
+      meshSlug: string;
+      senderName: string;
+      snippet: string | null;
+      bodyVersion: number;
+      createdAt: string;
+    }> = [];
+    for (const r of candidates) {
+      const senderName = r.senderName ?? "?";
+      const snippet =
+        r.bodyVersion === 1 ? decode(r.ciphertext).slice(0, 240) : null;
+      const matched =
+        (snippet && snippet.toLowerCase().includes(qLower)) ||
+        senderName.toLowerCase().includes(qLower) ||
+        r.topicName.toLowerCase().includes(qLower);
+      if (!matched) continue;
+      messages.push({
+        messageId: r.messageId,
+        topicId: r.topicId,
+        topicName: r.topicName,
+        meshId: r.meshId,
+        meshSlug: r.meshSlug,
+        senderName,
+        snippet,
+        bodyVersion: r.bodyVersion,
+        createdAt: r.createdAt.toISOString(),
+      });
+      if (messages.length >= limit) break;
+    }
+
+    return c.json({
+      query: q,
+      topics: topicHits,
+      messages,
+      totals: {
+        topics: topicHits.length,
+        messages: messages.length,
+      },
+    });
+  })
+
   // GET /v1/me/topics — cross-mesh topic list for the caller's user.
   //
   // For each topic across every mesh the user belongs to, returns

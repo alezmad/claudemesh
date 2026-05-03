@@ -273,12 +273,23 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   consecutive messages from the same topic into thread blocks
   with sender + relative timestamp. *Shipped 2026-05-03 in CLI
   v1.13.0.*
-- **v0.4.0 phase 5 — `me search`** — final aggregating verb.
-  Cross-mesh full-text search across decrypted (v1) snippets +
-  topic names + sender names + memory entries. Default
-  aggregation rule for existing read verbs (`task list`, `state
-  list`, `memory recall`) when no `--mesh` is passed lands here
-  too.
+- **v0.4.0 phase 5 — `claudemesh me search` + dashboard parity**
+  — final aggregating verb. `GET /v1/me/search?q=...&limit=N`
+  matches against topic names + sender display names + v1
+  message snippets (server-side base64 decode + ILIKE). v2
+  messages match only on topic/sender (server doesn't hold their
+  topic keys). 30-day window for messages keeps the scan
+  bounded. CLI verb yellow-highlights matches inline; web
+  `/dashboard/search` adds a focused search input + `<mark>`
+  highlighting + 30-day scan note. *Shipped 2026-05-03 in CLI
+  v1.14.0.* v0.4.0 substrate is complete — every aggregating
+  read verb now has CLI + web parity.
+- **v0.5.0 — default-aggregation rule** for existing per-mesh
+  read verbs (`task list`, `state list`, `memory recall`,
+  `notification list`, `topic list`) — when no `--mesh` is
+  passed, route through the `/v1/me/*` aggregator instead of
+  prompting for a mesh. Backward-compatible: `--mesh foo` still
+  scopes to one mesh.
 - **v0.3.2 — multi-session DM routing + broadcast self-loopback** —
   fixes two production bugs: (1) replies via `claudemesh send
   <from_id>` rejected with "no connected peer" when the sender's

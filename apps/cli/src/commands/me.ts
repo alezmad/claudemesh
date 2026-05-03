@@ -374,6 +374,129 @@ export async function runMeActivity(flags: MeActivityFlags): Promise<number> {
   );
 }
 
+interface WorkspaceSearchTopicHit {
+  id: string;
+  name: string;
+  description: string | null;
+  meshId: string;
+  meshSlug: string;
+  meshName: string;
+}
+
+interface WorkspaceSearchMessageHit {
+  messageId: string;
+  topicId: string;
+  topicName: string;
+  meshId: string;
+  meshSlug: string;
+  senderName: string;
+  snippet: string | null;
+  bodyVersion: number;
+  createdAt: string;
+}
+
+interface WorkspaceSearchResponse {
+  query: string;
+  topics: WorkspaceSearchTopicHit[];
+  messages: WorkspaceSearchMessageHit[];
+  totals: { topics: number; messages: number };
+}
+
+export interface MeSearchFlags extends MeFlags {
+  query: string;
+}
+
+export async function runMeSearch(flags: MeSearchFlags): Promise<number> {
+  if (!flags.query || flags.query.length < 2) {
+    process.stderr.write(
+      "Usage: claudemesh me search <query> (min 2 chars)\n",
+    );
+    return EXIT.INVALID_ARGS;
+  }
+
+  return withRestKey(
+    {
+      meshSlug: flags.mesh ?? null,
+      purpose: "workspace-search",
+      capabilities: ["read"],
+    },
+    async ({ secret }) => {
+      const params = new URLSearchParams({ q: flags.query });
+      const ws = await request<WorkspaceSearchResponse>({
+        path: `/api/v1/me/search?${params.toString()}`,
+        token: secret,
+      });
+
+      if (flags.json) {
+        console.log(JSON.stringify(ws, null, 2));
+        return EXIT.SUCCESS;
+      }
+
+      render.section(
+        `${clay("search")} — "${flags.query}"  ${dim(
+          `${ws.totals.topics} topic${ws.totals.topics === 1 ? "" : "s"}, ` +
+            `${ws.totals.messages} message${ws.totals.messages === 1 ? "" : "s"}`,
+        )}`,
+      );
+
+      if (ws.topics.length === 0 && ws.messages.length === 0) {
+        process.stdout.write(dim("  no matches\n"));
+        return EXIT.SUCCESS;
+      }
+
+      if (ws.topics.length > 0) {
+        process.stdout.write(dim("\n  topics\n"));
+        const slugWidth = Math.max(
+          ...ws.topics.map((t) => t.meshSlug.length),
+          6,
+        );
+        for (const t of ws.topics) {
+          const slug = dim(t.meshSlug.padEnd(slugWidth));
+          const name = cyan(`#${t.name}`);
+          const desc = t.description ? dim(` — ${t.description}`) : "";
+          process.stdout.write(`  ${slug}  ${name}${desc}\n`);
+        }
+      }
+
+      if (ws.messages.length > 0) {
+        process.stdout.write(dim("\n  messages\n"));
+        const slugWidth = Math.max(
+          ...ws.messages.map((m) => m.meshSlug.length),
+          6,
+        );
+        for (const m of ws.messages) {
+          const slug = dim(m.meshSlug.padEnd(slugWidth));
+          const topic = cyan(`#${m.topicName}`);
+          const sender = m.senderName;
+          const ago = formatRelativeTime(m.createdAt);
+          const snippet =
+            m.snippet ??
+            (m.bodyVersion === 2 ? dim("[encrypted — open the topic to decrypt]") : dim("[empty]"));
+          const highlighted =
+            m.snippet
+              ? highlightMatch(snippet, flags.query)
+              : snippet;
+          process.stdout.write(
+            `  ${slug}  ${topic}  ${dim(sender + " ·")} ${dim(ago)}\n` +
+              `     ${highlighted}\n`,
+          );
+        }
+      }
+      return EXIT.SUCCESS;
+    },
+  );
+}
+
+function highlightMatch(text: string, query: string): string {
+  if (!query) return text;
+  const idx = text.toLowerCase().indexOf(query.toLowerCase());
+  if (idx === -1) return text;
+  const before = text.slice(0, idx);
+  const match = text.slice(idx, idx + query.length);
+  const after = text.slice(idx + query.length);
+  return `${before}${yellow(match)}${after}`;
+}
+
 function formatRelativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   const now = Date.now();

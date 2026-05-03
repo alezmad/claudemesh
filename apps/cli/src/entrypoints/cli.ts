@@ -127,6 +127,7 @@ Topic  (conversation scope, v0.2.0)
   claudemesh me topics             cross-mesh topic list [--unread]
   claudemesh me notifications      cross-mesh @-mentions [--all] [--since=ISO]
   claudemesh me activity           cross-mesh recent messages [--since=ISO]
+  claudemesh me search <q>         cross-mesh search (topics + messages)
   claudemesh member list           mesh roster with online state [--online]
   claudemesh notification list     recent @-mentions of you [--since <ISO>]
 
@@ -706,6 +707,10 @@ async function main(): Promise<void> {
             since: flags.since as string | undefined,
           }),
         );
+      } else if (sub === "search") {
+        const { runMeSearch } = await import("~/commands/me.js");
+        const query = positionals.slice(1).join(" ").trim();
+        process.exit(await runMeSearch({ ...f, query }));
       } else {
         console.error(
           "Usage: claudemesh me                   (cross-mesh overview)\n" +
@@ -715,7 +720,8 @@ async function main(): Promise<void> {
             "       claudemesh me notifications --all       (include already-read)\n" +
             "       claudemesh me notifications --since=ISO (custom window)\n" +
             "       claudemesh me activity          (recent messages, last 24h)\n" +
-            "       claudemesh me activity --since=ISO      (custom window)",
+            "       claudemesh me activity --since=ISO      (custom window)\n" +
+            "       claudemesh me search <query>    (cross-mesh search)",
         );
         process.exit(EXIT.INVALID_ARGS);
       }
