@@ -41,8 +41,9 @@ export async function request<T = unknown>(opts: RequestOpts): Promise<T> {
     });
 
     if (!res.ok) {
-      let body: unknown;
-      try { body = await res.json(); } catch { body = await res.text(); }
+      const text = await res.text();
+      let body: unknown = text;
+      try { body = JSON.parse(text); } catch { /* leave as text */ }
       throw new ApiError(res.status, res.statusText, body);
     }
 

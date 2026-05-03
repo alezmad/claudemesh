@@ -39,7 +39,7 @@ import {
   messageQueue,
   presence,
 } from "@turbostarter/db/schema/mesh";
-import { and, asc, count, desc, eq, gt, inArray, isNull, lt, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, isNull, lt, notInArray, sql } from "drizzle-orm";
 
 import { validate } from "../../middleware";
 import {
@@ -596,10 +596,7 @@ export const v1Router = new Hono<Env>()
         and(
           inArray(meshTopicMessage.topicId, topicIds),
           sql`${meshTopicMessage.createdAt} > COALESCE(${meshTopicMember.lastReadAt}, '1970-01-01'::timestamp)`,
-          sql`${meshTopicMessage.senderMemberId} NOT IN (${sql.join(
-            myMemberIds.map((id) => sql`${id}`),
-            sql`, `,
-          )})`,
+          notInArray(meshTopicMessage.senderMemberId, myMemberIds),
         ),
       )
       .groupBy(meshTopicMessage.topicId);
@@ -688,7 +685,7 @@ export const v1Router = new Hono<Env>()
         )
         .where(
           and(
-            sql`${meshTopicMessage.topicId} = ANY(${topicIds})`,
+            inArray(meshTopicMessage.topicId, topicIds),
             sql`${meshTopicMessage.createdAt} > COALESCE(${meshTopicMember.lastReadAt}, '1970-01-01'::timestamp)`,
             sql`${meshTopicMessage.senderMemberId} <> ${key.issuedByMemberId}`,
           ),
