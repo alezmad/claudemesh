@@ -14,6 +14,7 @@
 import { withMesh } from "./connect.js";
 import { readConfig } from "~/services/config/facade.js";
 import { tryBridge } from "~/services/bridge/client.js";
+import { trySendViaDaemon } from "~/services/bridge/daemon-route.js";
 import type { Priority } from "~/services/broker/facade.js";
 import { render } from "~/ui/render.js";
 import { dim } from "~/ui/styles.js";
@@ -62,6 +63,26 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
       );
       process.exit(1);
     }
+  }
+
+  // Daemon path — preferred when a long-lived daemon is local. UDS at
+  // ~/.claudemesh/daemon/daemon.sock; ~1ms round-trip; persists outbox
+  // across CLI invocations so a `claudemesh send` survives a daemon
+  // crash via the on-disk outbox.
+  {
+    const dr = await trySendViaDaemon({ to, message, priority, expectedMesh: meshSlug ?? undefined });
+    if (dr !== null) {
+      if (dr.ok) {
+        if (flags.json) console.log(JSON.stringify({ ok: true, messageId: dr.messageId, target: to, via: "daemon", duplicate: !!dr.duplicate }));
+        else render.ok(`sent to ${to} (daemon)`, dr.messageId ? dim(dr.messageId.slice(0, 8)) : undefined);
+        return;
+      }
+      // Daemon answered but rejected (409 idempotency, 400 schema). Surface; do not fall through.
+      if (flags.json) console.log(JSON.stringify({ ok: false, error: dr.error, via: "daemon" }));
+      else render.err(`send failed (daemon): ${dr.error}`);
+      process.exit(1);
+    }
+    // dr === null → daemon not running; fall through to bridge.
   }
 
   // Warm path — only when mesh is unambiguous.

@@ -377,6 +377,30 @@ async function main(): Promise<void> {
     case "logout": { const { logout } = await import("~/commands/logout.js"); process.exit(await logout()); break; }
     case "whoami": { const { whoami } = await import("~/commands/whoami.js"); process.exit(await whoami({ json: !!flags.json })); break; }
 
+    // Daemon (v0.9.0)
+    case "daemon": {
+      const { runDaemonCommand } = await import("~/commands/daemon.js");
+      const sub = positionals[0];
+      const rest = positionals.slice(1);
+      const outboxStatus =
+        flags.failed   ? "dead"     :
+        flags.pending  ? "pending"  :
+        flags.inflight ? "inflight" :
+        flags.done     ? "done"     :
+        flags.aborted  ? "aborted"  : undefined;
+      const code = await runDaemonCommand(sub, {
+        json: !!flags.json,
+        noTcp: !!flags["no-tcp"],
+        publicHealth: !!flags["public-health"],
+        mesh: flags.mesh as string | undefined,
+        displayName: flags.name as string | undefined,
+        outboxStatus,
+        newClientId: flags["new-client-id"] as string | undefined,
+      }, rest);
+      process.exit(code);
+      break;
+    }
+
     // Setup
     case "install": { const { runInstall } = await import("~/commands/install.js"); runInstall(positionals); break; }
     case "uninstall": { const { uninstall } = await import("~/commands/uninstall.js"); process.exit(await uninstall()); break; }
