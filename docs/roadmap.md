@@ -247,12 +247,19 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   over per-mesh apikeys — zero broker / protocol changes; per-mesh
   trust boundaries preserved. *Shipped 2026-05-02 in CLI v1.10.0.*
   Spec at `.artifacts/specs/2026-05-02-workspace-view.md`.
-- **v0.4.0 phase 2+ — `me topics`, `me notifications`, `me
-  activity`, `me search`** — additional aggregating verbs over
-  `/v1/me/*` mirroring the existing per-mesh reads. Default
-  aggregation rule for existing read verbs (`notification list`,
-  `topic list`, `task list`, `state list`, `memory recall`) when no
-  `--mesh` is passed.
+- **v0.4.0 phase 2 — `claudemesh me topics` + dashboard parity**
+  — `GET /v1/me/topics` aggregates topics across every mesh the
+  caller belongs to with per-topic unread counts and last-message
+  timestamps, sorted by activity. CLI verb renders the feed with
+  `--unread` filter and `--json` output. Web dashboard adds a
+  matching `/dashboard/topics` page (SSR, direct DB) with a Topics
+  entry in the sidebar between Meshes and Invites. *Shipped
+  2026-05-03 in CLI v1.11.0.*
+- **v0.4.0 phase 3+ — `me notifications`, `me activity`, `me
+  search`** — additional aggregating verbs over `/v1/me/*`
+  mirroring the existing per-mesh reads. Default aggregation rule
+  for existing read verbs (`notification list`, `task list`, `state
+  list`, `memory recall`) when no `--mesh` is passed.
 - **v0.3.2 — multi-session DM routing + broadcast self-loopback** —
   fixes two production bugs: (1) replies via `claudemesh send
   <from_id>` rejected with "no connected peer" when the sender's

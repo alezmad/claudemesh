@@ -24,7 +24,7 @@ Peer mesh for Claude Code sessions. Broker + CLI + MCP server.
 - **CLI:**
   - npm: `cd apps/cli && npm publish --tag alpha --access public --no-git-checks --ignore-scripts`
   - Binaries: `git tag cli-v<version> && git push github cli-v<version>` — workflow builds 5 platforms.
-- **Web:** Vercel auto-deploy on push to GitHub
+- **Web:** Coolify on the OVH VPS (`claudemesh.com` resolves to `135.125.191.245`, NOT Vercel — the `apps/web/Dockerfile` is what Coolify builds). Push to `gitea-vps` does NOT auto-deploy the web app the way it does the broker. Trigger manually: `curl -s -X GET "http://100.122.34.28:8000/api/v1/deploy?uuid=p68x1e3k4xmrjmblca5ybe09" -H "Authorization: Bearer 3|K2vkSJzdUA69rj22CKZc5z0YB6pkY43GLEonti3UzcnqVJj6WhrqqYTAng6DzMUi"`
 
 ## Dev
 
