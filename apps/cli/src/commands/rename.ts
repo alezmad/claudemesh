@@ -1,6 +1,7 @@
 import { rename as renameMesh } from "~/services/mesh/facade.js";
 import { getStoredToken } from "~/services/auth/facade.js";
 import { ApiError } from "~/services/api/facade.js";
+import { readConfig, setMeshConfig } from "~/services/config/facade.js";
 import { bold, dim, green, icons } from "~/ui/styles.js";
 import { EXIT } from "~/constants/exit-codes.js";
 
@@ -19,7 +20,13 @@ export async function rename(slug: string, newName: string): Promise<number> {
 
   try {
     await renameMesh(slug, newName);
+    // Sync the new name into local config so launch / picker
+    // reflect the change without waiting for the next sync.
+    const cfg = readConfig();
+    const local = cfg.meshes.find((m) => m.slug === slug);
+    if (local) setMeshConfig(slug, { ...local, name: newName });
     console.log(`  ${green(icons.check)} Renamed "${slug}" to "${newName}"`);
+    console.log(`  ${dim("(slug stays \"" + slug + "\" — only the display name changed)")}`);
     return EXIT.SUCCESS;
   } catch (err) {
     if (err instanceof ApiError) {

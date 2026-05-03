@@ -49,7 +49,8 @@ async function pickMesh(meshes: JoinedMesh[]): Promise<JoinedMesh> {
 
   console.log("\n  Select mesh:");
   meshes.forEach((m, i) => {
-    console.log(`    ${i + 1}) ${m.slug}`);
+    const label = m.name && m.name !== m.slug ? `${m.name}  \x1b[2m(${m.slug})\x1b[0m` : m.slug;
+    console.log(`    ${i + 1}) ${label}`);
   });
   console.log("");
 
