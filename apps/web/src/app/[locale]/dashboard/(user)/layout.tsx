@@ -31,6 +31,11 @@ const menu = [
         icon: Icons.MessageSquare,
       },
       {
+        title: "notifications",
+        href: pathsConfig.dashboard.user.notifications,
+        icon: Icons.Bell,
+      },
+      {
         title: "invites",
         href: pathsConfig.dashboard.user.invites,
         icon: Icons.Link,

@@ -200,6 +200,100 @@ export async function runMeTopics(flags: MeTopicsFlags): Promise<number> {
   );
 }
 
+interface WorkspaceNotification {
+  notificationId: string;
+  messageId: string;
+  topicId: string;
+  topicName: string;
+  meshId: string;
+  meshSlug: string;
+  meshName: string;
+  senderName: string | null;
+  snippet: string | null;
+  ciphertext: string | null;
+  bodyVersion: number;
+  read: boolean;
+  readAt: string | null;
+  createdAt: string;
+}
+
+interface WorkspaceNotificationsResponse {
+  notifications: WorkspaceNotification[];
+  totals: { unread: number; total: number };
+}
+
+export interface MeNotificationsFlags extends MeFlags {
+  all?: boolean;
+  since?: string;
+}
+
+export async function runMeNotifications(
+  flags: MeNotificationsFlags,
+): Promise<number> {
+  return withRestKey(
+    {
+      meshSlug: flags.mesh ?? null,
+      purpose: "workspace-notifications",
+      capabilities: ["read"],
+    },
+    async ({ secret }) => {
+      const params = new URLSearchParams();
+      if (flags.all) params.set("include", "all");
+      if (flags.since) params.set("since", flags.since);
+      const path =
+        "/api/v1/me/notifications" +
+        (params.toString() ? `?${params.toString()}` : "");
+      const ws = await request<WorkspaceNotificationsResponse>({
+        path,
+        token: secret,
+      });
+
+      if (flags.json) {
+        console.log(JSON.stringify(ws, null, 2));
+        return EXIT.SUCCESS;
+      }
+
+      const headerLabel = flags.all ? "@-mentions (all)" : "@-mentions (unread)";
+      render.section(
+        `${clay(headerLabel)} — ${ws.totals.total} ${dim(
+          ws.totals.unread > 0 ? `· ${ws.totals.unread} unread` : "· nothing pending",
+        )}`,
+      );
+
+      if (ws.notifications.length === 0) {
+        process.stdout.write(
+          dim(
+            flags.all
+              ? "  no @-mentions in window\n"
+              : "  inbox zero — nothing waiting\n",
+          ),
+        );
+        return EXIT.SUCCESS;
+      }
+
+      const slugWidth = Math.max(
+        ...ws.notifications.map((n) => n.meshSlug.length),
+        6,
+      );
+
+      for (const n of ws.notifications) {
+        const slug = dim(n.meshSlug.padEnd(slugWidth));
+        const topic = cyan(`#${n.topicName}`);
+        const sender = n.senderName ? `from ${n.senderName}` : "from ?";
+        const ago = formatRelativeTime(n.createdAt);
+        const dot = n.read ? dim("·") : yellow("●");
+        const snippet =
+          n.snippet ?? (n.ciphertext ? dim("[encrypted]") : dim("[empty]"));
+        process.stdout.write(
+          `  ${dot}  ${slug}  ${topic}  ${dim(sender)}  ${dim(ago)}\n` +
+            `     ${snippet.length > 200 ? snippet.slice(0, 200) + "…" : snippet}\n`,
+        );
+      }
+      return EXIT.SUCCESS;
+    },
+  );
+}
+
 function formatRelativeTime(iso: string): string {
   const then = new Date(iso).getTime();
   const now = Date.now();

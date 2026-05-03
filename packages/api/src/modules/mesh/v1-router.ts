@@ -39,7 +39,7 @@ import {
   messageQueue,
   presence,
 } from "@turbostarter/db/schema/mesh";
-import { and, asc, count, desc, eq, gt, inArray, isNull, lt, notInArray, sql } from "drizzle-orm";
+import { aliasedTable, and, asc, count, desc, eq, gt, inArray, isNull, lt, notInArray, sql } from "drizzle-orm";
 
 import { validate } from "../../middleware";
 import {
@@ -492,6 +492,133 @@ export const v1Router = new Hono<Env>()
         online: meshes.reduce((a, m) => a + m.online, 0),
         topics: meshes.reduce((a, m) => a + m.topics, 0),
         unreadMentions: meshes.reduce((a, m) => a + m.unreadMentions, 0),
+      },
+    });
+  })
+
+  // GET /v1/me/notifications — cross-mesh @-mention feed.
+  //
+  // Returns recent unread notifications (default) or all notifications
+  // (?include=all) targeting the caller's member rows across every
+  // joined mesh. Each row carries mesh + topic + sender context plus a
+  // 240-char ciphertext-base64 snippet (clients decrypt under the
+  // topic key they already cached). 7-day window keeps the response
+  // bounded; use ?since=<iso> to override.
+  .get("/me/notifications", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    if (!key.issuedByMemberId) {
+      return c.json({ error: "api_key_has_no_issuer" }, 400);
+    }
+    const [issuer] = await db
+      .select({ userId: meshMember.userId })
+      .from(meshMember)
+      .where(eq(meshMember.id, key.issuedByMemberId));
+    if (!issuer?.userId) {
+      return c.json({ error: "issuer_member_has_no_user" }, 400);
+    }
+
+    const memberships = await db
+      .select({ memberId: meshMember.id })
+      .from(meshMember)
+      .innerJoin(mesh, eq(mesh.id, meshMember.meshId))
+      .where(
+        and(
+          eq(meshMember.userId, issuer.userId),
+          isNull(meshMember.revokedAt),
+          isNull(mesh.archivedAt),
+        ),
+      );
+
+    if (memberships.length === 0) {
+      return c.json({
+        notifications: [],
+        totals: { unread: 0, total: 0 },
+      });
+    }
+
+    const myMemberIds = memberships.map((m) => m.memberId);
+    const includeAll = c.req.query("include") === "all";
+    const sinceParam = c.req.query("since");
+    const sinceDate = sinceParam
+      ? new Date(sinceParam)
+      : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const senderMember = aliasedTable(meshMember, "sender_member");
+    const where = and(
+      inArray(meshNotification.recipientMemberId, myMemberIds),
+      isNull(meshTopic.archivedAt),
+      gt(meshTopicMessage.createdAt, sinceDate),
+      ...(includeAll ? [] : [isNull(meshNotification.readAt)]),
+    );
+
+    const rows = await db
+      .select({
+        notificationId: meshNotification.id,
+        messageId: meshTopicMessage.id,
+        topicId: meshTopicMessage.topicId,
+        topicName: meshTopic.name,
+        meshId: meshTopic.meshId,
+        meshSlug: mesh.slug,
+        meshName: mesh.name,
+        senderName: senderMember.displayName,
+        senderMemberId: senderMember.id,
+        ciphertext: meshTopicMessage.ciphertext,
+        bodyVersion: meshTopicMessage.bodyVersion,
+        readAt: meshNotification.readAt,
+        createdAt: meshTopicMessage.createdAt,
+      })
+      .from(meshNotification)
+      .innerJoin(
+        meshTopicMessage,
+        eq(meshTopicMessage.id, meshNotification.messageId),
+      )
+      .innerJoin(meshTopic, eq(meshTopic.id, meshNotification.topicId))
+      .innerJoin(mesh, eq(mesh.id, meshTopic.meshId))
+      .innerJoin(
+        senderMember,
+        eq(senderMember.id, meshNotification.senderMemberId),
+      )
+      .where(where)
+      .orderBy(desc(meshTopicMessage.createdAt))
+      .limit(100);
+
+    const decode = (b64: string) => {
+      try {
+        return Buffer.from(b64, "base64").toString("utf-8");
+      } catch {
+        return "";
+      }
+    };
+
+    const notifications = rows.map((r) => ({
+      notificationId: r.notificationId,
+      messageId: r.messageId,
+      topicId: r.topicId,
+      topicName: r.topicName,
+      meshId: r.meshId,
+      meshSlug: r.meshSlug,
+      meshName: r.meshName,
+      senderName: r.senderName,
+      // For v1 (plaintext-base64) messages, surface a decoded snippet so
+      // CLI/dashboard can render it without doing crypto. v2 messages
+      // ship ciphertext only — the client decrypts with the topic key.
+      snippet:
+        r.bodyVersion === 1 ? decode(r.ciphertext).slice(0, 240) : null,
+      ciphertext: r.bodyVersion === 2 ? r.ciphertext : null,
+      bodyVersion: r.bodyVersion,
+      read: !!r.readAt,
+      readAt: r.readAt ? r.readAt.toISOString() : null,
+      createdAt: r.createdAt.toISOString(),
+    }));
+
+    const unreadCount = notifications.filter((n) => !n.read).length;
+
+    return c.json({
+      notifications,
+      totals: {
+        unread: unreadCount,
+        total: notifications.length,
       },
     });
   })

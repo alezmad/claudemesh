@@ -125,6 +125,7 @@ Topic  (conversation scope, v0.2.0)
   claudemesh send "#topic" "msg"   send to a topic (WS path, v1 plaintext)
   claudemesh me                    cross-mesh workspace overview (v0.4.0)
   claudemesh me topics             cross-mesh topic list [--unread]
+  claudemesh me notifications      cross-mesh @-mentions [--all] [--since=ISO]
   claudemesh member list           mesh roster with online state [--online]
   claudemesh notification list     recent @-mentions of you [--since <ISO>]
 
@@ -687,11 +688,23 @@ async function main(): Promise<void> {
       } else if (sub === "topics") {
         const { runMeTopics } = await import("~/commands/me.js");
         process.exit(await runMeTopics({ ...f, unread: !!flags.unread }));
+      } else if (sub === "notifications" || sub === "notifs") {
+        const { runMeNotifications } = await import("~/commands/me.js");
+        process.exit(
+          await runMeNotifications({
+            ...f,
+            all: !!flags.all,
+            since: flags.since as string | undefined,
+          }),
+        );
       } else {
         console.error(
-          "Usage: claudemesh me            (cross-mesh overview)\n" +
-            "       claudemesh me topics     (cross-mesh topic list)\n" +
-            "       claudemesh me topics --unread  (only unread topics)",
+          "Usage: claudemesh me                   (cross-mesh overview)\n" +
+            "       claudemesh me topics            (cross-mesh topic list)\n" +
+            "       claudemesh me topics --unread   (only unread topics)\n" +
+            "       claudemesh me notifications     (unread @-mentions, last 7d)\n" +
+            "       claudemesh me notifications --all       (include already-read)\n" +
+            "       claudemesh me notifications --since=ISO (custom window)",
         );
         process.exit(EXIT.INVALID_ARGS);
       }
