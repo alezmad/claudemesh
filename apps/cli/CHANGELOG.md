@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.24.0 (2026-05-03) — daemon required + thin MCP shim
+
+The architectural convergence v0.9.0 was building toward.
+
+### Daemon promoted from optional to required (for in-Claude-Code use)
+
+The CLI itself (`claudemesh send`, `peer list`, `inbox`, `vault`, `watch`,
+`webhook`, etc.) keeps working without a daemon. But the MCP server —
+which provides Claude Code's mid-turn channel push, slash commands, and
+resource browser — now requires the daemon. There is no fallback.
+
+- `claudemesh install` auto-installs and starts the daemon service
+  (launchd / systemd-user) for the user's primary mesh. Pass
+  `--no-service` to opt out.
+- `claudemesh launch` ensures the daemon is running before spawning
+  Claude Code; spawns it foreground if absent.
+- The MCP shim probes `~/.claudemesh/daemon/daemon.sock` at boot. If
+  missing after a 2s grace window, it bails with actionable instructions
+  ("run `claudemesh daemon up --mesh <slug>`").
+
+### MCP server: 979 → ~300 LoC of push-pipe code
+
+`apps/cli/src/mcp/server.ts` is now a thin daemon-SSE translator. It
+no longer holds a broker WebSocket, decrypts messages, manages mesh
+state, or runs reconnection logic. All of that is the daemon's job.
+
+- Subscribes to daemon `/v1/events` SSE; translates each `message`
+  event into a `notifications/claude/channel` emit.
+- Sources mesh-published skills via daemon `/v1/skills` IPC for
+  ListPrompts / GetPrompt / ListResources / ReadResource.
+- ListTools returns `[]` (the CLI is the API, taught via the bundled
+  skill).
+- The mesh-service proxy mode (`claudemesh-cli --service <name>`,
+  the sub-MCP-server for proxying a deployed mesh-MCP service) is
+  unchanged — separate code path, different lifecycle.
+
+Bundle size: MCP entry dropped from 154KB → 104KB (gzipped 34KB → 19KB).
+
+### Daemon SSE event payload extended
+
+`message` events on `/v1/events` now include plaintext-decrypted body,
+sender member pubkey, priority, and subtype — everything the MCP shim
+needs to render a complete channel notification without going back to
+the broker.
+
+### Daemon IPC: GET /v1/skills (list) and GET /v1/skills/:name (get)
+
+The daemon exposes mesh-published skills over IPC so the MCP shim can
+surface them as MCP prompts/resources without holding its own broker
+WS. Same wire format as before from Claude Code's perspective.
+
+### Why this is the right architecture
+
+MCP and the daemon are no longer independent broker clients with
+duplicated WS, decrypt, and dedupe logic. The daemon owns the broker
+relationship; MCP is a Claude-Code-specific UX adapter that reads from
+the daemon. Industry-normal shape (Tailscale, Slack, Ollama, Docker)
+where the long-lived runtime is required and the per-app integrations
+attach to it.
+
 ## 1.23.0 (2026-05-03) — close the CLI surface, prune dead MCP stubs
 
 Three previously-MCP-only write verbs land on the CLI, closing every

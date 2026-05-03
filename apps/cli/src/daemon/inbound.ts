@@ -44,11 +44,14 @@ export async function handleBrokerPush(msg: Record<string, unknown>, ctx: Inboun
   const brokerMessageId = stringOrNull(msg.messageId);
   const senderPubkey    = stringOrNull(msg.senderPubkey)    ?? "";
   const senderName      = stringOrNull(msg.senderName)      ?? senderPubkey.slice(0, 8);
+  const senderMemberPk  = stringOrNull(msg.senderMemberPubkey);
   const topic           = stringOrNull(msg.topic);
   const replyToId       = stringOrNull(msg.replyToId);
   const ciphertext      = stringOrNull(msg.ciphertext)      ?? "";
   const nonce           = stringOrNull(msg.nonce)           ?? "";
   const createdAt       = stringOrNull(msg.createdAt);
+  const priority        = stringOrNull(msg.priority) ?? "next";
+  const subtype         = stringOrNull(msg.subtype);
   // Forward-compat: Sprint 7 brokers will send client_message_id alongside.
   const clientMessageId = stringOrNull(msg.client_message_id) ?? brokerMessageId ?? randomUUID();
   const body            = await decryptOrFallback({
@@ -78,9 +81,12 @@ export async function handleBrokerPush(msg: Record<string, unknown>, ctx: Inboun
     client_message_id: clientMessageId,
     broker_message_id: brokerMessageId,
     sender_pubkey: senderPubkey,
+    sender_member_pubkey: senderMemberPk,
     sender_name: senderName,
     topic,
     reply_to_id: replyToId,
+    priority,
+    ...(subtype ? { subtype } : {}),
     body,
     created_at: createdAt,
   });

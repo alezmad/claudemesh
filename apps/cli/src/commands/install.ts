@@ -437,6 +437,7 @@ function installStatusLine(): { installed: boolean } {
 export function runInstall(args: string[] = []): void {
   const skipHooks = args.includes("--no-hooks");
   const skipSkill = args.includes("--no-skill");
+  const skipService = args.includes("--no-service");
   const wantStatusLine = args.includes("--status-line");
   render.section("claudemesh install");
 
@@ -544,10 +545,32 @@ export function runInstall(args: string[] = []): void {
   }
 
   let hasMeshes = false;
+  let primaryMesh: string | undefined;
   try {
     const meshConfig = readConfig();
     hasMeshes = meshConfig.meshes.length > 0;
+    primaryMesh = meshConfig.meshes[0]?.slug;
   } catch {}
+
+  // Daemon service install — required for MCP integration as of 1.24.0.
+  // The daemon owns the broker WS and feeds the MCP push-pipe via SSE;
+  // skipping it leaves channel push, slash commands, and resources broken.
+  if (!skipService && hasMeshes && primaryMesh) {
+    try {
+      installDaemonService(entry, primaryMesh);
+    } catch (e) {
+      render.warn(
+        `daemon service install failed: ${e instanceof Error ? e.message : String(e)}`,
+        "Run `claudemesh daemon install-service --mesh <slug>` to retry.",
+      );
+    }
+  } else if (skipService) {
+    render.info(dim("· Daemon service skipped (--no-service)"));
+    render.info(dim("  MCP integration will fail at boot until you start the daemon manually:"));
+    render.info(dim("    claudemesh daemon up --mesh <slug>"));
+  } else if (!hasMeshes) {
+    render.info(dim("· Daemon service deferred — join a mesh first, then run install again."));
+  }
 
   render.blank();
   render.warn(`${bold("RESTART CLAUDE CODE")} ${yellow("for MCP tools to appear.")}`);
@@ -567,6 +590,67 @@ export function runInstall(args: string[] = []): void {
   render.info(dim(`  claudemesh url-handler install   # click-to-launch from email`));
   render.info(dim(`  claudemesh install --status-line # live peer count in Claude Code`));
   render.info(dim(`  claudemesh completions zsh       # shell completions`));
+}
+
+/**
+ * Install + start the per-user daemon service for the primary mesh.
+ *
+ * Refuses on CI hosts (the service-install module guards this); falls
+ * back to a friendly message and lets the install otherwise succeed.
+ * The MCP push-pipe will fail loudly if the daemon isn't reachable, so
+ * the user knows there's a problem before it shows up as "no messages
+ * arriving."
+ */
+function installDaemonService(binaryEntry: string, meshSlug: string): void {
+  const {
+    installService,
+    detectPlatform,
+  } = require("~/daemon/service-install.js") as typeof import("../daemon/service-install.js");
+
+  const platform = detectPlatform();
+  if (!platform) {
+    render.info(dim(`· Daemon service skipped — unsupported platform: ${process.platform}`));
+    return;
+  }
+
+  // Resolve the binary the service unit should launch. When invoked from a
+  // bundled binary, argv[1] is correct. When invoked under tsx / dev, fall
+  // back to whatever `claudemesh` resolves to on PATH so the unit launches
+  // a shipped binary, not a dev script.
+  let binary = process.argv[1] ?? binaryEntry;
+  if (!binary || /\.ts$/.test(binary) || /node_modules|src\/entrypoints/.test(binary)) {
+    try {
+      const { execSync } = require("node:child_process") as typeof import("node:child_process");
+      binary = execSync("which claudemesh", { encoding: "utf8" }).trim();
+    } catch {
+      render.warn(
+        "couldn't resolve a 'claudemesh' binary on PATH; daemon service skipped",
+        "Install via npm/homebrew, then run `claudemesh daemon install-service --mesh " + meshSlug + "`",
+      );
+      return;
+    }
+  }
+
+  const r = installService({ binaryPath: binary, meshSlug });
+  render.ok(`daemon service installed (${r.platform})`);
+  render.kv([
+    ["unit", dim(r.unitPath)],
+    ["mesh", dim(meshSlug)],
+  ]);
+
+  // Boot the unit immediately so MCP has a daemon to attach to on next
+  // Claude Code launch. Best-effort: if launchctl/systemctl errors out we
+  // log and continue — the user can run the boot command manually.
+  try {
+    const { execSync } = require("node:child_process") as typeof import("node:child_process");
+    execSync(r.bootCommand, { stdio: "ignore" });
+    render.ok("daemon started");
+  } catch (e) {
+    render.warn(
+      `daemon service installed but failed to start: ${e instanceof Error ? e.message : String(e)}`,
+      `Run manually: ${r.bootCommand}`,
+    );
+  }
 }
 
 export function runUninstall(): void {

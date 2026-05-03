@@ -56,6 +56,19 @@ interface PendingPeerList {
   timer: NodeJS.Timeout;
 }
 
+export interface SkillSummary {
+  name: string;
+  description: string;
+  tags: string[];
+  author: string;
+  createdAt: string;
+}
+
+export interface SkillFull extends SkillSummary {
+  instructions: string;
+  manifest?: unknown;
+}
+
 const HELLO_ACK_TIMEOUT_MS = 5_000;
 const SEND_ACK_TIMEOUT_MS  = 15_000;
 const BACKOFF_CAPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
@@ -76,6 +89,8 @@ export class DaemonBrokerClient {
   private helloTimer: NodeJS.Timeout | null = null;
   private pendingAcks = new Map<string, PendingAck>();
   private peerListResolvers = new Map<string, PendingPeerList>();
+  private skillListResolvers = new Map<string, { resolve: (rows: SkillSummary[]) => void; timer: NodeJS.Timeout }>();
+  private skillDataResolvers = new Map<string, { resolve: (row: SkillFull | null) => void; timer: NodeJS.Timeout }>();
   private sessionPubkey: string | null = null;
   private sessionSecretKey: string | null = null;
   private opens: Array<() => void> = [];
@@ -189,6 +204,28 @@ export class DaemonBrokerClient {
           return;
         }
 
+        if (msg.type === "skill_list") {
+          const reqId = String(msg._reqId ?? "");
+          const pending = this.skillListResolvers.get(reqId);
+          if (pending) {
+            this.skillListResolvers.delete(reqId);
+            clearTimeout(pending.timer);
+            pending.resolve(Array.isArray(msg.skills) ? (msg.skills as SkillSummary[]) : []);
+          }
+          return;
+        }
+
+        if (msg.type === "skill_data") {
+          const reqId = String(msg._reqId ?? "");
+          const pending = this.skillDataResolvers.get(reqId);
+          if (pending) {
+            this.skillDataResolvers.delete(reqId);
+            clearTimeout(pending.timer);
+            pending.resolve((msg.skill as SkillFull) ?? null);
+          }
+          return;
+        }
+
         if (msg.type === "push" || msg.type === "inbound") {
           this.opts.onPush?.(msg);
           return;
@@ -261,6 +298,34 @@ export class DaemonBrokerClient {
       this.peerListResolvers.set(reqId, { resolve, timer });
       try { this.ws!.send(JSON.stringify({ type: "list_peers", _reqId: reqId })); }
       catch { this.peerListResolvers.delete(reqId); clearTimeout(timer); resolve([]); }
+    });
+  }
+
+  /** List mesh-published skills. Empty array on disconnect / timeout. */
+  async listSkills(query?: string, timeoutMs = 5_000): Promise<SkillSummary[]> {
+    if (this._status !== "open" || !this.ws) return [];
+    return new Promise<SkillSummary[]>((resolve) => {
+      const reqId = `sl-${++this.reqCounter}`;
+      const timer = setTimeout(() => {
+        if (this.skillListResolvers.delete(reqId)) resolve([]);
+      }, timeoutMs);
+      this.skillListResolvers.set(reqId, { resolve, timer });
+      try { this.ws!.send(JSON.stringify({ type: "list_skills", query, _reqId: reqId })); }
+      catch { this.skillListResolvers.delete(reqId); clearTimeout(timer); resolve([]); }
+    });
+  }
+
+  /** Fetch one skill's full body. Null on not-found / disconnect / timeout. */
+  async getSkill(name: string, timeoutMs = 5_000): Promise<SkillFull | null> {
+    if (this._status !== "open" || !this.ws) return null;
+    return new Promise<SkillFull | null>((resolve) => {
+      const reqId = `sg-${++this.reqCounter}`;
+      const timer = setTimeout(() => {
+        if (this.skillDataResolvers.delete(reqId)) resolve(null);
+      }, timeoutMs);
+      this.skillDataResolvers.set(reqId, { resolve, timer });
+      try { this.ws!.send(JSON.stringify({ type: "get_skill", name, _reqId: reqId })); }
+      catch { this.skillDataResolvers.delete(reqId); clearTimeout(timer); resolve(null); }
     });
   }
 

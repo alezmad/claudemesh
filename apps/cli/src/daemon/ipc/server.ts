@@ -173,7 +173,7 @@ function makeHandler(opts: {
       respond(res, 200, {
         daemon_version: VERSION,
         ipc_api: "v1",
-        ipc_features: ["version", "health", "send", "inbox", "events", "peers", "profile"],
+        ipc_features: ["version", "health", "send", "inbox", "events", "peers", "profile", "skills"],
         schema_version: 1,
       });
       return;
@@ -198,6 +198,32 @@ function makeHandler(opts: {
       try {
         const peers = await opts.broker.listPeers();
         respond(res, 200, { peers });
+      } catch (e) {
+        respond(res, 502, { error: "broker_unreachable", detail: String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/v1/skills") {
+      if (!opts.broker) { respond(res, 503, { error: "broker not initialised" }); return; }
+      const query = url.searchParams.get("query") ?? undefined;
+      try {
+        const skills = await opts.broker.listSkills(query);
+        respond(res, 200, { skills });
+      } catch (e) {
+        respond(res, 502, { error: "broker_unreachable", detail: String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname.startsWith("/v1/skills/")) {
+      if (!opts.broker) { respond(res, 503, { error: "broker not initialised" }); return; }
+      const name = decodeURIComponent(url.pathname.slice("/v1/skills/".length));
+      if (!name) { respond(res, 400, { error: "missing skill name" }); return; }
+      try {
+        const skill = await opts.broker.getSkill(name);
+        if (!skill) { respond(res, 404, { error: "skill_not_found", name }); return; }
+        respond(res, 200, { skill });
       } catch (e) {
         respond(res, 502, { error: "broker_unreachable", detail: String(e) });
       }
