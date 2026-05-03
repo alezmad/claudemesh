@@ -16,9 +16,22 @@
 
 import { withRestKey } from "~/services/api/with-rest-key.js";
 import { request } from "~/services/api/client.js";
+import { readConfig } from "~/services/config/facade.js";
 import { render } from "~/ui/render.js";
 import { bold, clay, cyan, dim, green, yellow } from "~/ui/styles.js";
 import { EXIT } from "~/constants/exit-codes.js";
+
+/**
+ * /v1/me/* endpoints resolve the caller's user from the apikey issuer
+ * regardless of which mesh issued the key — every mesh works. When the
+ * user didn't pass --mesh, silently pick the first joined mesh for
+ * apikey-mint instead of prompting; the endpoint sees the same user.
+ */
+function resolveMeshForMint(explicit: string | null | undefined): string | null {
+  if (explicit) return explicit;
+  const cfg = readConfig();
+  return cfg.meshes[0]?.slug ?? null;
+}
 
 interface WorkspaceMesh {
   meshId: string;
@@ -53,7 +66,7 @@ export interface MeFlags {
 export async function runMe(flags: MeFlags): Promise<number> {
   return withRestKey(
     {
-      meshSlug: flags.mesh ?? null,
+      meshSlug: resolveMeshForMint(flags.mesh),
       purpose: "workspace-overview",
       capabilities: ["read"],
     },
@@ -136,7 +149,7 @@ export interface MeTopicsFlags extends MeFlags {
 export async function runMeTopics(flags: MeTopicsFlags): Promise<number> {
   return withRestKey(
     {
-      meshSlug: flags.mesh ?? null,
+      meshSlug: resolveMeshForMint(flags.mesh),
       purpose: "workspace-topics",
       capabilities: ["read"],
     },
@@ -232,7 +245,7 @@ export async function runMeNotifications(
 ): Promise<number> {
   return withRestKey(
     {
-      meshSlug: flags.mesh ?? null,
+      meshSlug: resolveMeshForMint(flags.mesh),
       purpose: "workspace-notifications",
       capabilities: ["read"],
     },
@@ -321,7 +334,7 @@ export interface MeActivityFlags extends MeFlags {
 export async function runMeActivity(flags: MeActivityFlags): Promise<number> {
   return withRestKey(
     {
-      meshSlug: flags.mesh ?? null,
+      meshSlug: resolveMeshForMint(flags.mesh),
       purpose: "workspace-activity",
       capabilities: ["read"],
     },
@@ -416,7 +429,7 @@ export async function runMeSearch(flags: MeSearchFlags): Promise<number> {
 
   return withRestKey(
     {
-      meshSlug: flags.mesh ?? null,
+      meshSlug: resolveMeshForMint(flags.mesh),
       purpose: "workspace-search",
       capabilities: ["read"],
     },

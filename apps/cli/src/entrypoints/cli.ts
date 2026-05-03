@@ -114,7 +114,7 @@ Bridge  (forward a topic between two meshes, v0.2.0)
 
 Topic  (conversation scope, v0.2.0)
   claudemesh topic create <name>   create a topic [--description --visibility]
-  claudemesh topic list            list topics in the mesh
+  claudemesh topic list            list topics across all meshes (or --mesh <slug>)
   claudemesh topic join <topic>    subscribe (via name or id)
   claudemesh topic leave <topic>   unsubscribe
   claudemesh topic members <t>     list topic subscribers
@@ -129,7 +129,7 @@ Topic  (conversation scope, v0.2.0)
   claudemesh me activity           cross-mesh recent messages [--since=ISO]
   claudemesh me search <q>         cross-mesh search (topics + messages)
   claudemesh member list           mesh roster with online state [--online]
-  claudemesh notification list     recent @-mentions of you [--since <ISO>]
+  claudemesh notification list     @-mentions across all meshes (or --mesh <slug>)
 
 Schedule  (resource form)
   claudemesh schedule msg <m>      one-shot or recurring     (alias: remind)
@@ -628,7 +628,17 @@ async function main(): Promise<void> {
       };
       const arg = positionals[1] ?? "";
       if (sub === "create") { const { runTopicCreate } = await import("~/commands/topic.js"); process.exit(await runTopicCreate(arg, f)); }
-      else if (sub === "list") { const { runTopicList } = await import("~/commands/topic.js"); process.exit(await runTopicList(f)); }
+      else if (sub === "list") {
+        // v0.5.0: aggregate across every joined mesh when --mesh is omitted.
+        // The per-mesh runTopicList prompts for a mesh; me topics doesn't
+        // need one and surfaces last-activity + unread per topic.
+        if (!f.mesh) {
+          const { runMeTopics } = await import("~/commands/me.js");
+          process.exit(await runMeTopics({ mesh: undefined, json: f.json, unread: !!flags.unread }));
+        }
+        const { runTopicList } = await import("~/commands/topic.js");
+        process.exit(await runTopicList(f));
+      }
       else if (sub === "join") { const { runTopicJoin } = await import("~/commands/topic.js"); process.exit(await runTopicJoin(arg, f)); }
       else if (sub === "leave") { const { runTopicLeave } = await import("~/commands/topic.js"); process.exit(await runTopicLeave(arg, f)); }
       else if (sub === "members") { const { runTopicMembers } = await import("~/commands/topic.js"); process.exit(await runTopicMembers(arg, f)); }
@@ -668,10 +678,22 @@ async function main(): Promise<void> {
         since: flags.since as string,
       };
       if (sub === "list") {
+        // v0.5.0: aggregate across every joined mesh when --mesh is omitted.
+        if (!f.mesh) {
+          const { runMeNotifications } = await import("~/commands/me.js");
+          process.exit(
+            await runMeNotifications({
+              mesh: undefined,
+              json: f.json,
+              all: !!flags.all,
+              since: f.since,
+            }),
+          );
+        }
         const { runNotificationList } = await import("~/commands/notification.js");
         process.exit(await runNotificationList(f));
       } else {
-        console.error("Usage: claudemesh notification list [--since <ISO>]");
+        console.error("Usage: claudemesh notification list [--mesh <slug>] [--since <ISO>] [--all]");
         process.exit(EXIT.INVALID_ARGS);
       }
       break;

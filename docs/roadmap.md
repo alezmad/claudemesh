@@ -284,12 +284,18 @@ level, or wire claudemesh to messaging surfaces beyond Claude Code.
   highlighting + 30-day scan note. *Shipped 2026-05-03 in CLI
   v1.14.0.* v0.4.0 substrate is complete — every aggregating
   read verb now has CLI + web parity.
-- **v0.5.0 — default-aggregation rule** for existing per-mesh
-  read verbs (`task list`, `state list`, `memory recall`,
-  `notification list`, `topic list`) — when no `--mesh` is
-  passed, route through the `/v1/me/*` aggregator instead of
-  prompting for a mesh. Backward-compatible: `--mesh foo` still
-  scopes to one mesh.
+- **v0.5.0 phase 1 — default-aggregation for `topic list` +
+  `notification list`** — when no `--mesh` is passed these verbs
+  now route through `/v1/me/topics` and `/v1/me/notifications`
+  instead of prompting. `--mesh foo` keeps the per-mesh
+  behavior. *Shipped 2026-05-03 in CLI v1.15.0.*
+- **v0.5.0 phase 2+ — default-aggregation for `task list`,
+  `state list`, `memory recall`** — needs `/v1/me/tasks`,
+  `/v1/me/state`, `/v1/me/memory` aggregator endpoints first.
+  Each subsystem's per-mesh keying scheme decides whether
+  aggregation is straight union (state) or needs ranking
+  (memory recall — vector similarity across meshes is non-
+  trivial).
 - **v0.3.2 — multi-session DM routing + broadcast self-loopback** —
   fixes two production bugs: (1) replies via `claudemesh send
   <from_id>` rejected with "no connected peer" when the sender's
