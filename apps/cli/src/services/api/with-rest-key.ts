@@ -45,6 +45,22 @@ export async function withRestKey<T>(
     if (!result || !result.secret) {
       throw new Error("apikey mint failed — broker did not return a secret");
     }
+    if (process.env.CLAUDEMESH_DEBUG_PROBE) {
+      const probeUrls = [
+        "https://claudemesh.com/api/v1/me/workspace",
+        "https://claudemesh.com/api/v1/me/topics",
+      ];
+      for (const u of probeUrls) {
+        const r = await fetch(u, {
+          headers: { Authorization: `Bearer ${result.secret}` },
+        });
+        const t = await r.text();
+        console.error(
+          `[probe] ${u} → ${r.status} ${r.headers.get("content-type")} (${t.slice(0, 200).replace(/\n/g, " ")})`,
+        );
+      }
+      process.exit(0);
+    }
     try {
       return await fn({
         secret: result.secret,

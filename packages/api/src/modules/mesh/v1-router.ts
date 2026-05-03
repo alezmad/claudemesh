@@ -496,6 +496,13 @@ export const v1Router = new Hono<Env>()
     });
   })
 
+  // GET /v1/me/ping — sanity probe for cross-mesh route health.
+  .get("/me/ping", async (c) => {
+    const key = c.var.apiKey;
+    requireCapability(key, "read");
+    return c.json({ ok: true, hasIssuer: !!key.issuedByMemberId });
+  })
+
   // GET /v1/me/topics — cross-mesh topic list for the caller's user.
   //
   // For each topic across every mesh the user belongs to, returns
