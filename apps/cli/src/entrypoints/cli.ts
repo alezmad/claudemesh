@@ -156,9 +156,9 @@ Platform
   claudemesh stream create|publish|list                pub/sub event bus
   claudemesh sql query|execute|schema                  per-mesh SQL
   claudemesh skill list|get|remove                     mesh-published skills
-  claudemesh vault list|delete                         encrypted secrets
-  claudemesh watch list|remove                         URL change watchers
-  claudemesh webhook list|delete                       outbound HTTP triggers
+  claudemesh vault set|list|delete                     encrypted secrets (set: --type env|file --mount /p)
+  claudemesh watch add|list|remove                     URL change watchers (add: --label --interval --extract)
+  claudemesh webhook create|list|delete                outbound HTTP triggers
   claudemesh file share <path> [--to peer]             upload (or local-host fast path if --to matches)
   claudemesh file get <id> [--out path]                download by id
   claudemesh file list|status|delete                   shared mesh files
@@ -591,7 +591,16 @@ async function main(): Promise<void> {
       const f = { mesh: flags.mesh as string, json: !!flags.json };
       if (sub === "list") { const { runVaultList } = await import("~/commands/platform-actions.js"); process.exit(await runVaultList(f)); }
       else if (sub === "delete") { const { runVaultDelete } = await import("~/commands/platform-actions.js"); process.exit(await runVaultDelete(positionals[1] ?? "", f)); }
-      else { console.error("Usage: claudemesh vault <list|delete>  (set/get currently via MCP — needs crypto)"); process.exit(EXIT.INVALID_ARGS); }
+      else if (sub === "set") {
+        const { runVaultSet } = await import("~/commands/platform-actions.js");
+        process.exit(await runVaultSet(positionals[1] ?? "", positionals[2] ?? "", {
+          ...f,
+          entryType: (flags.type as "env" | "file" | undefined),
+          mountPath: flags.mount as string | undefined,
+          description: flags.description as string | undefined,
+        }));
+      }
+      else { console.error("Usage: claudemesh vault <list|set|delete>"); process.exit(EXIT.INVALID_ARGS); }
       break;
     }
     case "watch": {
@@ -599,7 +608,18 @@ async function main(): Promise<void> {
       const f = { mesh: flags.mesh as string, json: !!flags.json };
       if (sub === "list") { const { runWatchList } = await import("~/commands/platform-actions.js"); process.exit(await runWatchList(f)); }
       else if (sub === "remove") { const { runUnwatch } = await import("~/commands/platform-actions.js"); process.exit(await runUnwatch(positionals[1] ?? "", f)); }
-      else { console.error("Usage: claudemesh watch <list|remove>"); process.exit(EXIT.INVALID_ARGS); }
+      else if (sub === "add") {
+        const { runWatchAdd } = await import("~/commands/platform-actions.js");
+        process.exit(await runWatchAdd(positionals[1] ?? "", {
+          ...f,
+          label: flags.label as string | undefined,
+          interval: flags.interval ? Number(flags.interval) : undefined,
+          mode: flags.mode as string | undefined,
+          extract: flags.extract as string | undefined,
+          notifyOn: flags["notify-on"] as string | undefined,
+        }));
+      }
+      else { console.error("Usage: claudemesh watch <list|add|remove>"); process.exit(EXIT.INVALID_ARGS); }
       break;
     }
     case "webhook": {
@@ -607,7 +627,8 @@ async function main(): Promise<void> {
       const f = { mesh: flags.mesh as string, json: !!flags.json };
       if (sub === "list") { const { runWebhookList } = await import("~/commands/platform-actions.js"); process.exit(await runWebhookList(f)); }
       else if (sub === "delete") { const { runWebhookDelete } = await import("~/commands/platform-actions.js"); process.exit(await runWebhookDelete(positionals[1] ?? "", f)); }
-      else { console.error("Usage: claudemesh webhook <list|delete>"); process.exit(EXIT.INVALID_ARGS); }
+      else if (sub === "create") { const { runWebhookCreate } = await import("~/commands/platform-actions.js"); process.exit(await runWebhookCreate(positionals[1] ?? "", f)); }
+      else { console.error("Usage: claudemesh webhook <list|create|delete>"); process.exit(EXIT.INVALID_ARGS); }
       break;
     }
     case "file": {

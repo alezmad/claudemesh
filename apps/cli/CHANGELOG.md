@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.23.0 (2026-05-03) — close the CLI surface, prune dead MCP stubs
+
+Three previously-MCP-only write verbs land on the CLI, closing every
+functional gap between the (defunct since 1.5.0) MCP tool registry and
+the CLI:
+
+- `claudemesh vault set <key> <value>` — encrypts client-side via
+  `crypto_secretbox_easy` with a fresh symmetric key, then seals the
+  key to the member's own pubkey via `crypto_box_seal` (same shape as
+  the file-share crypto). Flags: `--type env|file`, `--mount <path>`,
+  `--description <text>`. Pairs with the existing `vault list/delete`.
+- `claudemesh watch add <url>` — registers a URL change watcher.
+  Flags: `--label`, `--interval <sec>`, `--mode`, `--extract <css>`,
+  `--notify-on changed|always`. Pairs with `watch list/remove`.
+- `claudemesh webhook create <name>` — issues a fresh inbound webhook;
+  prints url + one-shot secret. Pairs with `webhook list/delete`.
+
+Cleanup: removed 22 dead stub files under `apps/cli/src/mcp/tools/*`,
+the unused `router.ts`, `middleware/*`, and `handlers/*` directories
+(~120 LoC). The MCP server in 1.5.0+ has been a tool-less push-pipe;
+these stubs were leftover scaffolding that never wired into the
+`tools/list` response. The legitimate MCP surfaces stay untouched:
+
+- `<channel source="claudemesh">` push pipe (the irreducible reason
+  MCP exists at all — no other Claude Code surface can inject events
+  mid-turn).
+- Mesh skills exposed as MCP **prompts** (slash commands) and
+  **resources** (`skill://claudemesh/<name>`).
+- Mesh-deployed MCP services proxied via the sub-process tool
+  surface (separate code path under server.ts:855+).
+
 ## 1.22.1 (2026-05-03) — daemon docs + help
 
 - Root `claudemesh --help` now lists the `daemon` subcommand suite under

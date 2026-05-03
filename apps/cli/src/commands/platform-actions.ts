@@ -348,6 +348,52 @@ export async function runVaultDelete(key: string, opts: Flags): Promise<number> 
   });
 }
 
+export interface VaultSetOpts extends Flags {
+  entryType?: "env" | "file";
+  mountPath?: string;
+  description?: string;
+}
+
+export async function runVaultSet(key: string, value: string, opts: VaultSetOpts): Promise<number> {
+  if (!key || value == null) {
+    render.err("Usage: claudemesh vault set <key> <value> [--type env|file] [--mount /path] [--description ...]");
+    return EXIT.INVALID_ARGS;
+  }
+  const { encryptFile, sealKeyForPeer } = await import("~/services/crypto/file-crypto.js");
+  const { getMeshConfig } = await import("~/services/config/facade.js");
+  const { readConfig } = await import("~/services/config/facade.js");
+
+  const config = readConfig();
+  const slug = opts.mesh ?? (config.meshes.length === 1 ? config.meshes[0]!.slug : null);
+  if (!slug) {
+    render.err("multiple meshes joined; pass --mesh <slug>");
+    return EXIT.INVALID_ARGS;
+  }
+  const mesh = getMeshConfig(slug);
+  if (!mesh) { render.err(`not joined to mesh "${slug}"`); return EXIT.NOT_FOUND; }
+
+  const plaintext = new TextEncoder().encode(value);
+  const enc = await encryptFile(plaintext);
+  const ciphertextB64 = Buffer.from(enc.ciphertext).toString("base64");
+  const sealed = await sealKeyForPeer(enc.key, mesh.pubkey);
+
+  return await withMesh({ meshSlug: slug }, async (client) => {
+    const ok = await client.vaultSet(
+      key,
+      ciphertextB64,
+      enc.nonce,
+      sealed,
+      opts.entryType ?? "env",
+      opts.mountPath,
+      opts.description,
+    );
+    if (opts.json) emitJson({ key, stored: ok });
+    else if (ok) render.ok(`vault[${bold(key)}] stored`, dim(`(${ciphertextB64.length}b)`));
+    else render.err(`vault set failed for "${key}"`);
+    return ok ? EXIT.SUCCESS : EXIT.IO_ERROR;
+  });
+}
+
 // ════════════════════════════════════════════════════════════════════════
 // watch — URL change watchers
 // ════════════════════════════════════════════════════════════════════════
@@ -364,6 +410,39 @@ export async function runWatchList(opts: Flags): Promise<number> {
       const label = (w as any).label ? ` ${dim("(" + (w as any).label + ")")}` : "";
       process.stdout.write(`  ${dim(id.slice(0, 8))}  ${clay(url)}${label}\n`);
     }
+    return EXIT.SUCCESS;
+  });
+}
+
+export interface WatchAddOpts extends Flags {
+  label?: string;
+  interval?: number;
+  mode?: string;
+  extract?: string;
+  notifyOn?: string;
+}
+
+export async function runWatchAdd(url: string, opts: WatchAddOpts): Promise<number> {
+  if (!url) {
+    render.err("Usage: claudemesh watch add <url> [--label ...] [--interval <sec>] [--extract <css>] [--notify-on changed|always]");
+    return EXIT.INVALID_ARGS;
+  }
+  return await withMesh({ meshSlug: opts.mesh ?? null }, async (client) => {
+    const result = await client.watch(url, {
+      label: opts.label,
+      interval: opts.interval,
+      mode: opts.mode,
+      extract: opts.extract,
+      notify_on: opts.notifyOn,
+    });
+    if (result?.error) {
+      if (opts.json) emitJson({ ok: false, error: result.error });
+      else render.err(`watch add failed: ${result.error}`);
+      return EXIT.IO_ERROR;
+    }
+    const id = String((result as any)?.id ?? (result as any)?.watch_id ?? "?");
+    if (opts.json) emitJson({ ok: true, id, url, ...(opts.label ? { label: opts.label } : {}) });
+    else render.ok(`watching ${clay(url)}`, dim(id.slice(0, 8)));
     return EXIT.SUCCESS;
   });
 }
@@ -392,6 +471,28 @@ export async function runWebhookList(opts: Flags): Promise<number> {
     for (const h of hooks) {
       const dot = h.active ? "●" : dim("○");
       process.stdout.write(`  ${dot} ${bold(h.name)} ${dim("· " + h.url)}\n`);
+    }
+    return EXIT.SUCCESS;
+  });
+}
+
+export async function runWebhookCreate(name: string, opts: Flags): Promise<number> {
+  if (!name) {
+    render.err("Usage: claudemesh webhook create <name>");
+    return EXIT.INVALID_ARGS;
+  }
+  return await withMesh({ meshSlug: opts.mesh ?? null }, async (client) => {
+    const created = await client.createWebhook(name);
+    if (!created) {
+      if (opts.json) emitJson({ ok: false, error: "create failed (timeout or duplicate)" });
+      else render.err(`webhook create "${name}" failed`);
+      return EXIT.IO_ERROR;
+    }
+    if (opts.json) emitJson({ ok: true, ...created });
+    else {
+      render.ok(`created webhook ${bold(created.name)}`);
+      process.stdout.write(`  url:    ${clay(created.url)}\n`);
+      process.stdout.write(`  secret: ${dim(created.secret)} ${dim("(shown once)")}\n`);
     }
     return EXIT.SUCCESS;
   });
