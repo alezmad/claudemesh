@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.27.1 (2026-05-04) — wire missing launch flags
+
+Fixes a wiring bug in `apps/cli/src/entrypoints/cli.ts` where six flags
+declared on `LaunchFlags` were silently dropped on the way to
+`runLaunch`. They were honored *inside* `runLaunch` if they ever arrived,
+but the four `runLaunch({...})` call sites in the CLI entrypoint each
+forwarded a hardcoded 5-key subset (`mesh, name, join, yes, resume`).
+
+Now forwarded at every entry point (bare command, bare invite URL,
+`launch`/`connect`, `workspace launch`):
+
+- `--role <r>` — sets session role; previously only settable via wizard.
+- `--groups "frontend:lead,reviewers"` — comma-separated groups string.
+- `--message-mode push|inbox|off` — message delivery mode.
+- `--system-prompt <text>` — passes through to `claude`.
+- `--continue` — passes through to `claude` to continue last session.
+- `--quiet` — actually suppresses the wizard and banner now. Previously
+  it was a complete no-op flag at the CLI layer.
+
+No internal logic changed; the launch internals already read these.
+This is a pure plumbing fix.
+
 ## 1.27.0 (2026-05-04) — state + memory through the daemon, workspace alias
 
 Two more verb families now route through the local daemon's IPC for the

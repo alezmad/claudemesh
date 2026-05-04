@@ -283,6 +283,12 @@ async function main(): Promise<void> {
         join: normaliseInviteUrl(command),
         yes: !!flags.y || !!flags.yes,
         resume: flags.resume as string | undefined,
+        role: flags.role as string | undefined,
+        groups: flags.groups as string | undefined,
+        "message-mode": flags["message-mode"] as string | undefined,
+        "system-prompt": flags["system-prompt"] as string | undefined,
+        continue: !!flags.continue,
+        quiet: !!flags.quiet,
       }, process.argv.slice(2));
       return;
     }
@@ -298,6 +304,12 @@ async function main(): Promise<void> {
       name: flags.name as string | undefined,
       yes: !!flags.y || !!flags.yes,
       resume: flags.resume as string | undefined,
+      role: flags.role as string | undefined,
+      groups: flags.groups as string | undefined,
+      "message-mode": flags["message-mode"] as string | undefined,
+      "system-prompt": flags["system-prompt"] as string | undefined,
+      continue: !!flags.continue,
+      quiet: !!flags.quiet,
     }, process.argv.slice(2));
     return;
   }
@@ -316,6 +328,12 @@ async function main(): Promise<void> {
         join: flags.join as string,
         yes: !!flags.y || !!flags.yes,
         resume: flags.resume as string,
+        role: flags.role as string,
+        groups: flags.groups as string,
+        "message-mode": flags["message-mode"] as string,
+        "system-prompt": flags["system-prompt"] as string,
+        continue: !!flags.continue,
+        quiet: !!flags.quiet,
       }, process.argv.slice(2));
       break;
     }
@@ -336,6 +354,12 @@ async function main(): Promise<void> {
           join: flags.join as string,
           yes: !!flags.y || !!flags.yes,
           resume: flags.resume as string,
+          role: flags.role as string,
+          groups: flags.groups as string,
+          "message-mode": flags["message-mode"] as string,
+          "system-prompt": flags["system-prompt"] as string,
+          continue: !!flags.continue,
+          quiet: !!flags.quiet,
         }, process.argv.slice(2));
       }
       else if (sub === "list" || sub === "ls") { const { runList } = await import("~/commands/list.js"); await runList(); }
