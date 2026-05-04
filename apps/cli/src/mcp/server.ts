@@ -125,7 +125,7 @@ function subscribeEvents(onEvent: (e: DaemonEvent) => void): { close: () => void
           }
           if (!dataLine) continue;
           try {
-            const parsed = JSON.parse(dataLine);
+            const parsed = JSON.parse(dataLine) as Record<string, unknown>;
             onEvent({ kind, ts: String(parsed.ts ?? ""), data: parsed });
           } catch { /* malformed event; skip */ }
         }

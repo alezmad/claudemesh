@@ -194,7 +194,7 @@ export async function runMsgStatus(id: string | undefined, opts: StateFlags): Pr
       console.log(JSON.stringify(result, null, 2));
       return EXIT.SUCCESS;
     }
-    render.section(`message ${id.slice(0, 12)}…`);
+    render.section(`message ${lookupId.slice(0, 12)}…`);
     render.kv([
       ["target", result.targetSpec],
       ["delivered", result.delivered ? "yes" : "no"],

@@ -328,7 +328,7 @@ function makeHandler(opts: {
           if (filterMesh && filterMesh !== slug) continue;
           try {
             const peers = await b.listPeers();
-            for (const p of peers) all.push({ ...(p as Record<string, unknown>), mesh: slug });
+            for (const p of peers) all.push({ ...(p as unknown as Record<string, unknown>), mesh: slug });
           } catch (e) {
             opts.log("warn", "ipc_peers_broker_failed", { mesh: slug, err: String(e) });
           }
@@ -486,7 +486,7 @@ function makeHandler(opts: {
           if (filterMesh && filterMesh !== slug) continue;
           try {
             const skills = await b.listSkills(query);
-            for (const s of skills) all.push({ ...(s as Record<string, unknown>), mesh: slug });
+            for (const s of skills) all.push({ ...(s as unknown as Record<string, unknown>), mesh: slug });
           } catch (e) {
             opts.log("warn", "ipc_skills_broker_failed", { mesh: slug, err: String(e) });
           }

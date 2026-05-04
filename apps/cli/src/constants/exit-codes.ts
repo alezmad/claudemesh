@@ -9,6 +9,7 @@ export const EXIT = {
   PERMISSION_DENIED: 7,
   INTERNAL_ERROR: 8,
   CLAUDE_MISSING: 9,
+  IO_ERROR: 10,
 } as const;
 
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT];

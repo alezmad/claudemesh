@@ -15,7 +15,7 @@
 import { ipc } from "~/daemon/ipc/client.js";
 import { ensureDaemonReady } from "~/services/daemon/lifecycle.js";
 import { getDaemonPolicy } from "~/services/daemon/policy.js";
-import { warnDaemonState } from "~/ui/warnings.ts";
+import { warnDaemonState } from "~/ui/warnings.js";
 
 function meshQuery(mesh?: string): string {
   return mesh ? `?mesh=${encodeURIComponent(mesh)}` : "";
