@@ -190,13 +190,11 @@ async function runInstallService(opts: DaemonOptions): Promise<number> {
     process.stderr.write(`unsupported platform: ${process.platform}\n`);
     return 2;
   }
-  if (!opts.mesh) {
-    process.stderr.write(`pass --mesh <slug> so the service knows which mesh to attach to\n`);
-    return 2;
-  }
   // Resolve the binary path. Prefer the running argv[0] when it's an
   // installed claudemesh binary; fall back to whichever `claudemesh` is
-  // first on PATH.
+  // first on PATH. --mesh is now optional: omit it to attach to every
+  // joined mesh (the 1.26.0 multi-mesh default); pass it to lock the
+  // unit to a single mesh for testing or single-mesh hosts.
   let binary = process.argv[1] ?? "";
   if (!binary || /\.ts$/.test(binary) || /node_modules|src\/entrypoints/.test(binary)) {
     try {
@@ -210,8 +208,8 @@ async function runInstallService(opts: DaemonOptions): Promise<number> {
   try {
     const r = installService({
       binaryPath: binary,
-      meshSlug: opts.mesh,
-      displayName: opts.displayName,
+      ...(opts.mesh ? { meshSlug: opts.mesh } : {}),
+      ...(opts.displayName ? { displayName: opts.displayName } : {}),
     });
     if (opts.json) {
       process.stdout.write(JSON.stringify({ ok: true, ...r }) + "\n");

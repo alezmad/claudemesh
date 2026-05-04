@@ -545,23 +545,25 @@ export function runInstall(args: string[] = []): void {
   }
 
   let hasMeshes = false;
-  let primaryMesh: string | undefined;
   try {
     const meshConfig = readConfig();
     hasMeshes = meshConfig.meshes.length > 0;
-    primaryMesh = meshConfig.meshes[0]?.slug;
   } catch {}
 
   // Daemon service install — required for MCP integration as of 1.24.0.
   // The daemon owns the broker WS and feeds the MCP push-pipe via SSE;
   // skipping it leaves channel push, slash commands, and resources broken.
-  if (!skipService && hasMeshes && primaryMesh) {
+  // 1.30.2: install no longer locks the unit to a single mesh; the
+  // daemon attaches to every joined mesh on boot (1.26.0 multi-mesh
+  // design). Users who want single-mesh can pass `claudemesh daemon
+  // install-service --mesh <slug>` explicitly.
+  if (!skipService && hasMeshes) {
     try {
-      installDaemonService(entry, primaryMesh);
+      installDaemonService(entry);
     } catch (e) {
       render.warn(
         `daemon service install failed: ${e instanceof Error ? e.message : String(e)}`,
-        "Run `claudemesh daemon install-service --mesh <slug>` to retry.",
+        "Run `claudemesh daemon install-service` to retry.",
       );
     }
   } else if (skipService) {
@@ -601,7 +603,7 @@ export function runInstall(args: string[] = []): void {
  * the user knows there's a problem before it shows up as "no messages
  * arriving."
  */
-function installDaemonService(binaryEntry: string, meshSlug: string): void {
+function installDaemonService(binaryEntry: string): void {
   const {
     installService,
     detectPlatform,
@@ -625,17 +627,17 @@ function installDaemonService(binaryEntry: string, meshSlug: string): void {
     } catch {
       render.warn(
         "couldn't resolve a 'claudemesh' binary on PATH; daemon service skipped",
-        "Install via npm/homebrew, then run `claudemesh daemon install-service --mesh " + meshSlug + "`",
+        "Install via npm/homebrew, then run `claudemesh daemon install-service`",
       );
       return;
     }
   }
 
-  const r = installService({ binaryPath: binary, meshSlug });
+  const r = installService({ binaryPath: binary });
   render.ok(`daemon service installed (${r.platform})`);
   render.kv([
     ["unit", dim(r.unitPath)],
-    ["mesh", dim(meshSlug)],
+    ["mesh", dim("(all joined meshes)")],
   ]);
 
   // Boot the unit immediately so MCP has a daemon to attach to on next

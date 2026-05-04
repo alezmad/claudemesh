@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.30.2 (2026-05-04) — daemon service is multi-mesh by default
+
+`claudemesh install` was hardcoding `--mesh <primaryMesh>` into the
+launchd plist / systemd unit, which locked the daemon to a single
+mesh and contradicted 1.26.0's multi-mesh design (one daemon attaches
+to every joined mesh on boot).
+
+Net effect for users with more than one joined mesh: every CLI verb
+against a non-primary mesh fell off the daemon path back to cold-WS
+and re-handshakes a fresh broker connection on each call. Most
+visible symptom is `[claudemesh] warn daemon spawn failed: socket did
+not appear within 3000ms` when a launched session asks for peers in
+a sibling mesh, plus `peer list --mesh foo` returning peers from
+every attached mesh because the server-side filter never ran.
+
+Now: install drops the `--mesh` arg entirely so the unit launches
+`claudemesh daemon up` (no flag), which attaches to every joined
+mesh. `claudemesh daemon install-service --mesh <slug>` is preserved
+for users who want to pin to one mesh (CI, single-mesh hosts).
+
 ## 1.30.1 (2026-05-04) — daemon install upgrade-safe + node-pinned
 
 Two install-path fixes that bit on first user upgrade:

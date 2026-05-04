@@ -38,8 +38,13 @@ function isCi(): boolean {
 export interface InstallArgs {
   /** Path to the `claudemesh` binary, e.g. /opt/homebrew/bin/claudemesh */
   binaryPath: string;
-  /** Mesh slug to attach to. */
-  meshSlug: string;
+  /**
+   * Optional mesh slug to lock the daemon to. Omit (the new default) so
+   * the daemon attaches to every joined mesh — matches the 1.26.0
+   * multi-mesh design. Single-mesh lock is preserved for users who
+   * explicitly want it (testing, CI, host with one mesh).
+   */
+  meshSlug?: string;
   /** Optional display name. */
   displayName?: string;
   /** Override the auto-detected CI refusal. */
@@ -97,8 +102,9 @@ function installDarwin(args: InstallArgs): InstallResult {
     `<string>${escapeXml(args.binaryPath)}</string>`,
     "<string>daemon</string>",
     "<string>up</string>",
-    "<string>--mesh</string>",
-    `<string>${escapeXml(args.meshSlug)}</string>`,
+    ...(args.meshSlug
+      ? ["<string>--mesh</string>", `<string>${escapeXml(args.meshSlug)}</string>`]
+      : []),
     ...(args.displayName ? ["<string>--name</string>", `<string>${escapeXml(args.displayName)}</string>`] : []),
   ].join("\n    ");
 
@@ -176,7 +182,7 @@ function installLinux(args: InstallArgs): InstallResult {
   const nodeBin = process.execPath;
   const execArgs = [
     "daemon", "up",
-    "--mesh", args.meshSlug,
+    ...(args.meshSlug ? ["--mesh", args.meshSlug] : []),
     ...(args.displayName ? ["--name", args.displayName] : []),
   ].map(shellQuote).join(" ");
 
