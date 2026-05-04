@@ -3,6 +3,7 @@ import { Features } from "~/modules/marketing/home/features";
 import { WhereMeshFits } from "~/modules/marketing/home/where-mesh-fits";
 import { WhatIsClaudemesh } from "~/modules/marketing/home/what-is-claudemesh";
 import { Timeline } from "~/modules/marketing/home/timeline";
+import { LatestReleases } from "~/modules/marketing/home/latest-releases";
 import { Pricing } from "~/modules/marketing/home/pricing";
 import { FAQ } from "~/modules/marketing/home/faq";
 import { CallToAction } from "~/modules/marketing/home/cta";
@@ -22,6 +23,7 @@ const HomePage = () => {
       <WhereMeshFits />
       <WhatIsClaudemesh />
       <Timeline />
+      <LatestReleases count={5} />
       <Pricing />
       <FAQ />
       <CallToAction />

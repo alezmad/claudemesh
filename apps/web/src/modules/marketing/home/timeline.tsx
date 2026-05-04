@@ -85,6 +85,23 @@ const MILESTONES = [
     ],
     stat: "43 MCP tools total",
   },
+  {
+    version: "v0.9 → 1.34",
+    phase: "Daemon · multi-mesh · multi-session",
+    color: "var(--cm-cactus)",
+    items: [
+      "Persistent daemon — long-lived broker WS, durable outbox/inbox",
+      "Universal multi-mesh daemon — one process, every joined mesh",
+      "Per-session IPC tokens — auto-scope to the launched session",
+      "Per-session broker presence — sibling sessions see each other",
+      "Self-healing daemon lifecycle (auto-spawn, version probe)",
+      "Multi-session correctness train — per-recipient SSE demux + inbox scoping",
+      "Refuse-to-kick on control-plane (no more no-op kicks)",
+      "Caller-stable idempotency on every send",
+      "Stale CLAUDEMESH_CONFIG_DIR fallback",
+    ],
+    stat: "1.34.15 shipped",
+  },
 ];
 
 export const Timeline = () => {
@@ -94,7 +111,7 @@ export const Timeline = () => {
     <section className="border-b border-[var(--cm-border)] bg-[var(--cm-bg)] px-6 py-24 md:px-12 md:py-32">
       <div className="mx-auto max-w-[var(--cm-max-w)]">
         <Reveal className="mb-6 flex justify-center">
-          <SectionIcon glyph="layers" />
+          <SectionIcon glyph="grid" />
         </Reveal>
         <Reveal delay={1}>
           <h2
@@ -109,7 +126,8 @@ export const Timeline = () => {
             className="mx-auto mt-4 max-w-xl text-center text-[15px] leading-[1.6] text-[var(--cm-fg-secondary)]"
             style={{ fontFamily: "var(--cm-font-sans)" }}
           >
-            66 npm releases. Every feature below is in production today.
+            120+ npm releases through v1.34.15. Every feature below is in
+            production today.
           </p>
         </Reveal>
 
@@ -210,8 +228,8 @@ export const Timeline = () => {
                     className="text-[14px] text-[var(--cm-fg-tertiary)]"
                     style={{ fontFamily: "var(--cm-font-serif)" }}
                   >
-                    Daemon redesign · per-topic encryption · self-host
-                    packaging · federation
+                    HKDF cross-machine identity · session capabilities · A2A
+                    interop · self-host packaging · federation
                   </span>
                 </div>
               </div>

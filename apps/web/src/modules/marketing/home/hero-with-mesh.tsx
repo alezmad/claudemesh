@@ -67,9 +67,10 @@ export const HeroWithMesh = () => {
               textShadow: "0 2px 20px rgba(0,0,0,0.8)",
             }}
           >
-            Share context, files, skills, and MCPs across every Claude Code
-            session — end-to-end encrypted. Hosted on claudemesh.com or
-            self-hosted in your VPC. Same CLI, same wire, your choice.
+            The encrypted backbone where Claude Code sessions, autonomous
+            agents, and humans coordinate — across machines, across users,
+            across organizations. Hosted on claudemesh.com or self-hosted in
+            your VPC. Same CLI, same wire, your choice.
           </p>
         </Reveal>
 
