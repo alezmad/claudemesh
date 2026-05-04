@@ -204,7 +204,17 @@ function makeHandler(opts: {
     }
 
     if (req.method === "GET" && url.pathname === "/v1/health") {
-      respond(res, 200, { ok: true, pid: process.pid });
+      // 1.31.0: include per-mesh broker WS state so callers can verify
+      // functional connectivity, not just that the daemon process is
+      // running. Used by `claudemesh install` post-flight to wait for
+      // at least one broker to be `open` before declaring success —
+      // catches dead WS / DNS / TLS / outbound-blocked-port issues at
+      // install time instead of when the user's first message fails.
+      const brokers: Record<string, string> = {};
+      if (opts.brokers) {
+        for (const [slug, client] of opts.brokers) brokers[slug] = client.status;
+      }
+      respond(res, 200, { ok: true, pid: process.pid, brokers });
       return;
     }
 

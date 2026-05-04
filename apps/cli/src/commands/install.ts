@@ -434,7 +434,7 @@ function installStatusLine(): { installed: boolean } {
   return { installed: true };
 }
 
-export function runInstall(args: string[] = []): void {
+export async function runInstall(args: string[] = []): Promise<void> {
   const skipHooks = args.includes("--no-hooks");
   const skipSkill = args.includes("--no-skill");
   const skipService = args.includes("--no-service");
@@ -559,7 +559,7 @@ export function runInstall(args: string[] = []): void {
   // install-service --mesh <slug>` explicitly.
   if (!skipService && hasMeshes) {
     try {
-      installDaemonService(entry);
+      await installDaemonService(entry);
     } catch (e) {
       render.warn(
         `daemon service install failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -603,7 +603,7 @@ export function runInstall(args: string[] = []): void {
  * the user knows there's a problem before it shows up as "no messages
  * arriving."
  */
-function installDaemonService(binaryEntry: string): void {
+async function installDaemonService(binaryEntry: string): Promise<void> {
   const {
     installService,
     detectPlatform,
@@ -652,7 +652,52 @@ function installDaemonService(binaryEntry: string): void {
       `daemon service installed but failed to start: ${e instanceof Error ? e.message : String(e)}`,
       `Run manually: ${r.bootCommand}`,
     );
+    return;
   }
+
+  // 1.31.0 — post-flight: verify the daemon actually establishes a
+  // broker WebSocket. Boots that fail silently here (DNS, expired TLS,
+  // outbound :443 blocked, broker outage) used to surface only when
+  // the user's first `peer list` or `send` failed half an hour later.
+  // Polling /v1/health gives a clear, install-time signal.
+  await verifyBrokerConnectivity();
+}
+
+async function verifyBrokerConnectivity(): Promise<void> {
+  const VERIFY_BUDGET_MS = 15_000;
+  const POLL_INTERVAL_MS = 500;
+  const { ipc } = await import("~/daemon/ipc/client.js");
+  const start = Date.now();
+  let lastBrokers: Record<string, string> = {};
+
+  while (Date.now() - start < VERIFY_BUDGET_MS) {
+    try {
+      const res = await ipc<{ ok: boolean; brokers?: Record<string, string> }>({
+        path: "/v1/health",
+        timeoutMs: 2_000,
+      });
+      lastBrokers = res.body?.brokers ?? {};
+      const openMesh = Object.entries(lastBrokers).find(([, s]) => s === "open");
+      if (openMesh) {
+        const others = Object.entries(lastBrokers).filter(([slug]) => slug !== openMesh[0]);
+        const tail = others.length > 0 ? `, ${others.length} other mesh${others.length === 1 ? "" : "es"} attaching` : "";
+        render.ok(`broker connected (mesh=${openMesh[0]}${tail})`);
+        return;
+      }
+    } catch { /* daemon may still be starting up; keep polling */ }
+    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+  }
+
+  // Timed out without a single broker reaching `open`. Surface what we
+  // saw last so the user can act — this is exactly the bug class we
+  // want to catch at install time, not at first send.
+  const states = Object.keys(lastBrokers).length === 0
+    ? "no health response from daemon"
+    : Object.entries(lastBrokers).map(([m, s]) => `${m}=${s}`).join(", ");
+  render.warn(
+    `broker did not reach open within ${Math.round(VERIFY_BUDGET_MS / 1000)}s (${states})`,
+    "Check ~/.claudemesh/daemon/daemon.log for connect errors. Common causes: outbound :443 blocked, expired TLS, DNS resolution.",
+  );
 }
 
 export function runUninstall(): void {

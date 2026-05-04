@@ -50,6 +50,9 @@ export function warnDaemonState(
     case "spawn-failed":
       process.stderr.write(`${tag("warn")} daemon spawn failed${res.reason ? `: ${res.reason}` : ""} — using cold path ${hint("(check ~/.claudemesh/daemon/daemon.log)")}\n`);
       return true;
+    case "service-not-ready":
+      process.stderr.write(`${tag("warn")} ${res.reason ?? "service-managed daemon not responding"} — using cold path ${hint("(check ~/.claudemesh/daemon/daemon.log)")}\n`);
+      return true;
   }
   return false;
 }

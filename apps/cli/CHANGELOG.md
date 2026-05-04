@@ -1,5 +1,108 @@
 # Changelog
 
+## 1.31.0 (2026-05-04) — session autoclean, install-time broker verification, no more spurious cold-path warnings under service management
+
+**Three operability changes targeting users who installed the daemon as a launchd / systemd service.**
+
+### Session reaper now autocleans dead claude-code sessions
+
+The daemon's session registry already had a 30-second reaper that
+deregistered entries whose pid was dead, but it had two gaps:
+
+- **Sweep cadence too slow.** Stale presence on the broker lingered for
+  up to half a minute after a session crashed.
+- **No PID-reuse guard.** A recycled pid passes `kill(pid, 0)` even
+  though the original process is gone, so the registry could trust a
+  ghost.
+
+Process-exit IPC from claude-code itself isn't a viable replacement —
+exit handlers don't run on `SIGKILL`, OOM, segfault, kernel panic, or
+power loss. The reaper has to be the source of truth.
+
+What changed:
+
+- Reaper interval **30 s → 5 s**.
+- On register, capture an opaque process start-time (`ps -o lstart=`,
+  works on macOS and Linux). Stored alongside the pid.
+- On each sweep, an entry is reaped when the pid is dead **or** the
+  pid is alive but its start-time no longer matches what we captured.
+- Registry hooks already close the per-session broker WS on
+  deregister, so `peer list` rebuilds within one sweep of any session
+  exit, no matter how the process died.
+
+Local-host scope only — cross-host registrations are skipped (the
+daemon can't `kill -0` a remote pid). Best-effort fallback to bare
+liveness when start-time capture fails (e.g., process already gone at
+register time).
+
+### Service-managed daemon: no more "spawn failed" false alarms
+
+Users who installed via `claudemesh install` (which sets up
+launchd/systemd with `KeepAlive=true`) saw spurious warnings:
+
+```
+[claudemesh] warn daemon spawn failed: socket did not appear within 3000ms
+```
+
+even when the daemon was healthy. Two contributing causes:
+
+1. **Probe timeout was 800 ms.** Tight enough that the first IPC after
+   a launchd-driven restart (which migrates SQLite + opens broker
+   WSes) routinely tripped it. Bumped to **2500 ms**.
+2. **CLI raced launchd on respawn.** When the probe failed, the CLI
+   tried to spawn its own detached daemon, which collided with
+   launchd's own restart cycle (singleton lock fails, child exits) and
+   left the user with a 3-second timeout warning. Now: when the daemon
+   is installed as a service unit (`~/Library/LaunchAgents/com.claudemesh.daemon.plist`
+   or `~/.config/systemd/user/claudemesh-daemon.service` exist), the
+   CLI **does not attempt to spawn**. It waits up to 8 s for the OS to
+   bring the socket up, and only fails out with a service-specific
+   message pointing at `launchctl print` / `systemctl status` if the
+   service genuinely failed.
+
+New state `service-not-ready` distinguishes "OS-managed daemon hasn't
+come up yet" from "we tried to spawn and it failed" — the latter no
+longer fires when the daemon is service-managed.
+
+### `claudemesh install` now verifies broker connectivity, not just process start
+
+Previously `install` ended once launchctl/systemctl reported the unit
+loaded — but a daemon that boots and then can't reach the broker
+(blocked outbound :443, expired TLS, DNS failure, broker outage) only
+surfaced as a confusing failure on the user's first `peer list` or
+`send`, sometimes hours later.
+
+`/v1/health` was extended to include per-mesh broker WS state:
+
+```json
+{ "ok": true, "pid": 58837, "brokers": { "flexicar": "open", "openclaw": "connecting" } }
+```
+
+After service start, `install` polls `/v1/health` for up to 15 s and
+prints either:
+
+```
+✔ broker connected (mesh=flexicar, 2 other meshes attaching)
+```
+
+or, on timeout:
+
+```
+warn  broker did not reach open within 15s (flexicar=connecting, openclaw=connecting)
+      Check ~/.claudemesh/daemon/daemon.log for connect errors.
+      Common causes: outbound :443 blocked, expired TLS, DNS resolution.
+```
+
+The verification is best-effort and doesn't fail the install — it
+just surfaces the issue early so the user can fix it before sending
+their first message.
+
+### Tests
+
+4 new vitest cases cover the reaper paths: dead pid, live pid +
+matching start-time, live pid + mismatched start-time (PID reuse), and
+the no-start-time best-effort fallback.
+
 ## 1.30.2 (2026-05-04) — daemon service is multi-mesh by default
 
 `claudemesh install` was hardcoding `--mesh <primaryMesh>` into the

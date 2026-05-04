@@ -30,6 +30,7 @@
  */
 
 import { existsSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { ipc, IpcError } from "~/daemon/ipc/client.js";
@@ -40,7 +41,11 @@ export type DaemonReadyState =
   | "started"
   | "down"
   | "spawn-failed"
-  | "spawn-suppressed";
+  | "spawn-suppressed"
+  /** 1.31.0+: launchd / systemd manages the daemon and it didn't respond
+   *  within the service budget. Distinct from spawn-failed: the CLI did
+   *  not attempt to spawn (the OS owns the lifecycle). */
+  | "service-not-ready";
 
 export interface EnsureDaemonResult {
   state: DaemonReadyState;
@@ -62,7 +67,16 @@ export interface EnsureDaemonOpts {
 const SPAWN_LOCK_FILE  = () => join(DAEMON_PATHS.DAEMON_DIR, ".spawn.lock");
 const SPAWN_FAIL_FILE  = () => join(DAEMON_PATHS.DAEMON_DIR, ".spawn-failure");
 const SPAWN_FAIL_TTL_MS = 30_000;
-const PROBE_TIMEOUT_MS  = 800;
+// 1.31.0: 800 ms was too tight — the daemon's first IPC after a launchd
+// (re)start can take a beat while it migrates SQLite, opens broker WSes,
+// and warms up the event loop. False "stale" probes triggered the
+// pointless spawn → "socket did not appear" warning even on a perfectly
+// healthy service-managed daemon. 2500 ms still bounds the worst case.
+const PROBE_TIMEOUT_MS  = 2_500;
+// When the daemon is service-managed (launchd/systemd) and KeepAlive=true,
+// the OS guarantees a restart on death — the CLI must NOT race that with
+// its own spawn. Just wait longer for the service unit to come up.
+const SERVICE_BUDGET_MS = 8_000;
 
 let lastResultThisProcess: EnsureDaemonResult | null = null;
 
@@ -91,9 +105,30 @@ async function runEnsureDaemon(opts: EnsureDaemonOpts): Promise<EnsureDaemonResu
   // Step 1 — probe.
   const probe = await probeDaemon();
   if (probe === "up") return { state: "up", durationMs: Date.now() - t0 };
+
+  // Step 2 — service-managed shortcut. When launchd / systemd manages
+  // the daemon and KeepAlive is set, the OS will restart a crashed
+  // daemon on its own; the CLI must NOT race that with its own spawn
+  // (would double-bind the singleton lock and trigger "daemon already
+  // running" errors). Just wait quietly for the service to bring the
+  // socket up.
+  if (isServiceManaged()) {
+    if (probe === "stale") cleanupStaleFiles();
+    const polled = await pollForSocket(SERVICE_BUDGET_MS);
+    if (polled.ok) return { state: "up", durationMs: Date.now() - t0 };
+    const tool = process.platform === "darwin"
+      ? `launchctl print gui/$(id -u)/${SERVICE_LABEL}`
+      : `systemctl --user status ${SYSTEMD_UNIT}`;
+    return {
+      state: "service-not-ready",
+      durationMs: Date.now() - t0,
+      reason: `service-managed daemon not responding within ${SERVICE_BUDGET_MS}ms (run \`${tool}\`)`,
+    };
+  }
+
   if (probe === "stale") cleanupStaleFiles();
 
-  // Step 2 — auto-spawn unless forbidden.
+  // Step 3 — auto-spawn unless forbidden.
   if (opts.noAutoSpawn) {
     return { state: "down", durationMs: Date.now() - t0, reason: "auto-spawn disabled" };
   }
@@ -105,15 +140,35 @@ async function runEnsureDaemon(opts: EnsureDaemonOpts): Promise<EnsureDaemonResu
     };
   }
 
-  // Step 3 — spawn detached.
+  // Step 4 — spawn detached.
   const spawnRes = await spawnDaemon(opts);
   if (spawnRes.ok) {
     return { state: "started", durationMs: Date.now() - t0 };
   }
 
-  // Step 4 — record failure for backoff and report.
+  // Step 5 — record failure for backoff and report.
   markSpawnFailure();
   return { state: "spawn-failed", durationMs: Date.now() - t0, reason: spawnRes.reason };
+}
+
+const SERVICE_LABEL = "com.claudemesh.daemon";
+const SYSTEMD_UNIT = "claudemesh-daemon.service";
+
+/**
+ * Returns true when the user has installed the daemon as a launchd
+ * agent (macOS) or systemd --user unit (Linux). We detect by file
+ * presence rather than shelling out to launchctl/systemctl on every
+ * CLI invocation — this stays cheap and avoids spurious permission
+ * prompts on locked-down hosts.
+ */
+function isServiceManaged(): boolean {
+  if (process.platform === "darwin") {
+    return existsSync(join(homedir(), "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`));
+  }
+  if (process.platform === "linux") {
+    return existsSync(join(homedir(), ".config", "systemd", "user", SYSTEMD_UNIT));
+  }
+  return false;
 }
 
 async function probeDaemon(): Promise<"up" | "absent" | "stale"> {

@@ -470,7 +470,7 @@ async function main(): Promise<void> {
     }
 
     // Setup
-    case "install": { const { runInstall } = await import("~/commands/install.js"); runInstall(positionals); break; }
+    case "install": { const { runInstall } = await import("~/commands/install.js"); await runInstall(positionals); break; }
     case "uninstall": { const { uninstall } = await import("~/commands/uninstall.js"); process.exit(await uninstall()); break; }
     case "doctor": { const { runDoctor } = await import("~/commands/doctor.js"); await runDoctor(); break; }
     case "status": {

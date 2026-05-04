@@ -10,7 +10,9 @@
  * Lifecycle:
  *   - register replaces any prior entry under the same `sessionId`
  *     (handles re-launch and `--resume` flows cleanly).
- *   - reaper polls every 30 s and drops entries whose pid is dead.
+ *   - reaper polls every 5 s. An entry is dropped when its pid is dead
+ *     OR when its captured start-time no longer matches the running
+ *     process (PID reuse — original is gone, OS recycled the number).
  *   - hard ttl ceiling of 24 h is a leak guard for forgotten sessions.
  *
  * Persistence: in-memory only for v1. A daemon restart clears the
@@ -19,6 +21,8 @@
  * success path, and most ad-hoc CLI invocations from outside a launched
  * session have no token to begin with.
  */
+
+import { getProcessStartTime, isPidAlive } from "./process-info.js";
 
 /**
  * Optional per-launch presence material. Carried opaquely through the
@@ -51,6 +55,16 @@ export interface SessionInfo {
   groups?: string[];
   /** 1.30.0+: per-launch presence material. */
   presence?: SessionPresence;
+  /**
+   * 1.31.0+: opaque per-process start-time captured at register. The
+   * reaper compares the live value against this on every sweep — a
+   * mismatch means the original process exited and the pid was reused
+   * by an unrelated program, so the registry entry must be dropped.
+   * `undefined` when capture failed (process already dead at register
+   * time, ps unavailable, etc.) — the reaper falls back to bare
+   * liveness in that case.
+   */
+  startTime?: string;
   registeredAt: number;
 }
 
@@ -61,7 +75,7 @@ export interface RegistryHooks {
 }
 
 const TTL_MS = 24 * 60 * 60 * 1000;
-const REAPER_INTERVAL_MS = 30 * 1000;
+const REAPER_INTERVAL_MS = 5 * 1000;
 
 const byToken = new Map<string, SessionInfo>();
 const bySessionId = new Map<string, string>();
@@ -98,7 +112,12 @@ export function registerSession(info: Omit<SessionInfo, "registeredAt">): Sessio
     }
   }
 
-  const stored: SessionInfo = { ...info, registeredAt: Date.now() };
+  // Capture start-time at register so the reaper can detect PID reuse.
+  // Caller may pre-fill info.startTime (tests do this); only probe ps
+  // when the field is absent so we don't fork shell subprocesses in
+  // unit tests for fake pids.
+  const startTime = info.startTime ?? getProcessStartTime(info.pid) ?? undefined;
+  const stored: SessionInfo = { ...info, startTime, registeredAt: Date.now() };
   byToken.set(info.token, stored);
   bySessionId.set(info.sessionId, info.token);
   try { hooks.onRegister?.(stored); } catch { /* see above */ }
@@ -132,9 +151,22 @@ function reapDead(): void {
   const dead: string[] = [];
   for (const [token, info] of byToken.entries()) {
     if (Date.now() - info.registeredAt > TTL_MS) { dead.push(token); continue; }
-    try { process.kill(info.pid, 0); } catch { dead.push(token); }
+    if (!isPidAlive(info.pid)) { dead.push(token); continue; }
+    // PID reuse guard: process is alive, but if its start-time changed
+    // since register the original is gone and the OS recycled the pid
+    // for an unrelated program. Skip when we never captured a start-
+    // time (best-effort fallback to bare liveness above).
+    if (info.startTime !== undefined) {
+      const live = getProcessStartTime(info.pid);
+      if (live !== null && live !== info.startTime) { dead.push(token); continue; }
+    }
   }
   for (const t of dead) deregisterByToken(t);
+}
+
+/** Test helper: run a single reaper pass synchronously. */
+export function _runReaperOnce(): void {
+  reapDead();
 }
 
 /** Test helper. */
