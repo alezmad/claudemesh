@@ -232,7 +232,7 @@ What this leaves on the v2.0.0 redesign is documented at
 
 ---
 
-## v1.26.0 → v1.29.0 — *Sprint A toward v2* — *shipped*
+## v1.26.0 → v1.30.0 — *Sprint A toward v2* — *shipped*
 
 The Sprint A push completed everything spec'd for v2.0.0 *except* HKDF
 identity (deferred for security review).
@@ -268,14 +268,26 @@ identity (deferred for security review).
   joined meshes (verified: `peer list` returns 1 workspace's peers
   with token, all 3 without). Server-side `meshFromCtx()` plumbing
   on every read route.
+- **1.30.0** — per-session broker presence. Two `claudemesh launch`
+  sessions in the same cwd finally see each other in `peer list`. Each
+  launched session has a long-lived broker presence row owned by the
+  daemon, identified by a per-launch ephemeral keypair vouched by the
+  member's stable key (OAuth-refresh-vs-access shape). Broker gains a
+  `session_hello` handler with parent-attestation TTL ≤24h + session-
+  signature checks; daemon adds a slim `SessionBrokerClient` and
+  registry lifecycle hooks. Also fixes a latent 1.29.0 TDZ bug where
+  `claudemesh launch`'s IPC session-token registration was silently
+  failing every run. Flag-gated for one cycle, default ON in this
+  release; set `CLAUDEMESH_SESSION_PRESENCE=0` for rollback. Spec at
+  `.artifacts/specs/2026-05-04-per-session-presence.md`.
 
 What's left for true v2.0.0 (next sessions):
 
-- **1.30.0** — launch wizard refactor (single render loop, daemon-as-
+- **1.31.0** — launch wizard refactor (single render loop, daemon-as-
   step probe panel, last-used persistence, drop `@ts-nocheck`).
-- **1.31.0** — setup wizard refactor (state-detection snapshot, four-
+- **1.32.0** — setup wizard refactor (state-detection snapshot, four-
   branch flow, daemon install offer, post-join panel).
-- **1.32.0** — full mesh→workspace public-surface rename in help/docs/
+- **1.33.0** — full mesh→workspace public-surface rename in help/docs/
   site; mesh aliases tagged deprecated; protocol/DB stay `mesh_*`.
 
 ---

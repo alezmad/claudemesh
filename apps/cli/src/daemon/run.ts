@@ -29,14 +29,14 @@ export interface RunDaemonOptions {
 }
 
 /**
- * 1.30.0 feature flag. Default OFF for one release cycle so the broker
- * side has time to deploy + bake before the daemon starts opening
- * per-session WebSockets. Set CLAUDEMESH_SESSION_PRESENCE=0 to disable
- * once the flag flips default-on.
+ * 1.30.0 feature flag. Default ON — the daemon opens a long-lived WS per
+ * registered session so siblings see each other in `peer list`. Set
+ * CLAUDEMESH_SESSION_PRESENCE=0 (or "false"/"off") to disable for
+ * rollback if the broker side is misbehaving on a given mesh.
  */
 function isSessionPresenceEnabled(): boolean {
   const v = process.env.CLAUDEMESH_SESSION_PRESENCE;
-  if (v === undefined || v === "") return false;
+  if (v === undefined || v === "") return true;
   return v !== "0" && v.toLowerCase() !== "false" && v.toLowerCase() !== "off";
 }
 

@@ -1,5 +1,88 @@
 # Changelog
 
+## 1.30.0 (2026-05-04) — per-session broker presence
+
+Sprint A Phase 3. Two `claudemesh launch` sessions in the same cwd now
+see each other in `peer list`. Each launched session has a long-lived
+broker presence row owned by the daemon, identified by a per-launch
+ephemeral keypair vouched by the member's stable key (OAuth-refresh-vs-
+access shape).
+
+### What landed
+
+- **broker `session_hello`** — new WS message type. Validates a
+  parent-vouched `parent_attestation` (≤24h TTL, ed25519 signature by
+  the parent member) plus a session-keyed signature on the hello
+  itself. Inserts a presence row keyed on `sessionPubkey` but
+  `member_id` from the parent, so member-targeted operations stay
+  unchanged. Older brokers reply `unknown_message_type` — newer clients
+  drop back to the previous behavior.
+- **daemon `SessionBrokerClient`** — slim WS variant of
+  `DaemonBrokerClient`. Presence-only, no outbox drain. Lifetime tied
+  to a registry hook: register opens it, deregister/reaper closes it.
+  Reconnect with exponential backoff up to 30 s.
+- **session-registry hooks** — `setRegistryHooks({ onRegister,
+  onDeregister })` in `apps/cli/src/daemon/session-registry.ts`. Hook
+  errors are caught so they never throttle the registry. SessionInfo
+  gains an optional `presence` field carrying the per-launch keypair
+  + attestation.
+- **IPC `POST /v1/sessions/register`** — accepts an optional
+  `presence` block on the body (`session_pubkey`, `session_secret_key`,
+  `parent_attestation`). Older payloads continue to work.
+- **`claudemesh launch`** — generates an ed25519 session keypair and a
+  12 h parent attestation per launch (mesh secret key signs it),
+  forwards both to the daemon under `body.presence`. The flag
+  `CLAUDEMESH_SESSION_PRESENCE` defaults to ON; set `=0` to roll back
+  if a broker on a given mesh is misbehaving.
+- **latent 1.29.0 bug fix** — `claudemesh launch` referenced
+  `claudeSessionId` before its `const` declaration further down the
+  file, hitting the temporal dead zone → `ReferenceError` silently
+  swallowed by the surrounding catch. Net: the IPC session-token
+  registration has been failing every launch since 1.29.0, falling
+  every session back to user-level scope. Hoisted the declaration up
+  so the registration actually runs.
+
+### Sequencing
+
+The broker side ships first and bakes for ~24 h. Only then does the
+flag default flip on the CLI side. Older CLIs continue working
+unchanged (no per-session WS), and the protocol is purely additive on
+the wire.
+
+### Verification (smoke)
+
+In two shells, both `cd ~/Desktop/foo`:
+
+```
+$ claudemesh launch --name SessionA -y    # shell 1
+$ claudemesh launch --name SessionB -y    # shell 2
+```
+
+In a third shell:
+
+```
+$ claudemesh peer list --json --mesh foo \
+    | jq '.[] | {n: .displayName, c: .cwd}'
+{ "n": "SessionA", "c": "/.../foo" }    ← persistent, not query-induced
+{ "n": "SessionB", "c": "/.../foo" }
+```
+
+Inside SessionA, `peer list --mesh foo` now lists SessionB. Kill
+SessionB; within ≤30 s the reaper drops it from `peer list`.
+
+### Out of scope (deferred)
+
+- **Attestation auto-refresh** — current 12 h TTL is comfortably
+  longer than typical sessions; if a session lives past the TTL and
+  the WS reconnects after expiry, the broker rejects with `expired`
+  and the SessionBrokerClient quiets. Workaround: `claudemesh launch`
+  again. Auto-refresh queued for 1.31.0+ alongside HKDF identity.
+- **Per-session policy DSL** — the per-launch WS could carry
+  per-session capabilities later. Out of scope here.
+- **Cross-machine session sync** — waits on 2.0.0 HKDF identity.
+- **Launch-wizard refactor** — bumped to 1.31.0 to keep this release
+  scoped to presence.
+
 ## 1.29.0 (2026-05-04) — per-session IPC tokens + auto-scoping
 
 Sprint A Phase 2. Every `claudemesh launch`-spawned session gets a
