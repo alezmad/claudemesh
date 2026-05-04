@@ -21,13 +21,27 @@ export interface PeersFlags {
   mesh?: string;
   /** `true`/`undefined` = full record; comma-separated string = field projection. */
   json?: boolean | string;
-  /** When false (default), hide claudemesh-daemon presence rows from the
-   * human renderer — they're infrastructure, not interactive peers, and
-   * confused users into thinking the daemon counted as a "peer". The
-   * JSON output still includes them so scripts that need a full inventory
-   * can opt in via --all (or just consume JSON). */
+  /** When false (default), hide control-plane presence rows from the
+   * human renderer — they're infrastructure (daemon-WS member-keyed
+   * presence), not interactive peers, and confused users into thinking
+   * the daemon counted as a "peer". The JSON output still includes them
+   * so scripts that need a full inventory can opt in via --all (or
+   * just consume JSON).
+   *
+   * Source of truth is the broker-side `role` field
+   * (`'control-plane' | 'session' | 'service'`). Older brokers don't
+   * emit `role` yet — this code falls back to treating missing role as
+   * `'session'` so legacy peer rows stay visible. */
   all?: boolean;
 }
+
+/**
+ * Broker-emitted peer classification, added 2026-05-04. Older brokers
+ * may omit it — treat missing as 'session' so legacy meshes still
+ * render their peers (and don't accidentally hide them all). The CLI
+ * never emits 'control-plane' on its own; that comes from the broker.
+ */
+export type PeerRole = "control-plane" | "session" | "service";
 
 interface PeerRecord {
   pubkey: string;
@@ -43,10 +57,17 @@ interface PeerRecord {
   status?: string;
   summary?: string;
   groups: Array<{ name: string; role?: string }>;
-  /** Top-level convenience alias for `profile.role`. Lifted by the
-   * CLI so JSON consumers see role at the shape's top level instead
-   * of nested under profile. Same value either way. */
-  role?: string;
+  /** Broker-emitted classification: 'control-plane' | 'session' |
+   * 'service'. Source of truth for the --all visibility filter and the
+   * default-hide rule. Older brokers omit this; the CLI fills missing
+   * values with 'session' so legacy peer rows stay visible.
+   *
+   * Note: this replaces the prior CLI-side lift of `profile.role` to
+   * the top-level `role` field — `profile.role` is user-supplied
+   * metadata (e.g. "lead", "reviewer"), distinct from the broker's
+   * presence-class taxonomy. The user-facing string still lives at
+   * `profile.role` and is rendered inline as `role:<value>`. */
+  role?: PeerRole;
   peerType?: string;
   channel?: string;
   model?: string;
@@ -139,12 +160,9 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
  * surfaced a sender's siblings as separate rows because they're separate
  * presence rows; the cli just hadn't been making that visible.
  *
- * Also lifts `profile.role` to a top-level `role` field. The broker has
- * always returned role nested under `profile.role`, but downstream JSON
- * consumers (LLMs in launched sessions, jq pipelines, dashboards) kept
- * missing it because nothing pointed at the nesting. A dedicated
- * top-level alias makes the intent unmissable without breaking the
- * `profile` object's shape for callers that already drill into it.
+ * Also normalizes the broker's `role` classification: missing values
+ * (older brokers) default to 'session' so legacy peer rows stay
+ * visible under the default `--all=false` filter.
  */
 function annotateSelf(
   peer: PeerRecord,
@@ -161,8 +179,8 @@ function annotateSelf(
     selfSessionPubkey &&
     peer.pubkey === selfSessionPubkey
   );
-  const role = peer.profile?.role?.trim() || undefined;
-  return { ...peer, ...(role ? { role } : {}), isSelf, isThisSession };
+  const role: PeerRole = peer.role ?? "session";
+  return { ...peer, role, isSelf, isThisSession };
 }
 
 export async function runPeers(flags: PeersFlags): Promise<void> {
@@ -208,13 +226,18 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
         continue;
       }
 
-      // Hide claudemesh-daemon rows by default — they're infrastructure
-      // (the daemon's own member-keyed presence), not interactive peers,
-      // and they confused users into thinking the daemon counted as a
+      // Hide control-plane rows by default — they're infrastructure
+      // (daemon-WS member-keyed presence), not interactive peers, and
+      // they confused users into thinking the daemon counted as a
       // separate peer. --all opts back in for debugging.
+      //
+      // Source of truth: broker-emitted `role` field (added 2026-05-04).
+      // annotateSelf() already filled in 'session' for older brokers
+      // that don't emit role yet, so this filter is backwards-compatible
+      // by construction — legacy rows show up.
       const visible = flags.all
         ? peers
-        : peers.filter((p) => p.channel !== "claudemesh-daemon");
+        : peers.filter((p) => p.role !== "control-plane");
 
       // Sort: this-session first, then your-other-sessions, then real
       // peers. Within each group, idle/working ahead of dnd. Inside the
@@ -226,9 +249,9 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
         return score(a) - score(b);
       });
 
-      const hiddenDaemons = peers.length - visible.length;
-      const header = hiddenDaemons > 0
-        ? `peers on ${slug} (${sorted.length}, ${hiddenDaemons} daemon hidden — use --all)`
+      const hiddenControlPlane = peers.length - visible.length;
+      const header = hiddenControlPlane > 0
+        ? `peers on ${slug} (${sorted.length}, ${hiddenControlPlane} control-plane hidden — use --all)`
         : `peers on ${slug} (${sorted.length})`;
       render.section(header);
 

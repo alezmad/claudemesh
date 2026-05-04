@@ -26,15 +26,19 @@
  * expected to be deployed first.
  *
  * Spec: .artifacts/specs/2026-05-04-per-session-presence.md.
+ *
+ * 2026-05-04: lifecycle (connect / hello-ack / close-reconnect) lives
+ * in `ws-lifecycle.ts`. This class supplies session_hello content and
+ * routes the inbound onPush; the helper handles the rest.
  */
 
 import { hostname as osHostname } from "node:os";
-import WebSocket from "ws";
 
 import type { JoinedMesh } from "~/services/config/facade.js";
 import { signSessionHello } from "~/services/broker/session-hello-sig.js";
+import { connectWsWithBackoff, type WsLifecycle, type WsStatus } from "./ws-lifecycle.js";
 
-export type SessionBrokerStatus = "connecting" | "open" | "closed" | "reconnecting";
+export type SessionBrokerStatus = WsStatus;
 
 export interface ParentAttestation {
   sessionPubkey: string;
@@ -75,16 +79,13 @@ export interface SessionBrokerOptions {
   log?: (level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) => void;
 }
 
-const HELLO_ACK_TIMEOUT_MS = 5_000;
-const BACKOFF_CAPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
-
 export class SessionBrokerClient {
-  private ws: WebSocket | null = null;
+  private lifecycle: WsLifecycle | null = null;
   private _status: SessionBrokerStatus = "closed";
   private closed = false;
-  private reconnectAttempt = 0;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private helloTimer: NodeJS.Timeout | null = null;
+  /** Set when the broker rejects session_hello with `unknown_message_type` —
+   *  older brokers without the 1.30.0 surface. We stop retrying. */
+  private brokerUnsupported = false;
 
   constructor(private opts: SessionBrokerOptions) {}
 
@@ -100,80 +101,52 @@ export class SessionBrokerClient {
     });
   };
 
-  private setStatus(s: SessionBrokerStatus) {
-    if (this._status === s) return;
-    this._status = s;
-    this.opts.onStatusChange?.(s);
-  }
-
   /** Open the WS, run session_hello, resolve once the broker accepts. */
   async connect(): Promise<void> {
     if (this.closed) throw new Error("client_closed");
     if (this._status === "connecting" || this._status === "open") return;
-    this.setStatus("connecting");
 
-    const ws = new WebSocket(this.opts.mesh.brokerUrl);
-    this.ws = ws;
-
-    return new Promise<void>((resolve, reject) => {
-      ws.on("open", async () => {
-        try {
-          const { timestamp, signature } = await signSessionHello({
-            meshId: this.opts.mesh.meshId,
-            parentMemberPubkey: this.opts.mesh.pubkey,
-            sessionPubkey: this.opts.sessionPubkey,
-            sessionSecretKey: this.opts.sessionSecretKey,
-          });
-          ws.send(JSON.stringify({
-            type: "session_hello",
-            meshId: this.opts.mesh.meshId,
-            parentMemberId: this.opts.mesh.memberId,
-            parentMemberPubkey: this.opts.mesh.pubkey,
-            sessionPubkey: this.opts.sessionPubkey,
-            parentAttestation: this.opts.parentAttestation,
-            displayName: this.opts.displayName,
-            sessionId: this.opts.sessionId,
-            pid: this.opts.pid,
-            cwd: this.opts.cwd ?? process.cwd(),
-            hostname: osHostname(),
-            peerType: "ai" as const,
-            channel: "claudemesh-session",
-            ...(this.opts.groups && this.opts.groups.length > 0 ? { groups: this.opts.groups } : {}),
-            ...(this.opts.role ? { role: this.opts.role } : {}),
-            timestamp,
-            signature,
-          }));
-          this.helloTimer = setTimeout(() => {
-            this.log("warn", "session_hello_ack_timeout");
-            try { ws.close(); } catch { /* ignore */ }
-            reject(new Error("session_hello_ack_timeout"));
-          }, HELLO_ACK_TIMEOUT_MS);
-        } catch (e) {
-          reject(e instanceof Error ? e : new Error(String(e)));
-        }
-      });
-
-      ws.on("message", (raw) => {
-        let msg: Record<string, unknown>;
-        try { msg = JSON.parse(raw.toString()) as Record<string, unknown>; }
-        catch { return; }
-
-        if (msg.type === "hello_ack") {
-          if (this.helloTimer) clearTimeout(this.helloTimer);
-          this.helloTimer = null;
-          this.setStatus("open");
-          this.reconnectAttempt = 0;
-          resolve();
-          return;
-        }
-
+    this.lifecycle = await connectWsWithBackoff({
+      url: this.opts.mesh.brokerUrl,
+      buildHello: async () => {
+        const { timestamp, signature } = await signSessionHello({
+          meshId: this.opts.mesh.meshId,
+          parentMemberPubkey: this.opts.mesh.pubkey,
+          sessionPubkey: this.opts.sessionPubkey,
+          sessionSecretKey: this.opts.sessionSecretKey,
+        });
+        return {
+          type: "session_hello",
+          meshId: this.opts.mesh.meshId,
+          parentMemberId: this.opts.mesh.memberId,
+          parentMemberPubkey: this.opts.mesh.pubkey,
+          sessionPubkey: this.opts.sessionPubkey,
+          parentAttestation: this.opts.parentAttestation,
+          displayName: this.opts.displayName,
+          sessionId: this.opts.sessionId,
+          pid: this.opts.pid,
+          cwd: this.opts.cwd ?? process.cwd(),
+          hostname: osHostname(),
+          peerType: "ai" as const,
+          channel: "claudemesh-session",
+          ...(this.opts.groups && this.opts.groups.length > 0 ? { groups: this.opts.groups } : {}),
+          ...(this.opts.role ? { role: this.opts.role } : {}),
+          timestamp,
+          signature,
+        };
+      },
+      isHelloAck: (msg) => msg.type === "hello_ack",
+      onMessage: (msg) => {
         if (msg.type === "error") {
           // Older brokers respond with `unknown_message_type` to session_hello;
           // surface that so the daemon can decide to skip per-session presence
-          // rather than churn through reconnects.
+          // rather than churn through reconnects. Setting `closed` halts the
+          // helper's reconnect loop on the next close.
           this.log("warn", "broker_error", { code: msg.code, message: msg.message });
           if (msg.code === "unknown_message_type") {
+            this.brokerUnsupported = true;
             this.closed = true;
+            void this.lifecycle?.close();
           }
           return;
         }
@@ -185,33 +158,27 @@ export class SessionBrokerClient {
           this.opts.onPush?.(msg);
           return;
         }
-      });
-
-      ws.on("close", (code, reason) => {
-        if (this.helloTimer) { clearTimeout(this.helloTimer); this.helloTimer = null; }
-        if (this.closed) { this.setStatus("closed"); return; }
-        this.setStatus("reconnecting");
-        const wait = BACKOFF_CAPS_MS[Math.min(this.reconnectAttempt, BACKOFF_CAPS_MS.length - 1)] ?? 30_000;
-        this.reconnectAttempt++;
-        this.log("info", "session_broker_reconnect_scheduled", { wait_ms: wait, code, reason: reason.toString("utf8") });
-        this.reconnectTimer = setTimeout(
-          () => this.connect().catch((err) => this.log("warn", "session_broker_reconnect_failed", { err: String(err) })),
-          wait,
-        );
-        if (this._status === "connecting") reject(new Error(`closed_before_hello_${code}`));
-      });
-
-      ws.on("error", (err) => this.log("warn", "session_broker_ws_error", { err: err.message }));
+      },
+      onStatusChange: (s) => {
+        this._status = s;
+        this.opts.onStatusChange?.(s);
+      },
+      log: (level, msg, meta) => this.log(level, `session_broker_${msg}`, meta),
     });
   }
 
   async close(): Promise<void> {
     this.closed = true;
-    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
-    if (this.helloTimer) { clearTimeout(this.helloTimer); this.helloTimer = null; }
-    try { this.ws?.close(); } catch { /* ignore */ }
-    this.setStatus("closed");
+    if (this.lifecycle) {
+      try { await this.lifecycle.close(); } catch { /* ignore */ }
+      this.lifecycle = null;
+    }
+    this._status = "closed";
   }
+
+  /** True when the broker rejected our session_hello as unknown — caller
+   *  may want to skip per-session presence entirely on this mesh. */
+  get isBrokerUnsupported(): boolean { return this.brokerUnsupported; }
 }
 
 function defaultLog(level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) {
