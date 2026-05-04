@@ -90,6 +90,66 @@ export interface WSHelloMessage {
   signature: string;
 }
 
+/**
+ * Client → broker: per-launch session hello, vouched by the parent member.
+ *
+ * Used by the daemon's per-session WebSocket connections (1.30.0+) so that
+ * each `claudemesh launch`-spawned session has its own long-lived presence
+ * row owned by an ephemeral session keypair. The parent member key vouches
+ * (out-of-band) that the session pubkey is theirs; the session keypair
+ * proves liveness on every connect.
+ *
+ * Two-stage proof:
+ *   1. `parentAttestation.signature` — ed25519 over
+ *      `claudemesh-session-attest|<parent_pubkey>|<session_pubkey>|<expires_at_ms>`
+ *      signed by the parent member's stable secret key. TTL ≤ 24h.
+ *   2. `signature` — ed25519 over
+ *      `claudemesh-session-hello|<mesh_id>|<parent_pubkey>|<session_pubkey>|<timestamp>`
+ *      signed by the session secret key (held by the daemon for the
+ *      lifetime of the session registration).
+ *
+ * Older brokers don't recognize this message type and reply with
+ * `unknown_message_type`; clients fall back to the legacy `hello` flow.
+ */
+export interface WSSessionHelloMessage {
+  type: "session_hello";
+  /** Highest WS protocol version the client understands. */
+  protocolVersion?: number;
+  /** Optional feature strings the client supports. */
+  capabilities?: string[];
+  meshId: string;
+  /** Parent member's id (mesh.member.id) — used for revocation lookup. */
+  parentMemberId: string;
+  /** Parent member's stable ed25519 pubkey (hex), as found in mesh.member. */
+  parentMemberPubkey: string;
+  /** Per-launch ephemeral ed25519 pubkey (hex). Routes presence + DMs. */
+  sessionPubkey: string;
+  /** Pre-signed attestation by the parent member, presented per session. */
+  parentAttestation: {
+    sessionPubkey: string;
+    parentMemberPubkey: string;
+    /** Unix ms; broker rejects past or > now+24h. */
+    expiresAt: number;
+    signature: string;
+  };
+  /** Display name override for this session (optional, falls back to member). */
+  displayName?: string;
+  sessionId: string;
+  pid: number;
+  cwd: string;
+  hostname?: string;
+  peerType?: "ai" | "human" | "connector";
+  channel?: string;
+  model?: string;
+  groups?: Array<{ name: string; role?: string }>;
+  /** Initial role tag for the session. */
+  role?: string;
+  /** ms epoch; broker rejects if outside ±60s of its own clock. */
+  timestamp: number;
+  /** ed25519 signature (hex) by the SESSION secret key over canonical bytes. */
+  signature: string;
+}
+
 /** Client → broker: send an E2E-encrypted envelope to a target. */
 export interface WSSendMessage {
   type: "send";
@@ -1341,6 +1401,7 @@ export interface WSWatchTriggeredMessage { type: "watch_triggered"; watchId: str
 
 export type WSClientMessage =
   | WSHelloMessage
+  | WSSessionHelloMessage
   | WSSendMessage
   | WSSetStatusMessage
   | WSListPeersMessage
