@@ -549,8 +549,11 @@ export interface WSPeersListMessage {
     cwd?: string;
     /** v2 agentic-comms (M1): typed connection role. CLI uses this to
      *  filter control-plane daemons out of user-facing peer lists.
-     *  Optional for clients talking to a pre-M1 broker. */
-    role?: "control-plane" | "session" | "service";
+     *  Optional for clients talking to a pre-M1 broker. Wire field is
+     *  `peerRole` to avoid collision with 1.31.5's top-level `role`
+     *  (which is a lift of `profile.role`, the user-supplied string
+     *  like "lead" / "reviewer" / "human"). */
+    peerRole?: "control-plane" | "session" | "service";
     hostname?: string;
     peerType?: "ai" | "human" | "connector";
     channel?: string;

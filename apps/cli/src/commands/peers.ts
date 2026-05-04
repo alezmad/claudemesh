@@ -57,17 +57,20 @@ interface PeerRecord {
   status?: string;
   summary?: string;
   groups: Array<{ name: string; role?: string }>;
-  /** Broker-emitted classification: 'control-plane' | 'session' |
-   * 'service'. Source of truth for the --all visibility filter and the
-   * default-hide rule. Older brokers omit this; the CLI fills missing
-   * values with 'session' so legacy peer rows stay visible.
+  /** Top-level convenience alias for `profile.role`, lifted by the CLI
+   * since 1.31.5 so JSON consumers (the agent-vibes claudemesh skill,
+   * launched-session LLMs) see the user-supplied role string at the
+   * shape's top level. Same value as `profile.role`. Distinct from
+   * `peerRole` below — that's the broker's presence-class taxonomy. */
+  role?: string;
+  /** Broker-emitted presence classification: 'control-plane' | 'session'
+   * | 'service'. Source of truth for the --all visibility filter and
+   * the default-hide rule. Older brokers omit this; the CLI fills
+   * missing values with 'session' so legacy peer rows stay visible.
    *
-   * Note: this replaces the prior CLI-side lift of `profile.role` to
-   * the top-level `role` field — `profile.role` is user-supplied
-   * metadata (e.g. "lead", "reviewer"), distinct from the broker's
-   * presence-class taxonomy. The user-facing string still lives at
-   * `profile.role` and is rendered inline as `role:<value>`. */
-  role?: PeerRole;
+   * Renamed from `role` to avoid collision with 1.31.5's profile.role
+   * lift above. Wire-level field on the broker is also `peerRole`. */
+  peerRole?: PeerRole;
   peerType?: string;
   channel?: string;
   model?: string;
@@ -160,9 +163,14 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
  * surfaced a sender's siblings as separate rows because they're separate
  * presence rows; the cli just hadn't been making that visible.
  *
- * Also normalizes the broker's `role` classification: missing values
- * (older brokers) default to 'session' so legacy peer rows stay
+ * Also normalizes the broker's `peerRole` classification: missing
+ * values (older brokers) default to 'session' so legacy peer rows stay
  * visible under the default `--all=false` filter.
+ *
+ * And lifts `profile.role` to a top-level `role` field — the 1.31.5
+ * convenience alias for JSON consumers (skill SKILL.md, launched-session
+ * LLMs, jq pipelines). Same value as profile.role; distinct from
+ * peerRole (presence taxonomy).
  */
 function annotateSelf(
   peer: PeerRecord,
@@ -179,8 +187,15 @@ function annotateSelf(
     selfSessionPubkey &&
     peer.pubkey === selfSessionPubkey
   );
-  const role: PeerRole = peer.role ?? "session";
-  return { ...peer, role, isSelf, isThisSession };
+  const peerRole: PeerRole = peer.peerRole ?? "session";
+  const profileRole = peer.profile?.role?.trim() || undefined;
+  return {
+    ...peer,
+    ...(profileRole ? { role: profileRole } : {}),
+    peerRole,
+    isSelf,
+    isThisSession,
+  };
 }
 
 export async function runPeers(flags: PeersFlags): Promise<void> {
@@ -231,13 +246,13 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
       // they confused users into thinking the daemon counted as a
       // separate peer. --all opts back in for debugging.
       //
-      // Source of truth: broker-emitted `role` field (added 2026-05-04).
-      // annotateSelf() already filled in 'session' for older brokers
-      // that don't emit role yet, so this filter is backwards-compatible
-      // by construction — legacy rows show up.
+      // Source of truth: broker-emitted `peerRole` field (added
+      // 2026-05-04). annotateSelf() filled in 'session' for older
+      // brokers that don't emit peerRole yet, so this filter is
+      // backwards-compatible by construction — legacy rows show up.
       const visible = flags.all
         ? peers
-        : peers.filter((p) => p.role !== "control-plane");
+        : peers.filter((p) => p.peerRole !== "control-plane");
 
       // Sort: this-session first, then your-other-sessions, then real
       // peers. Within each group, idle/working ahead of dnd. Inside the

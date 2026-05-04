@@ -127,7 +127,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
   const meshConfigs = new Map<string, typeof cfg.meshes[number]>();
   for (const mesh of meshes) {
     meshConfigs.set(mesh.slug, mesh);
-    const broker = new DaemonBrokerClient(mesh, {
+    const broker: DaemonBrokerClient = new DaemonBrokerClient(mesh, {
       displayName: opts.displayName,
       onStatusChange: (s) => {
         process.stdout.write(JSON.stringify({
@@ -146,6 +146,9 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
           bus,
           meshSlug: mesh.slug,
           recipientSecretKeyHex: mesh.secretKey,
+          // v2 agentic-comms (M1): client_ack closes the at-least-once
+          // loop. Broker holds the row claimed (not delivered) until ack.
+          ackClientMessage: (cmid, bmid) => broker.sendClientAck(cmid, bmid),
         });
       },
     });
@@ -187,7 +190,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
       // session secret key; member key remains the fallback for legacy
       // member-targeted traffic that happens to fan out here.
       const sessionSecretKeyHex = info.presence.sessionSecretKey;
-      const client = new SessionBrokerClient({
+      const client: SessionBrokerClient = new SessionBrokerClient({
         mesh: meshConfig,
         sessionPubkey: info.presence.sessionPubkey,
         sessionSecretKey: info.presence.sessionSecretKey,
@@ -204,6 +207,8 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
             meshSlug: meshConfig.slug,
             recipientSecretKeyHex: meshConfig.secretKey,
             sessionSecretKeyHex,
+            // v2 agentic-comms (M1): close the at-least-once loop.
+            ackClientMessage: (cmid, bmid) => client.sendClientAck(cmid, bmid),
           });
         },
       });

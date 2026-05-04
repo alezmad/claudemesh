@@ -1,6 +1,86 @@
 # Changelog
 
-## Unreleased — Milestone 1 lifecycle cleanups
+## 1.33.0 (2026-05-04) — Milestone 1: lifecycle cleanups + at-least-once with ack
+
+First milestone of the agentic-comms architecture work
+(`.artifacts/specs/2026-05-04-agentic-comms-architecture-v2.md`).
+Foundational correctness — no new external surface, but the wire
+protocol grows two additions: a `peerRole` field on `peer list`
+responses (presence classification) and a new client-→broker
+`client_ack` frame.
+
+### Lifecycle helper extraction
+
+`DaemonBrokerClient` and `SessionBrokerClient` now share a single
+lifecycle implementation in `apps/cli/src/daemon/ws-lifecycle.ts`
+(`connectWsWithBackoff`). Each client supplies `buildHello` /
+`isHelloAck` / `onMessage` and keeps its own RPC bookkeeping; the
+helper handles connect, hello-ack timeout, close + backoff reconnect.
+Composition over inheritance per Codex's review. Eliminates the drift
+bug class that produced 1.32.0/1.32.1 (lifecycle copies diverging
+silently when one side gained a feature).
+
+### Daemon-WS no longer carries an ephemeral session keypair
+
+Pre-1.33: every daemon-WS reconnect minted a fresh keypair, sent the
+pubkey in the hello, and held the secret in memory for "session"
+crypto. Vestigial since 1.30.0 introduced the per-launch
+`SessionBrokerClient` that owns the real session pubkey. Daemon-WS
+now uses the stable mesh member secret directly for outbound
+encryption. Inbound on daemon-WS only attempts member-key decryption —
+session decryption is the session-WS's job.
+
+### `peerRole` wire field
+
+The broker now emits a `peerRole` field on each `peer list` row —
+`'control-plane' | 'session' | 'service'`. `control-plane` rows are
+the daemon's own member-keyed presence (infrastructure), `session`
+rows are launched Claude Code sessions, `service` rows are reserved
+for v2.x service identities (HTTP webhook consumers, voice agents,
+etc.).
+
+The CLI hides `peerRole === 'control-plane'` rows from the human
+renderer by default and exposes a `--all` flag for debugging. JSON
+output emits `peerRole` on every row.
+
+**Why `peerRole` and not just `role`:** 1.31.5 already lifted
+`profile.role` (user-supplied string like "lead", "reviewer") to
+top-level `role`, and the agent-vibes claudemesh skill consumes that
+field. The presence classification is a different axis, so it gets
+its own field name. `role` keeps its 1.31.5 semantics; `peerRole` is
+the new field.
+
+### `client_ack` and at-least-once delivery
+
+The broker (M1 broker change) now uses two-phase claim/deliver:
+`claimed_at` / `claim_id` / `claim_expires_at` columns track lease
+ownership; `delivered_at` is set ONLY when the recipient acks. A 15s
+sweeper re-claims rows whose 30s lease expired without ack.
+
+The CLI side closes the loop: after `handleBrokerPush` lands a
+message in `inbox.db` (or dedupes against an existing row), the
+recipient daemon emits a `client_ack { type: "client_ack",
+clientMessageId, brokerMessageId? }` frame on whichever WS the push
+arrived on. Best-effort — if the WS is closed by ack time, the
+broker's lease will naturally re-deliver, and the receiver dedupes
+on `clientMessageId`.
+
+Net behavior: at-least-once with idempotent dedupe. Net visible
+change: zero, in the steady state. Crash-mid-push test (kill recipient
+between broker claim and recipient ack) now redelivers instead of
+silently dropping.
+
+### Files
+
+- New: `apps/cli/src/daemon/ws-lifecycle.ts` (234 lines).
+- Refactored: `apps/cli/src/daemon/broker.ts`, `session-broker.ts`,
+  `inbound.ts`, `run.ts`, `commands/peers.ts`, `ipc/server.ts`.
+- Broker side (separate commit): drain race fix, `presence.role`
+  column, `client_ack` handler, lease sweeper.
+- DB migration `0029_drain_lease_and_presence_role.sql` ships with
+  the broker change.
+
+
 
 Foundational refactor before the agentic-comms architecture work
 (`.artifacts/specs/2026-05-04-agentic-comms-architecture-v2.md`). Three

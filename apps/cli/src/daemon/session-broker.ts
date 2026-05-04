@@ -167,6 +167,20 @@ export class SessionBrokerClient {
     });
   }
 
+  /** v2 agentic-comms (M1): send `client_ack` back to the broker after
+   *  successfully landing an inbound push in inbox.db. Broker uses the
+   *  ack to set `delivered_at`. Best-effort. */
+  sendClientAck(clientMessageId: string, brokerMessageId: string | null): void {
+    if (this._status !== "open" || !this.lifecycle) return;
+    try {
+      this.lifecycle.send({
+        type: "client_ack",
+        clientMessageId,
+        ...(brokerMessageId ? { brokerMessageId } : {}),
+      });
+    } catch { /* drop; lease re-delivers */ }
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     if (this.lifecycle) {

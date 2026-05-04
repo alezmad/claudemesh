@@ -18,6 +18,13 @@ export interface InboundContext {
   /** Daemon's session secret key hex (rotates per connect). When the
    *  sender encrypted to our session pubkey, decrypt with this instead. */
   sessionSecretKeyHex?: string;
+  /** v2 agentic-comms (M1): emit `client_ack` back to the broker after
+   *  the message lands in inbox.db. Broker uses the ack to set
+   *  `delivered_at` (atomic at-least-once). Without it, the broker's
+   *  30s lease expires and re-delivers — correct but noisy. The WS
+   *  client owns this callback because it's the one that owns the
+   *  socket; inbound.ts just signals "I accepted this id." */
+  ackClientMessage?: (clientMessageId: string, brokerMessageId: string | null) => void;
   log?: (level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -72,6 +79,12 @@ export async function handleBrokerPush(msg: Record<string, unknown>, ctx: Inboun
     received_at: Date.now(),
     reply_to_id: replyToId,
   });
+
+  // Whether the row was newly inserted or already existed (dedupe), the
+  // broker still wants to know we received and processed this message —
+  // ack regardless. Skipping ack on dedupe would leak: broker would
+  // re-deliver after lease, and the receiver would re-dedupe forever.
+  ctx.ackClientMessage?.(clientMessageId, brokerMessageId);
 
   if (!inserted) return; // already had this id; no event
 

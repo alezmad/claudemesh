@@ -2652,7 +2652,9 @@ function handleConnection(ws: WebSocket): void {
                 // v2 agentic-comms (M1): typed connection role. CLI uses
                 // this to hide control-plane daemons from user-facing
                 // peer lists (filter swap from peerType happens CLI-side).
-                role: p.role,
+                // Wire field is `peerRole` to avoid collision with the
+                // 1.31.5 top-level `role` lift of profile.role.
+                peerRole: p.peerRole,
                 ...(pc?.hostname ? { hostname: pc.hostname } : {}),
                 ...(pc?.peerType ? { peerType: pc.peerType } : {}),
                 ...(pc?.channel ? { channel: pc.channel } : {}),

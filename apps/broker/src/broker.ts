@@ -444,8 +444,10 @@ export async function listPeersInMesh(
     cwd: string;
     connectedAt: Date;
     /** v2 agentic-comms (M1): connection role. CLI uses this to hide
-     *  control-plane daemons from user-facing lists. */
-    role: PresenceRole;
+     *  control-plane daemons from user-facing lists. Wire-level field
+     *  is `peerRole` to avoid collision with 1.31.5's top-level `role`
+     *  lift of profile.role (user-supplied string like "lead"). */
+    peerRole: PresenceRole;
   }>
 > {
   const rows = await db
@@ -460,7 +462,7 @@ export async function listPeersInMesh(
       sessionId: presence.sessionId,
       cwd: presence.cwd,
       connectedAt: presence.connectedAt,
-      role: presence.role,
+      peerRole: presence.role,
     })
     .from(presence)
     .innerJoin(memberTable, eq(presence.memberId, memberTable.id))
@@ -485,7 +487,7 @@ export async function listPeersInMesh(
     sessionId: r.sessionId,
     cwd: r.cwd,
     connectedAt: r.connectedAt,
-    role: (r.role ?? "session") as PresenceRole,
+    peerRole: (r.peerRole ?? "session") as PresenceRole,
   }));
 }
 
