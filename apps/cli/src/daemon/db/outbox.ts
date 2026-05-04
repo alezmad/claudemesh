@@ -26,6 +26,15 @@ export interface OutboxRow {
   nonce: string | null;
   ciphertext: string | null;
   priority: string | null;
+  /**
+   * 1.34.0: hex pubkey of the launched session that originated this row.
+   * NULL when the send came from outside a registered session
+   * (cold-path CLI, system-issued sends, etc.) — drain falls through to
+   * the daemon-WS in that case. When set, drain prefers the matching
+   * SessionBrokerClient so the broker fan-out attributes the push to
+   * the session pubkey instead of the daemon's stable member pubkey.
+   */
+  sender_session_pubkey: string | null;
 }
 
 export function migrateOutbox(db: SqliteDb): void {
@@ -68,6 +77,14 @@ export function migrateOutbox(db: SqliteDb): void {
   if (!hasNonce)       db.exec(`ALTER TABLE outbox ADD COLUMN nonce TEXT`);
   if (!hasCiphertext)  db.exec(`ALTER TABLE outbox ADD COLUMN ciphertext TEXT`);
   if (!hasPriority)    db.exec(`ALTER TABLE outbox ADD COLUMN priority TEXT`);
+
+  // 1.34.0: per-row sender session pubkey, used by the drain worker to
+  // route via the originating session's WS so broker fan-out attributes
+  // the push to the session pubkey, not the daemon's member pubkey.
+  // Pre-1.34.0 rows land with NULL — drain falls back to the daemon-WS
+  // path (legacy attribution).
+  const hasSenderSessionPk = columnExists(db, "outbox", "sender_session_pubkey");
+  if (!hasSenderSessionPk) db.exec(`ALTER TABLE outbox ADD COLUMN sender_session_pubkey TEXT`);
 }
 
 function columnExists(db: SqliteDb, table: string, column: string): boolean {
@@ -80,7 +97,8 @@ export function findByClientId(db: SqliteDb, clientMessageId: string): OutboxRow
     SELECT id, client_message_id, request_fingerprint, payload, enqueued_at,
            attempts, next_attempt_at, status, last_error, delivered_at,
            broker_message_id, aborted_at, aborted_by, superseded_by,
-           mesh, target_spec, nonce, ciphertext, priority
+           mesh, target_spec, nonce, ciphertext, priority,
+           sender_session_pubkey
       FROM outbox WHERE client_message_id = ?
   `).get<OutboxRow>(clientMessageId);
   return row ?? null;
@@ -98,6 +116,9 @@ export interface InsertPendingInput {
   nonce?: string;
   ciphertext?: string;
   priority?: string;
+  /** 1.34.0: hex pubkey of the originating session (omit for cold-path
+   *  CLI sends — drain will use the daemon-WS). */
+  sender_session_pubkey?: string;
 }
 
 export function insertPending(db: SqliteDb, input: InsertPendingInput): void {
@@ -105,8 +126,9 @@ export function insertPending(db: SqliteDb, input: InsertPendingInput): void {
     INSERT INTO outbox (
       id, client_message_id, request_fingerprint, payload,
       enqueued_at, attempts, next_attempt_at, status,
-      mesh, target_spec, nonce, ciphertext, priority
-    ) VALUES (?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?, ?, ?, ?)
+      mesh, target_spec, nonce, ciphertext, priority,
+      sender_session_pubkey
+    ) VALUES (?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?, ?, ?, ?, ?)
   `).run(
     input.id,
     input.client_message_id,
@@ -114,11 +136,12 @@ export function insertPending(db: SqliteDb, input: InsertPendingInput): void {
     input.payload,
     input.now,
     input.now,
-    input.mesh         ?? null,
-    input.target_spec  ?? null,
-    input.nonce        ?? null,
-    input.ciphertext   ?? null,
-    input.priority     ?? null,
+    input.mesh                  ?? null,
+    input.target_spec           ?? null,
+    input.nonce                 ?? null,
+    input.ciphertext            ?? null,
+    input.priority              ?? null,
+    input.sender_session_pubkey ?? null,
   );
 }
 
@@ -149,7 +172,8 @@ export function listOutbox(db: SqliteDb, p: ListOutboxParams = {}): OutboxRow[] 
     SELECT id, client_message_id, request_fingerprint, payload, enqueued_at,
            attempts, next_attempt_at, status, last_error, delivered_at,
            broker_message_id, aborted_at, aborted_by, superseded_by,
-           mesh, target_spec, nonce, ciphertext, priority
+           mesh, target_spec, nonce, ciphertext, priority,
+           sender_session_pubkey
       FROM outbox
      ${where.length ? "WHERE " + where.join(" AND ") : ""}
      ORDER BY enqueued_at DESC
@@ -164,7 +188,8 @@ export function findById(db: SqliteDb, id: string): OutboxRow | null {
     SELECT id, client_message_id, request_fingerprint, payload, enqueued_at,
            attempts, next_attempt_at, status, last_error, delivered_at,
            broker_message_id, aborted_at, aborted_by, superseded_by,
-           mesh, target_spec, nonce, ciphertext, priority
+           mesh, target_spec, nonce, ciphertext, priority,
+           sender_session_pubkey
       FROM outbox WHERE id = ?
   `).get<OutboxRow>(id) ?? null;
 }

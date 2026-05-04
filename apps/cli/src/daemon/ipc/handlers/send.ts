@@ -39,6 +39,12 @@ export interface SendRequest {
   nonce?: string;
   /** Sprint 4: which mesh this send is for (single-mesh daemon today; multi-mesh later). */
   mesh?: string;
+  /** 1.34.0: when the IPC request authenticated as a launched session,
+   *  the IPC layer fills this with the session's hex pubkey. The drain
+   *  worker uses it to route via the matching SessionBrokerClient so
+   *  broker fan-out attributes the push to the session pubkey instead
+   *  of the daemon's member pubkey. */
+  sender_session_pubkey?: string;
 }
 
 export type AcceptOutcome =
@@ -93,6 +99,7 @@ export function acceptSend(req: SendRequest, deps: AcceptDeps): AcceptOutcome {
         nonce: req.nonce,
         ciphertext: req.ciphertext,
         priority: req.priority,
+        sender_session_pubkey: req.sender_session_pubkey,
       });
       return { kind: "accepted_pending", status: 202, client_message_id: clientId };
     }

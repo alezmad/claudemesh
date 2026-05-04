@@ -18,6 +18,20 @@ export interface InboundContext {
   /** Daemon's session secret key hex (rotates per connect). When the
    *  sender encrypted to our session pubkey, decrypt with this instead. */
   sessionSecretKeyHex?: string;
+  /** 1.34.10: recipient pubkey of the WS that received this push.
+   *  Either the daemon's member pubkey (member-WS) or one of our
+   *  session pubkeys (session-WS). Threaded through to the bus event
+   *  so each MCP subscriber can filter to events meant for its own
+   *  session — without it, every MCP on the same daemon renders every
+   *  inbox row, which manifests as session A seeing its own outbound
+   *  to B (because A's MCP also picks up the bus event B's WS just
+   *  published). */
+  recipientPubkey?: string;
+  /** 1.34.10: kind of WS this push arrived on. "session" pushes only
+   *  surface to the matching session's MCP; "member" pushes surface to
+   *  every session on the same mesh (member-keyed broadcasts, member
+   *  DMs that don't have a session). */
+  recipientKind?: "session" | "member";
   /** v2 agentic-comms (M1): emit `client_ack` back to the broker after
    *  the message lands in inbox.db. Broker uses the ack to set
    *  `delivered_at` (atomic at-least-once). Without it, the broker's
@@ -25,6 +39,16 @@ export interface InboundContext {
    *  client owns this callback because it's the one that owns the
    *  socket; inbound.ts just signals "I accepted this id." */
   ackClientMessage?: (clientMessageId: string, brokerMessageId: string | null) => void;
+  /** 1.34.9: drops system events (peer_joined / peer_left /
+   *  peer_returned) whose eventData.pubkey is one of our own. The broker
+   *  fans peer_joined to every OTHER connection in the mesh — but our
+   *  daemon's member-WS counts as "other" relative to our session-WS,
+   *  so without this filter the user sees `[system] Peer "<self>"
+   *  joined the mesh` every time their own session reconnects.
+   *  Implementation passes a closure that walks the live broker map
+   *  rather than a static set, so newly-spawned sessions are visible
+   *  immediately. */
+  isOwnPubkey?: (pubkey: string) => boolean;
   log?: (level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -38,10 +62,21 @@ export interface InboundContext {
 export async function handleBrokerPush(msg: Record<string, unknown>, ctx: InboundContext): Promise<void> {
   // System/topology pushes (peer_join, tick, …) — emit verbatim.
   if (msg.subtype === "system" && typeof msg.event === "string") {
+    const eventData = (msg.eventData as Record<string, unknown> | undefined) ?? {};
+    // 1.34.9: drop self-joins. The broker excludes the JOINING
+    // connection from the fan-out, but our daemon owns multiple
+    // connections per mesh (member-WS + N session-WSs), and each is a
+    // distinct "other" from the broker's view — so a session's own
+    // peer_joined arrives at the same daemon's member-WS and used to
+    // surface as `[system] Peer "<self>" joined`. The session-WS path
+    // already skips system events entirely (see session-broker.ts
+    // 1.34.9), and this filter handles the member-WS path.
+    const eventPubkey = typeof eventData.pubkey === "string" ? eventData.pubkey : "";
+    if (eventPubkey && ctx.isOwnPubkey?.(eventPubkey)) return;
     ctx.bus.publish(mapSystemEventKind(msg.event), {
       mesh: ctx.meshSlug,
       event: msg.event,
-      ...(msg.eventData as Record<string, unknown> | undefined ?? {}),
+      ...eventData,
     });
     return;
   }
@@ -78,6 +113,12 @@ export async function handleBrokerPush(msg: Record<string, unknown>, ctx: Inboun
     meta: createdAt ? JSON.stringify({ created_at: createdAt }) : null,
     received_at: Date.now(),
     reply_to_id: replyToId,
+    // 1.34.11: persist the recipient context so /v1/inbox can scope
+    // queries to the asking session. Mirrors the same fields on the
+    // bus event added in 1.34.10. Falls back to NULL when the caller
+    // didn't pass them (legacy paths, tests).
+    recipient_pubkey: ctx.recipientPubkey ?? null,
+    recipient_kind:   ctx.recipientKind   ?? null,
   });
 
   // Whether the row was newly inserted or already existed (dedupe), the
@@ -102,6 +143,14 @@ export async function handleBrokerPush(msg: Record<string, unknown>, ctx: Inboun
     ...(subtype ? { subtype } : {}),
     body,
     created_at: createdAt,
+    // 1.34.10: per-recipient routing context. SSE subscribers (the
+    // MCP servers that translate bus events into channel notifications)
+    // use this to filter to events meant for their own session. Without
+    // it, every MCP on the same daemon emits a channel push for every
+    // inbox row, which means session A sees its own outbound to B
+    // because B's session-WS published the inbox row to the shared bus.
+    ...(ctx.recipientPubkey ? { recipient_pubkey: ctx.recipientPubkey } : {}),
+    ...(ctx.recipientKind   ? { recipient_kind:   ctx.recipientKind   } : {}),
   });
 }
 

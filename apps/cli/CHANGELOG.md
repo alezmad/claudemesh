@@ -1,5 +1,736 @@
 # Changelog
 
+## 1.34.13 (2026-05-04) — MCP forwards session token on /v1/events
+
+The 1.34.10 SSE demux + 1.34.11 inbox per-recipient column were both
+in place but the bug user kept seeing wasn't actually fixed. Cause:
+the MCP server's SSE subscription didn't forward the session token,
+so the daemon's `/v1/events` route resolved `session` to null, the
+SseFilterOptions filter was empty, and every MCP received the
+unfiltered global stream. Demux at the bind layer was correct;
+the subscriber just wasn't telling the daemon who it was.
+
+`apps/cli/src/mcp/server.ts` — `subscribeEvents` now accepts
+`{ sessionToken }` and forwards it as `Authorization: ClaudeMesh-Session
+<token>` on the SSE connect, identical to how `daemonGet` and
+`daemonMarkSeen` already authenticate. The MCP boot already reads the
+token via `readSessionTokenFromEnv()`; this just threads it one more
+hop. Without this, A's MCP would render DMs that arrived on B's
+session-WS — exact symptom from the 2026-05-04 two-session smoke,
+even after restarting the daemon to pick up 1.34.11.
+
+## 1.34.12 (2026-05-04) — `daemon up` detaches by default
+
+Pre-1.34.12 `claudemesh daemon up` ran in the foreground and streamed
+JSON logs to the terminal until Ctrl-C. Surprising for users who just
+want the daemon "up" — they'd run it, see a wall of broker_status /
+broker_ws_open_attempt logs, and not realize the shell was now blocked.
+
+`up` now spawns a detached child re-execing `daemon up --foreground`
+with stdout/stderr redirected to `~/.claudemesh/daemon/daemon.log`,
+then exits the parent cleanly:
+
+```
+$ claudemesh daemon up
+  ✔ daemon started (pid 59175)
+  → log:  /Users/agutierrez/.claudemesh/daemon/daemon.log
+  → stop: claudemesh daemon down
+```
+
+Pass `--foreground` for the pre-1.34.12 behavior (debugging, or when
+something else owns lifecycle).
+
+The launchd plist + systemd-user unit + `claudemesh launch`'s
+auto-spawn helper all explicitly pass `--foreground` because their
+parents (launchd / systemd-user / the launch helper) own process
+lifecycle and stdio redirection. Without that, the child would
+double-fork and orphan a grandchild the parent service couldn't track.
+
+The parent waits up to 3s for the IPC socket to appear before
+declaring success; if the child crashes during boot (config read
+failed, port bind failed, etc.), the parent surfaces the log path
+instead of silently exiting 0.
+
+### Files
+
+- `apps/cli/src/commands/daemon.ts` — `--foreground` flag,
+  `spawnDetachedDaemon` helper, updated help text.
+- `apps/cli/src/cli/argv.ts` — `foreground` / `no-tcp` / `public-health`
+  added to BOOLEAN_FLAGS so the parser doesn't try to consume the
+  next positional as their value.
+- `apps/cli/src/entrypoints/cli.ts` — threads `foreground` through to
+  runDaemonCommand.
+- `apps/cli/src/services/daemon/lifecycle.ts` — auto-spawn passes
+  `--foreground` (lifecycle helper IS the detacher).
+- `apps/cli/src/daemon/service-install.ts` — launchd plist + systemd
+  unit pass `--foreground` (launchd / systemd own lifecycle).
+
+## 1.34.11 (2026-05-04) — inbox per-recipient column
+
+Closes the storage half of the per-session scoping story 1.34.10
+opened. The SSE demux fixed the live event path; this fixes the inbox
+reads. Same bug shape: every session shared one `inbox.db`, so any
+session running `claudemesh inbox` (and the MCP welcome calling
+`/v1/inbox?unread_only=true`) returned the global table — A's launch
+surfaced B's unread DMs as if they were A's, and `markInboxSeen`
+flipped seen-state for rows the asking session never owned.
+
+### Schema
+
+`apps/cli/src/daemon/db/inbox.ts`:
+
+- New columns: `recipient_pubkey TEXT`, `recipient_kind TEXT`,
+  indexed by recipient_pubkey. Migration is non-destructive — pre-
+  1.34.11 rows land with NULL and are visible to every session on
+  the same mesh (best-effort back-compat).
+- `insertIfNew` now writes both fields; `inbound.ts` populates them
+  from the `recipientPubkey` / `recipientKind` already passed for
+  the bus event.
+- `listInbox` accepts `recipientPubkey` (session) and
+  `recipientMemberPubkey` (member), composes a WHERE clause:
+  `recipient_pubkey IS NULL OR recipient_pubkey IN (session, member)`.
+
+### IPC
+
+`apps/cli/src/daemon/ipc/server.ts` — `/v1/inbox` resolves the
+session bearer token to a session pubkey + the matching mesh's
+member pubkey, threads both into `listInbox`. Diagnostic callers
+without a token (no session header) still get the unscoped global
+view.
+
+The response now surfaces `recipient_pubkey` + `recipient_kind` so
+`--json` consumers can tell session DMs apart from member-keyed
+broadcasts.
+
+### Welcome auto-fixes
+
+The welcome path already calls `/v1/inbox?unread_only=true` with the
+session token; with this scoping in place it now returns ONLY rows
+the session is meant to see. No code change needed in
+`apps/cli/src/mcp/server.ts`.
+
+### Architecture invariant after 1.34.11
+
+Every shared store / channel on the daemon now scopes by recipient:
+
+- EventBus → SSE demux at bind layer (1.34.10)
+- inbox.db → recipient_pubkey / recipient_kind columns + listInbox
+  scoping (1.34.11)
+- outbox.db → already scoped via `sender_session_pubkey` for routing
+  (1.34.0)
+
+Single bus + single tables remain the canonical pattern; demux is
+isolated to one chokepoint per layer.
+
+## 1.34.10 (2026-05-04) — per-session SSE demux + universal daemon
+
+The "echo" the user kept seeing across 1.34.7→1.34.9 wasn't a broker-side
+echo at all. With two sessions on the same daemon (a + b), the daemon
+runs ONE event bus shared across every connected MCP. b's session-WS
+receives a's DM, publishes one `message` event to the bus, and BOTH a's
+MCP and b's MCP fan that event into a `<channel>` reminder. Result: a
+sees its own outbound rendered with `from_pubkey = a.session.pubkey`
+because a's MCP indiscriminately renders every bus event.
+
+Fix is per-subscriber demux at the SSE bind layer (`apps/cli/src/daemon/
+events.ts`). The bus stays single-shot — it just publishes once with
+recipient context attached. Each `/v1/events` subscription scopes via
+the session token presented by the MCP, and the bind helper drops
+events whose `recipient_pubkey` doesn't match. System events
+(peer_join etc.) bypass the recipient check; mesh-scoped events
+(broker_status with `data.mesh`) get a mesh-slug filter so a session
+on prueba1 doesn't see flexicar's broker reconnect lines.
+
+`handleBrokerPush` (`apps/cli/src/daemon/inbound.ts`) gains
+`recipientPubkey` + `recipientKind` on its context. Run.ts wires the
+session-WS path with `{ recipientKind: "session", recipientPubkey:
+session.pubkey }` and the daemon-WS path with `{ recipientKind:
+"member", recipientPubkey: mesh.pubkey }`. SSE bind uses the session
+registry to resolve the subscriber's session pubkey + member pubkey
++ mesh from its bearer token.
+
+The 1.34.8/9 "echo guards" (drop pushes whose senderPubkey/Member ===
+ours) are kept as defense-in-depth; the actual fix lives in the SSE
+demux. Diagnostic callers without a session token (`claudemesh daemon
+events`) get the unfiltered legacy stream — backwards compatible.
+
+### Universal daemon (`--mesh` and `--name` deprecated)
+
+`claudemesh daemon up` and `daemon install-service` no longer accept
+mesh / name overrides. The daemon attaches to every mesh in
+`~/.claudemesh/config.json`, full stop. Single-mesh isolation is
+handled by joining only one mesh in that environment (containers,
+etc.). Pinning at start time was the source of "I joined a new mesh
+but my service still ignores it" — gone.
+
+`--mesh` and `--name` are still parsed for back-compat with existing
+launchd plists baked at install time, but ignored with a deprecation
+warning. New installs no longer write them. Help text updated.
+
+### Daemon version stamp
+
+`daemon_started` boot log now includes `"version": "1.34.10"` so users
+can grep their daemon log to confirm whether the running process
+picked up a recent ship. Pairs with the existing `claudemesh launch`
+warning that fires when CLI ≠ daemon.
+
+### Files
+
+- `apps/cli/src/daemon/events.ts` — `SseFilterOptions`,
+  `shouldDeliver`, `bindSseStream(res, bus, filter)`.
+- `apps/cli/src/daemon/inbound.ts` — `recipientPubkey` /
+  `recipientKind` on InboundContext; bus event carries them through.
+- `apps/cli/src/daemon/run.ts` — both onPush call sites tag with the
+  right kind; daemon_started boot log includes version.
+- `apps/cli/src/daemon/ipc/server.ts` — `/v1/events` resolves the
+  bearer session into a filter and passes it to bindSseStream.
+- `apps/cli/src/commands/daemon.ts` — deprecation warnings on `up` /
+  `install-service` for `--mesh` / `--name`; help text trimmed.
+- `apps/cli/src/entrypoints/cli.ts` — top-level help drops `--mesh
+  <slug>` from the daemon section, adds the universal-daemon note.
+- `apps/cli/src/commands/launch.ts` — staleness warning copy clean
+  (no misleading `--mesh` example).
+
+## 1.34.9 (2026-05-04) — broader self-echo guard + system event polish
+
+Two-session smoke after 1.34.8 surfaced two regressions and one missing
+piece: echoes still arrived on the daemon-WS path (the 1.34.8 guard was
+too strict — it required BOTH senderPubkey === ownMember AND
+senderMemberPubkey === ownMember, but session-attributed echoes carry
+the session pubkey on `senderPubkey`); peer_join system events
+duplicated because both the member-WS and the session-WS forwarded
+them; and the channel reminder collapsed all peer joins to just a
+display name with no disambiguation.
+
+### Daemon-WS self-echo guard relaxed
+
+`apps/cli/src/daemon/run.ts` — drop on `senderMemberPubkey === ownMember`
+alone. Anything attributed to OUR member is either our own send echoing
+back via the broker fan-out OR (theoretically) a peer with the same
+pubkey, which is impossible by construction. Sibling-session DMs fan
+session-to-session, not via the same member-WS, so they aren't affected.
+
+### Session-WS skips system events
+
+`apps/cli/src/daemon/session-broker.ts` — system pushes (`subtype:
+"system"`) are dropped before `onPush` so they don't re-publish on the
+bus. The member-WS already handles system events; forwarding through
+both paths produced two `[system] Peer "X" joined` channel reminders
+per join, plus another set per sibling session.
+
+### Self-join filter on member-WS
+
+`apps/cli/src/daemon/inbound.ts` — new `isOwnPubkey` closure on
+`InboundContext`. The broker's peer_joined fan-out excludes the
+JOINING connection but our daemon owns multiple connections per mesh
+(member-WS + N session-WSs from the same identity), so a session's
+own peer_joined arrives at the same daemon's member-WS. The filter
+walks `mesh.pubkey` plus every live entry in `sessionBrokersByPubkey`
+to recognize "us" and drops the event verbatim. Wired in run.ts.
+
+### Richer peer-join channel content
+
+`apps/cli/src/mcp/server.ts` — `[system] Peer "name" joined the mesh`
+becomes `[system] Peer "name" (pubkey-prefix) [groups] joined the
+mesh — last seen … · "summary"` (last-seen + summary fields only on
+`peer_returned` events). The meta payload now carries `peer_pubkey`,
+`peer_groups`, `peer_last_seen_at`, `peer_summary` for downstream
+consumers. cwd / role aren't surfaced yet — broker-side change
+required.
+
+### Daemon staleness warning
+
+`apps/cli/src/commands/launch.ts` — when `claudemesh launch` finds the
+daemon already running with a different version than the CLI, it
+surfaces a one-shot warning + restart instructions. Catches the
+common "I `npm i -g`d the latest CLI but the launchd service is still
+running last week's daemon" footgun.
+
+## 1.34.8 (2026-05-04) — self-echo guard, inbox read-state + TTL prune
+
+Three closely-related fixes shipped together because they all touch the
+"what does the user actually see in inbox.db / on the channel" axis.
+
+### Self-echo guard
+
+The 1.34.0 sender-attribution fix routed session-originated DMs through
+the per-session WS so the broker's fan-out attributed each push to the
+sender's session pubkey. A side effect (visible in the 2026-05-04
+two-session smoke): some broker fan-out paths mirror the outbound DM
+back to the originating session-WS, so the sender saw their own
+message land in inbox.db, publish a `message` bus event, and surface
+as `← claudemesh: <self>: <text>` in their own Claude Code session
+immediately after typing `claudemesh send`.
+
+Fixed at the WS boundary in two places:
+
+- `apps/cli/src/daemon/session-broker.ts` — drop pushes where
+  `senderPubkey === opts.sessionPubkey` before forwarding to
+  `handleBrokerPush`. Match on session pubkey only — sibling sessions
+  of the same member share `senderMemberPubkey`, so a member-level
+  filter would wrongly drop legit sibling DMs.
+- `apps/cli/src/daemon/run.ts` — daemon-WS onPush drops pushes where
+  BOTH `senderMemberPubkey === mesh.pubkey` AND `senderPubkey ===
+  mesh.pubkey` (i.e. an actual member-WS self-echo, not a sibling
+  session whose senderPubkey is its session key).
+
+### Inbox read-state (`seen_at`)
+
+Replaces the welcome's "last 24h" window with a proper read-state
+filter. New `seen_at INTEGER` column on `inbox`, plus `markInboxSeen`
+and `pruneInboxBefore` helpers in `apps/cli/src/daemon/db/inbox.ts`.
+
+Read-state flips on three paths:
+
+1. Interactive listing — `/v1/inbox` GET auto-stamps every returned
+   row that was previously NULL. Pass `?mark_seen=false` to peek
+   without flipping (used by the welcome — it stamps explicitly only
+   AFTER the channel notification succeeds, so a Zod-rejected welcome
+   doesn't silently lose unread state).
+2. MCP welcome — `/v1/inbox?unread_only=true&mark_seen=false&limit=50`
+   surfaces only rows the user hasn't seen, then `POST /v1/inbox/seen`
+   stamps the ids the welcome actually rendered.
+3. MCP live channel emit — after a successful
+   `notifications/claude/channel` for a single inbox row, the MCP
+   server calls `/v1/inbox/seen` for that id so the next launch's
+   welcome doesn't re-surface it.
+
+CLI surface:
+
+```sh
+claudemesh inbox --unread             # only seen_at IS NULL rows
+claudemesh inbox --json               # row now includes seen_at
+```
+
+### Inbox TTL prune
+
+`apps/cli/src/daemon/inbox-pruner.ts` runs `pruneInboxBefore(db,
+Date.now() - 30d)` once at daemon startup and hourly thereafter. Logs
+`inbox_prune_completed` whenever rows were removed. No CLI knob — it's
+a built-in retention policy that prevents inbox.db from growing
+unbounded. Manual override remains `claudemesh inbox flush --before
+<iso>`.
+
+### Files
+
+- `apps/cli/src/daemon/db/inbox.ts` — `seen_at` column + migration,
+  `unreadOnly` filter, `markInboxSeen`, `pruneInboxBefore`.
+- `apps/cli/src/daemon/inbox-pruner.ts` — new file, hourly TTL sweep.
+- `apps/cli/src/daemon/run.ts` — wires the pruner into startup +
+  shutdown; daemon-WS self-echo guard.
+- `apps/cli/src/daemon/session-broker.ts` — session-WS self-echo
+  guard.
+- `apps/cli/src/daemon/ipc/server.ts` — `unread_only` + `mark_seen`
+  query params; new `POST /v1/inbox/seen` route.
+- `apps/cli/src/mcp/server.ts` — `daemonMarkSeen` helper; welcome
+  switched to `unread_only=true`; mark-seen after channel emit.
+- `apps/cli/src/services/bridge/daemon-route.ts` —
+  `tryListInboxViaDaemon` accepts `{ unreadOnly, markSeen }`;
+  `InboxItem.seen_at` exposed.
+- `apps/cli/src/commands/inbox.ts` + `apps/cli/src/entrypoints/cli.ts`
+  + `apps/cli/src/cli/argv.ts` — `--unread` flag.
+- `apps/cli/skills/claudemesh/SKILL.md` — documents seen_at semantics,
+  self-echo guard, TTL prune.
+
+## 1.34.7 (2026-05-04) — inbox flush + delete commands
+
+The CLI had no first-class way to clean the persisted inbox; the only
+recourse was `sqlite3 ~/.claudemesh/daemon/inbox.db "DELETE FROM
+inbox"`, which bypasses IPC and is invisible to anyone who doesn't
+know the schema. Two new verbs:
+
+```sh
+claudemesh inbox flush --mesh prueba1
+claudemesh inbox flush --before 2026-05-04T18:00:00Z
+claudemesh inbox flush --all                # required guard with no other filter
+claudemesh inbox delete <message-id>        # alias: rm
+claudemesh inbox flush --json               # → { ok: true, removed: N }
+```
+
+`flush` without filters refuses with an `--all` confirmation hint —
+prevents an accidental "wipe every row on every mesh" from a
+fat-fingered command.
+
+### Mechanics
+
+- `apps/cli/src/daemon/db/inbox.ts` gains `deleteInboxRow(id)` and
+  `flushInbox({ mesh?, before? })` (returns `changes`).
+- IPC: `DELETE /v1/inbox?mesh=…&before=…` + `DELETE /v1/inbox/<id>`.
+  Mesh filter honors session-default scoping (same as listing).
+- Daemon-route helpers `tryFlushInboxViaDaemon` and
+  `tryDeleteInboxRowViaDaemon` mirror the existing
+  `tryListInboxViaDaemon` shape.
+- New CLI command file `apps/cli/src/commands/inbox-actions.ts`.
+- Help and SKILL.md document the verbs.
+
+## 1.34.6 (2026-05-04) — welcome: stringify meta values to pass Zod schema
+
+The 1.34.2 → 1.34.5 timing-race theory was wrong. Reading Claude Code
+v2.1.126's binary at the `notifications/claude/channel` schema:
+
+```js
+IJ_ = y.object({
+  method: y.literal("notifications/claude/channel"),
+  params: y.object({
+    content: y.string(),
+    meta: y.record(y.string(), y.string()).optional(),
+  }),
+})
+```
+
+`meta` is a `record(string, string)` — every value MUST be a string.
+Pre-1.34.6 the welcome shipped:
+
+- `peer_count: number` → Zod reject
+- `peer_names: string[]` → Zod reject
+- `unread_count: number` → Zod reject
+- `latest_message_ids: string[]` → Zod reject
+
+The whole notification was dropped at the schema-validation step
+BEFORE the channel handler ever ran. No log, no error, no UI surface —
+exactly the symptoms 1.34.2 → 1.34.5 chased.
+
+Live peer DMs always worked because every meta value already went
+through `String(...)`. The welcome was the only notification shape
+with non-string meta, uniquely affected.
+
+### Fix
+
+`emitMeshWelcome` now coerces every meta value to string. Counts
+become digit strings (`"3"`, `"16"`); arrays serialize as JSON
+(`'["b","c"]'`, parseable on the receiving side). Schema validation
+passes, notification reaches the handler, channel reminder surfaces.
+
+The 1.34.5 dual-lane retry is removed — single emit at 3s grace
+after `oninitialized` is enough now that the schema is right.
+
+### What changed in `~/.claudemesh/daemon/mcp-<pid>.log`
+
+`welcome_attempt` rows are gone (no more lanes). You'll see
+`mcp_started` → `server_initialized` → `welcome_peers_resolved` →
+`welcome_emitted` per launch — the same shape as 1.34.4 minus the
+`fast`/`slow` lane field.
+
+## 1.34.5 (2026-05-04) — dual-lane welcome retry to defeat handler-registration race
+
+1.34.4 hooked `server.oninitialized` + 2s grace. The MCP-side log
+confirmed `welcome_emitted` ran at +2.4s, but the user still saw
+nothing in Claude Code. Claude Code's React effect that calls
+`setNotificationHandler("notifications/claude/channel", ...)` runs
+multiple ticks AFTER its UI state flips to "connected", which happens
+after `server.oninitialized` fires. 2s was still inside the dead zone.
+
+We can't directly observe handler-registration timing from the MCP
+side (the SDK has no hook for it), so this version emits the welcome
+TWICE: 5s post-init (`lane: "fast"`) and 15s post-init (`lane: "slow"`).
+Whichever one lands surfaces; the duplicate is acceptable for an
+informational welcome. Both attempts log to `mcp-<pid>.log` so we can
+see which lane wins in production. If observation shows the slow
+path always wins, future versions can drop the fast attempt.
+
+## 1.34.4 (2026-05-04) — welcome triggers on `oninitialized`, peer count fix
+
+### Welcome trigger: post-initialization, not fixed timer
+
+1.34.3's welcome fired on a fixed 5s timer after `server.connect`.
+Diagnostic logging confirmed the emit ran (`welcome_emitted` in
+`mcp-<pid>.log`) but the user never saw the channel reminder. Cause:
+Claude Code only registers its `notifications/claude/channel`
+notification handler AFTER the MCP init handshake completes
+(initialize request → initialized notification from client →
+`server.oninitialized` fires). 5s commonly closed before that
+sequence finished, so the welcome notification arrived at a server
+that hadn't wired up a handler yet — silently dropped.
+
+Live peer DMs worked because they arrive seconds-to-minutes later,
+well past the window. The welcome is the only event with a
+deterministic close-to-zero delay, so it was uniquely affected.
+
+The fix gates the welcome on `Server.oninitialized`, then adds 2s of
+grace for any pending list_tools / list_prompts round-trips to settle
+before emitting. Matches the registration timing exactly — by the
+time `oninitialized` fires, Claude Code has already accepted the
+server and registered the channel handler.
+
+### Peer count filter mirrors the launch banner
+
+The 1.34.3 welcome used `peerRole !== "control-plane"` to filter the
+peer list — that's the new taxonomy from broker M1, but older brokers
+still emit only `channel: "claudemesh-daemon"` for control-plane rows.
+Result: `peer_count: 0` even when the launch banner showed "2 peers
+online". The welcome filter now matches the launch banner exactly
+(`channel !== "claudemesh-daemon"`) and additionally honors
+`peerRole !== "control-plane"` when present.
+
+Self-exclusion is now opt-in: only filtered when `self_session_pubkey`
+is known (from the `/v1/sessions/me` lookup). This prevents over-
+filtering when the token route fails and we fall back to the
+unauthenticated peer list.
+
+`mcp-<pid>.log` now records `server_initialized`,
+`welcome_peers_resolved` (with total / real counts), and
+`welcome_peers_status` so a missing welcome can be traced through the
+init handshake → peer query → notification chain.
+
+## 1.34.3 (2026-05-04) — welcome always fires + skill / help refresh
+
+### Welcome always emits, regardless of inbox state
+
+The 1.34.2 welcome only fired when there were unread messages, so a
+freshly-launched session with an empty inbox saw nothing — no
+confirmation that the mesh pipe was live. Now it always emits, and
+carries useful launch context:
+
+- **identity** — display name, session pubkey prefix, role
+- **mesh** — active mesh slug
+- **peers** — live peer count + up to 5 names (control-plane filtered out)
+- **inbox** — recent count + up to 3 previews (or "Inbox is empty (last 24h)")
+- **CLI hints** — `peer list` · `send` · `inbox`
+- **skill pointer** — `📚 Read the claudemesh skill (SKILL.md)…` so the
+  model loads the canonical reference if it isn't already in context
+
+Composes from up to three best-effort daemon queries
+(`/v1/sessions/me`, `/v1/peers?mesh=…`, `/v1/inbox?mesh=…&since=…`),
+each degrading silently. The welcome ALWAYS goes out unless the IPC
+socket is unreachable. Meta carries `kind: "welcome"`,
+`self_display_name`, `self_session_pubkey`, `self_role`, `mesh_slug`,
+`peer_count`, `peer_names`, `unread_count`, and
+`latest_message_ids` for downstream consumers.
+
+### `daemonGet` now forwards the session token
+
+The MCP's IPC client gained an optional `sessionToken` field. The
+welcome path uses it for `/v1/sessions/me` (which 401s without auth)
+and for default-mesh scoping on `/v1/peers` and `/v1/inbox`. Token
+read from `CLAUDEMESH_IPC_TOKEN_FILE` set by `claudemesh launch`.
+
+### Skill (`apps/cli/skills/claudemesh/SKILL.md`) refresh
+
+- New section: "Launch welcome (`kind: "welcome"`)" — describes the
+  5-second handshake, its meta fields, and that it should NOT be
+  replied to like a DM.
+- Channel attributes table: clarified that `from_pubkey` is the
+  ephemeral session pubkey of the originator (post-1.34.0 attribution
+  fix), separated `from_session_pubkey` and `from_member_pubkey`,
+  added `client_message_id` and `kind` rows.
+- Inbox section: documented `--mesh <slug>`, `--limit N`, and that
+  the command reads `~/.claudemesh/daemon/inbox.db` via daemon IPC
+  (NOT a fresh broker-WS buffer drain — that path was removed in
+  1.34.0).
+- Reply behavior: explicit "do NOT reply when `meta.kind` is
+  `"welcome"` or `"system"`".
+
+### `claudemesh --help` refresh
+
+`message inbox` line was still labeled "drain pending" from the
+pre-1.34.0 cold-path implementation. Updated to "read persisted
+inbox" with the new flags (`--mesh`, `--limit`, `--json`) and a
+note that it reads from `~/.claudemesh/daemon/inbox.db` via the
+daemon.
+
+## 1.34.2 (2026-05-04) — launch welcome push summarizing recent inbox
+
+When a Claude Code session launches via `claudemesh launch`, the user
+lands cold — they don't know whether peers messaged them while they
+were offline. Real-time pushes only cover messages that arrive AFTER
+the SSE subscription is alive, so anything queued at the broker that
+drains during the hello-handshake window can land in `inbox.db`
+before the MCP subscribes. Without a welcome, the user has to remember
+to run `claudemesh inbox` to discover the gap.
+
+The MCP server now fires a one-shot welcome 5s after the transport is
+up:
+
+- queries `/v1/inbox?since=<24h-ago>&limit=20` for the recent window;
+- skips silently when there are no rows;
+- emits a single `notifications/claude/channel` with header
+  (`📥 [welcome] N messages from last 24h (mesh-a, mesh-b)`),
+  up to three preview lines (sender, mesh, time, 60-char body),
+  a remainder count, and the `claudemesh inbox` CLI hint;
+- meta carries `kind: "welcome"`, `unread_count`, mesh list, and the
+  first 10 message ids so a downstream agent can `claudemesh message
+  status <id>` if it wants to inspect.
+
+Why a 5s delay: gives the daemon's session-WS time to reconnect,
+re-claim leased rows, drain pending broker queue, and finish writing
+to inbox.db before we summarize. Earlier and the welcome would
+under-report; later and it stops feeling like a launch handshake.
+
+Why a 24h window: narrow enough to feel relevant on a freshly-launched
+session, wide enough to surface overnight messages without dumping
+the entire history into the channel.
+
+The welcome flow is fully diagnostic — `welcome_skip` (with reason),
+`welcome_emitted`, or `welcome_emit_failed` lands in
+`~/.claudemesh/daemon/mcp-<pid>.log` for every launch.
+
+## 1.34.1 (2026-05-04) — declare `claude/channel` capability so Claude Code surfaces pushes
+
+The 1.34.0 ship fixed the daemon-side push pipeline (correct sender
+attribution, persistent inbox readable from CLI). Bus events fire,
+SSE delivers them to the MCP, and the MCP calls
+`server.notification("notifications/claude/channel", ...)` — but
+Claude Code v2.1.x stopped surfacing them as `<channel>` reminders.
+Real two-session smoke confirmed the silent drop: messages landed
+in `inbox.db`, the daemon SSE stream emitted the `message` events,
+yet neither Claude Code session got a real-time push.
+
+### Root cause
+
+Claude Code v2.1.x added a capability gate on the channel handler.
+Reading `claude` binary at the `notifications/claude/channel`
+offsets:
+
+```js
+function xJ_(serverName, capabilities, pluginSource) {
+  if (!capabilities?.experimental?.["claude/channel"])
+    return { action: "skip", kind: "capability",
+             reason: "server did not declare claude/channel capability" };
+  ...
+}
+```
+
+`xJ_` is called when the MCP server connects. When it returns
+`{action: "skip"}`, Claude Code never calls
+`client.setNotificationHandler(IJ_(), ...)` for that server — so
+every `notifications/claude/channel` emit falls into the void. The
+`--dangerously-load-development-channels server:claudemesh` flag
+gets you past the allowlist check that runs LATER in `xJ_`, but the
+capability gate runs FIRST and is independent.
+
+Pre-2.1.x clients didn't gate on this key, which is why the same
+MCP wire shape "worked" before. There's no error / log / warning
+on either side; the notifications just disappear.
+
+### Fix
+
+`apps/cli/src/mcp/server.ts` declares the capability:
+
+```ts
+new Server({ name: "claudemesh", version: VERSION }, {
+  capabilities: {
+    tools: {}, prompts: {}, resources: {},
+    experimental: { "claude/channel": {} },
+  },
+});
+```
+
+The empty object is enough — Claude Code only checks for presence,
+not contents.
+
+### Diagnostic logging
+
+The MCP server now writes a per-pid log to
+`~/.claudemesh/daemon/mcp-<pid>.log` whenever:
+
+- the SSE event arrives (`sse_event_received`),
+- a channel notification is emitted (`channel_emitted`), or
+- the emit throws (`channel_emit_failed`).
+
+`tail -f ~/.claudemesh/daemon/mcp-*.log` lets users verify the
+push pipeline end-to-end without strings-dumping the Claude Code
+binary. (MCP stderr is captured by Claude Code and not visible to
+the user, so an on-disk log was the only way to surface this
+state in the future.)
+
+### Upgrade
+
+```sh
+npm i -g claudemesh-cli@latest
+# Restart Claude Code so the MCP picks up the capability change.
+```
+
+After this version: peer messages surface as `<channel>` reminders
+mid-turn the way they did pre-2.1.x.
+
+## 1.34.0 (2026-05-04) — Sender attribution via session-WS + inbox CLI fix
+
+Two regressions surfaced in real two-session smokes that landed
+together; both root in the same architectural seam (sender identity
+across the daemon ↔ broker ↔ recipient hop).
+
+### Sender attribution: outbox routes via session-WS
+
+Pre-1.34.0, every outbox row drained through the daemon's
+member-keyed `DaemonBrokerClient`, regardless of which session typed
+`claudemesh send`. The broker's fan-out builds the push envelope from
+`conn.sessionPubkey ?? conn.memberPubkey` — for a member-WS that's
+always the member pubkey. Result: a real two-session smoke
+(`a → b: "123"`, `b → a: "456"`) landed messages in `inbox.db` with
+`sender_pubkey = <daemon's member pubkey>` instead of the actual
+session sender's ephemeral pubkey. Wrong "from" for every DM.
+
+The fix routes session-originated sends through the matching
+`SessionBrokerClient` so the broker sees `conn.sessionPubkey =
+<sender session pubkey>` naturally — no broker-side change needed.
+Mechanics:
+
+- New `outbox.sender_session_pubkey` column. The IPC `/v1/send`
+  handler fills it whenever the request authenticates as a launched
+  session (`Authorization: ClaudeMesh-Session …`).
+- IPC `/v1/send` now encrypts with the **session secret** (was: mesh
+  member secret) when a session token is present. Recipient's
+  `inbound.ts` decrypts with `senderSessionPub × recipientSessionSec`
+  → matches what the sender wrote.
+- `SessionBrokerClient` gains a `send()` method mirroring
+  `DaemonBrokerClient.send` (pendingAcks tracking, 15s ack-timeout,
+  queue-while-reconnecting via the `opens` array). Composition kept
+  intact — both clients share `connectWsWithBackoff`; the
+  request/ack bookkeeping is duplicated rather than subclassed.
+- Drain worker reads `sender_session_pubkey` and looks up an open
+  session-WS via a new `getSessionBrokerByPubkey` accessor on
+  `DrainOptions`. Session-attributed rows REQUIRE an open session-WS;
+  no fallback to daemon-WS, because the row is encrypted with the
+  session secret and silent fallback would break decryption on the
+  recipient side. Closed/reconnecting → backoff + retry.
+- `apps/cli/src/daemon/run.ts` maintains a parallel
+  `sessionBrokersByPubkey` index alongside the existing token-keyed
+  map, kept in sync on register/deregister.
+
+Cold-path sends (no session token in IPC headers) keep the legacy
+member-key flow unchanged. Pre-1.34.0 outbox rows (NULL session
+pubkey) drain via the daemon-WS as before — no migration of in-flight
+rows is required.
+
+### `claudemesh inbox` reads `inbox.db` (was: stale broker buffer)
+
+The pre-1.34.0 implementation opened a fresh `BrokerClient`, waited
+1s, then drained an in-memory push buffer that would only contain
+new pushes received during that 1s window — completely disjoint from
+the daemon's persisted `~/.claudemesh/daemon/inbox.db`. So with the
+attribution bug above, a real smoke that DID land messages in the
+daemon's inbox.db reported "No messages on mesh prueba1" because the
+CLI was looking at the wrong source.
+
+Fixed:
+
+- New `tryListInboxViaDaemon(mesh, limit)` daemon-route helper hits
+  `/v1/inbox`.
+- `listInbox` (DB layer) and the `/v1/inbox` IPC endpoint accept a
+  `mesh` filter so the server scopes server-side instead of returning
+  all rows and filtering in-process.
+- `runInbox` rewritten to call the daemon-route helper. JSON mode
+  returns the raw daemon shape; the human renderer formats sender
+  name + pubkey prefix + body + receipt time per row.
+
+The cold-path "drain a fresh-broker buffer" was always vestigial —
+removed entirely.
+
+### Verifying
+
+`/tmp/cm-bus-trace.mjs` (workshop scratch, not shipped) opens an SSE
+listener against `/v1/events`, registers two test sessions, sends
+both directions, and asserts the broker `message` events surface
+correctly. Used to confirm the daemon's bus.publish path was already
+fine — the regression sat upstream in the daemon's outbound
+attribution.
+
+After this version: real two-session smokes show
+`sender_pubkey = <session pubkey>` (not member pubkey),
+`claudemesh inbox --mesh <slug>` lists what the daemon actually
+received, and existing MCP `notifications/claude/channel` events
+carry the correct sender attribution to Claude Code.
+
 ## 1.33.0 (2026-05-04) — Milestone 1: lifecycle cleanups + at-least-once with ack
 
 First milestone of the agentic-comms architecture work

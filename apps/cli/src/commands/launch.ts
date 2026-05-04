@@ -63,6 +63,7 @@ async function ensureDaemonRunning(meshSlug: string, quiet: boolean): Promise<vo
   const res = await ensureDaemonReady({ budgetMs: 10_000, mesh: meshSlug });
   if (res.state === "up") {
     if (!quiet) render.ok("daemon already running");
+    await warnIfDaemonStale(quiet);
     return;
   }
   if (res.state === "started") {
@@ -71,8 +72,32 @@ async function ensureDaemonRunning(meshSlug: string, quiet: boolean): Promise<vo
   }
   render.warn(
     `daemon ${res.state}${res.reason ? `: ${res.reason}` : ""}`,
-    "Run `claudemesh daemon up --mesh " + meshSlug + "` manually, then re-launch.",
+    "Run `claudemesh daemon up` manually, then re-launch.",
   );
+}
+
+/** 1.34.9: warn when the running daemon's version doesn't match the CLI
+ *  that's about to launch a session. `npm i -g claudemesh-cli` upgrades
+ *  the binaries on disk but doesn't restart a launchd / systemd-user
+ *  service or a foreground `claudemesh daemon up`, so users routinely
+ *  ship a fix to the CLI side and never see it because the WS lifecycle,
+ *  echo guards, and self-join filters all live in the long-running
+ *  daemon process. We probe `/v1/version` and emit a one-shot stderr
+ *  warning when CLI ≠ daemon. Best-effort; failures are silent. */
+async function warnIfDaemonStale(quiet: boolean): Promise<void> {
+  if (quiet) return;
+  try {
+    const { ipc } = await import("~/daemon/ipc/client.js");
+    const { VERSION } = await import("~/constants/urls.js");
+    const res = await ipc<{ daemon_version?: string }>({ path: "/v1/version", timeoutMs: 1_500 });
+    if (res.status !== 200) return;
+    const daemonVersion = res.body.daemon_version ?? "";
+    if (!daemonVersion || daemonVersion === VERSION) return;
+    render.warn(
+      `daemon is ${daemonVersion}, CLI is ${VERSION} — restart to pick up new fixes.`,
+      "Run: `claudemesh daemon down && claudemesh daemon up` (no --mesh — daemon attaches to every joined mesh; restart the launchd / systemd-user unit if you installed one).",
+    );
+  } catch { /* swallow — version probe is best-effort */ }
 }
 
 async function pickMesh(meshes: JoinedMesh[]): Promise<JoinedMesh> {

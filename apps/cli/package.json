@@ -1,6 +1,6 @@
 {
   "name": "claudemesh-cli",
-  "version": "1.33.0",
+  "version": "1.34.13",
   "description": "Peer mesh for Claude Code sessions — CLI + MCP server.",
   "keywords": [
     "claude-code",

@@ -220,8 +220,12 @@ async function spawnDaemon(opts: EnsureDaemonOpts): Promise<SpawnResult> {
   try {
     const { spawn } = await import("node:child_process");
     const binary = await resolveCliBinary();
-    const args = ["daemon", "up"];
-    if (opts.mesh) args.push("--mesh", opts.mesh);
+    // 1.34.12: pass --foreground because the lifecycle helper IS the
+    // detacher in this path — it spawns with detached:true + stdio:
+    // ignore. If we let the child re-detach (the new default), we'd
+    // double-fork and orphan the grandchild. --mesh is dropped (1.34.10
+    // deprecation; daemon attaches to every joined mesh).
+    const args = ["daemon", "up", "--foreground"];
 
     const child = spawn(binary, args, {
       detached: true,

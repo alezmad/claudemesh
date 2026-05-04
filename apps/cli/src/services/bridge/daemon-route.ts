@@ -52,6 +52,105 @@ export async function tryListPeersViaDaemon(mesh?: string): Promise<unknown[] | 
   }
 }
 
+/**
+ * 1.34.0 — Try fetching the persisted inbox from the daemon.
+ *
+ * Reads from `~/.claudemesh/daemon/inbox.db` via `/v1/inbox`. This is
+ * the authoritative source of received messages — pushes from the
+ * broker land here through the daemon's session-WS / member-WS push
+ * handler. The pre-1.34.0 cold-path inbox command opened a fresh
+ * BrokerClient and drained an empty in-memory buffer, which never
+ * matched what the daemon was actually receiving.
+ */
+export interface InboxItem {
+  id: string;
+  client_message_id: string;
+  broker_message_id: string | null;
+  mesh: string;
+  topic: string | null;
+  sender_pubkey: string;
+  sender_name: string;
+  body: string | null;
+  received_at: string;
+  reply_to_id: string | null;
+  /** 1.34.8: ISO timestamp of when the row was first surfaced to the
+   *  user (interactive listing or live channel reminder). `null` =
+   *  never seen. */
+  seen_at?: string | null;
+}
+
+export async function tryListInboxViaDaemon(
+  mesh?: string,
+  limit = 100,
+  opts: { unreadOnly?: boolean; markSeen?: boolean } = {},
+): Promise<InboxItem[] | null> {
+  if (!(await daemonReachable())) return null;
+  try {
+    const params: string[] = [`limit=${limit}`];
+    if (mesh) params.push(`mesh=${encodeURIComponent(mesh)}`);
+    // 1.34.8: read-state filters. `unread_only=true` narrows to seen_at
+    // IS NULL; `mark_seen=false` lets the caller peek without flipping
+    // the seen flag (used by the welcome push on the MCP side, not the
+    // CLI). Default behavior matches pre-1.34.8 — return everything
+    // and stamp it seen — so existing callers keep working.
+    if (opts.unreadOnly) params.push("unread_only=true");
+    if (opts.markSeen === false) params.push("mark_seen=false");
+    const path = `/v1/inbox?${params.join("&")}`;
+    const res = await ipc<{ items?: InboxItem[] }>({ path, timeoutMs: 3_000 });
+    if (res.status !== 200) return null;
+    return Array.isArray(res.body.items) ? res.body.items : [];
+  } catch (err) {
+    const msg = String(err);
+    if (/ENOENT|ECONNREFUSED|ipc_timeout/.test(msg)) return null;
+    return null;
+  }
+}
+
+/**
+ * 1.34.7: bulk-delete inbox rows. `mesh` scopes to one mesh (omit =
+ * across every attached mesh); `beforeIso` filters by `received_at <
+ * Date.parse(beforeIso)`. Returns the number of rows removed, or null
+ * when the daemon couldn't be reached.
+ */
+export async function tryFlushInboxViaDaemon(
+  args: { mesh?: string; beforeIso?: string } = {},
+): Promise<number | null> {
+  if (!(await daemonReachable())) return null;
+  try {
+    const params: string[] = [];
+    if (args.mesh)      params.push(`mesh=${encodeURIComponent(args.mesh)}`);
+    if (args.beforeIso) params.push(`before=${encodeURIComponent(args.beforeIso)}`);
+    const path = `/v1/inbox${params.length ? `?${params.join("&")}` : ""}`;
+    const res = await ipc<{ removed?: number }>({ path, method: "DELETE", timeoutMs: 3_000 });
+    if (res.status !== 200) return null;
+    return typeof res.body.removed === "number" ? res.body.removed : null;
+  } catch (err) {
+    const msg = String(err);
+    if (/ENOENT|ECONNREFUSED|ipc_timeout/.test(msg)) return null;
+    return null;
+  }
+}
+
+/** 1.34.7: delete one inbox row by id. Returns true iff the row was
+ *  removed; false on 404; null on transport failure. */
+export async function tryDeleteInboxRowViaDaemon(id: string): Promise<boolean | null> {
+  if (!(await daemonReachable())) return null;
+  try {
+    const res = await ipc<{ removed?: number }>({
+      path: `/v1/inbox/${encodeURIComponent(id)}`,
+      method: "DELETE",
+      timeoutMs: 3_000,
+    });
+    if (res.status === 404) return false;
+    if (res.status !== 200) return null;
+    return (res.body.removed ?? 0) > 0;
+  } catch (err) {
+    const msg = String(err);
+    if (/ENOENT|ECONNREFUSED|ipc_timeout/.test(msg)) return null;
+    return null;
+  }
+}
+
 /** Try fetching mesh-published skills through the daemon. */
 export async function tryListSkillsViaDaemon(mesh?: string): Promise<unknown[] | null> {
   if (!(await daemonReachable())) return null;

@@ -98,10 +98,16 @@ function installDarwin(args: InstallArgs): InstallResult {
   // one that installed claudemesh-cli. Pinning process.execPath here means
   // the daemon always runs under the same Node that ran `claudemesh install`.
   const nodeBin = process.execPath;
+  // 1.34.12: --foreground because launchd manages lifecycle + stdio.
+  // Without it, the daemon would re-spawn itself detached (the new
+  // default) and launchd would lose track of the actual long-lived
+  // process — KeepAlive wouldn't work and stdout redirect would
+  // capture only the parent's brief boot.
   const meshArgs = [
     `<string>${escapeXml(args.binaryPath)}</string>`,
     "<string>daemon</string>",
     "<string>up</string>",
+    "<string>--foreground</string>",
     ...(args.meshSlug
       ? ["<string>--mesh</string>", `<string>${escapeXml(args.meshSlug)}</string>`]
       : []),
@@ -180,8 +186,11 @@ function installLinux(args: InstallArgs): InstallResult {
   // Same node-pinning rationale as macOS — systemd's User= environment is
   // similarly minimal; resolve node by absolute path.
   const nodeBin = process.execPath;
+  // 1.34.12: --foreground because systemd-user owns process lifecycle
+  // and stdio capture; we don't want the child to double-fork into a
+  // detached grandchild systemd can't track.
   const execArgs = [
-    "daemon", "up",
+    "daemon", "up", "--foreground",
     ...(args.meshSlug ? ["--mesh", args.meshSlug] : []),
     ...(args.displayName ? ["--name", args.displayName] : []),
   ].map(shellQuote).join(" ");

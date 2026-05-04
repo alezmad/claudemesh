@@ -29,6 +29,14 @@ const BOOLEAN_FLAGS = new Set([
   "dry-run",
   "verbose",
   "skip-service",
+  // 1.34.8: `--unread` filters `claudemesh inbox` to rows whose
+  // seen_at is NULL. No value — pure switch.
+  "unread",
+  // 1.34.12: `--foreground` keeps `claudemesh daemon up` attached
+  // to the terminal (pre-1.34.12 behavior). Default is detached now.
+  "foreground",
+  "no-tcp",
+  "public-health",
 ]);
 
 export function parseArgv(argv: string[]): ParsedArgs {

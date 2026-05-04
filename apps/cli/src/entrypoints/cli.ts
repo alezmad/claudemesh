@@ -97,7 +97,15 @@ Message  (resource form)
                                           [--self] (allow targeting your own member/session pubkey;
                                           fans out to every sibling session of your member)
                                           [--json] (machine-readable result)
-  claudemesh message inbox         drain pending              (alias: inbox)
+  claudemesh message inbox         read persisted inbox       (alias: inbox)
+                                   flags: [--mesh <slug>] [--limit N] [--unread] [--json]
+                                   reads ~/.claudemesh/daemon/inbox.db via daemon
+                                   --unread → only rows never surfaced before (seen_at IS NULL);
+                                   listing stamps returned rows seen as a side effect
+  claudemesh inbox flush           bulk-delete inbox rows
+                                   flags: [--mesh <slug>] [--before <iso-timestamp>] [--all]
+                                   --all required when neither --mesh nor --before is set
+  claudemesh inbox delete <id>     delete one inbox row by id (alias: rm)
   claudemesh message status <id>   delivery status            (alias: msg-status)
 
 Memory  (resource form)
@@ -190,16 +198,18 @@ Security
   claudemesh backup [file]         encrypt config → portable recovery file
   claudemesh restore <file>        restore config from a backup file
 
-Daemon  (long-lived peer mesh runtime, v0.9.0)
-  claudemesh daemon up             start daemon (alias: start) [--mesh <slug>] [--no-tcp]
+Daemon  (long-lived peer mesh runtime — universal across every joined mesh)
+  claudemesh daemon up             start daemon (alias: start) [--no-tcp]
   claudemesh daemon status         show running pid + IPC health [--json]
   claudemesh daemon down           stop daemon (alias: stop)
   claudemesh daemon version        ipc + schema version of running daemon
   claudemesh daemon outbox list    list local outbox rows [--failed|--pending|--inflight|--done]
   claudemesh daemon outbox requeue <id>   re-enqueue an aborted/dead row [--new-client-id <id>]
   claudemesh daemon accept-host    pin current host fingerprint
-  claudemesh daemon install-service --mesh <slug>   write launchd / systemd-user unit
-  claudemesh daemon uninstall-service               remove the unit
+  claudemesh daemon install-service        write launchd / systemd-user unit
+  claudemesh daemon uninstall-service      remove the unit
+  Note: the daemon attaches to every mesh in ~/.claudemesh/config.json
+  automatically; --mesh on up / install-service is deprecated and ignored.
 
 Setup
   claudemesh install               register MCP server + hooks
@@ -394,7 +404,30 @@ async function main(): Promise<void> {
     // Messaging
     case "peers": { const { runPeers } = await import("~/commands/peers.js"); await runPeers({ mesh: flags.mesh as string, json: flags.json as boolean | string | undefined, all: !!flags.all }); break; }
     case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self }, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
-    case "inbox": { const { runInbox } = await import("~/commands/inbox.js"); await runInbox({ json: !!flags.json }); break; }
+    case "inbox": {
+      const sub = positionals[0];
+      if (sub === "flush") {
+        const { runInboxFlush } = await import("~/commands/inbox-actions.js");
+        await runInboxFlush({
+          mesh: flags.mesh as string | undefined,
+          before: flags.before as string | undefined,
+          all: !!flags.all,
+          json: !!flags.json,
+        });
+      } else if (sub === "delete" || sub === "rm") {
+        const { runInboxDelete } = await import("~/commands/inbox-actions.js");
+        await runInboxDelete(positionals[1] ?? "", { json: !!flags.json });
+      } else {
+        const { runInbox } = await import("~/commands/inbox.js");
+        await runInbox({
+          mesh: flags.mesh as string | undefined,
+          json: !!flags.json,
+          limit: typeof flags.limit === "number" ? flags.limit : (typeof flags.limit === "string" ? Number.parseInt(flags.limit, 10) : undefined),
+          unread: !!flags.unread,
+        });
+      }
+      break;
+    }
     case "state": {
       const sub = positionals[0];
       if (sub === "set") { const { runStateSet } = await import("~/commands/state.js"); await runStateSet({}, positionals[1] ?? "", positionals[2] ?? ""); }
@@ -466,6 +499,11 @@ async function main(): Promise<void> {
         publicHealth: !!flags["public-health"],
         mesh: flags.mesh as string | undefined,
         displayName: flags.name as string | undefined,
+        // 1.34.12: --foreground opts out of the new "detach by default"
+        // behavior. install-service and `claudemesh launch`'s auto-spawn
+        // path always run with --foreground so their parents (launchd /
+        // the launch helper) own lifecycle and stdio redirection.
+        foreground: !!flags.foreground,
         outboxStatus,
         newClientId: flags["new-client-id"] as string | undefined,
       }, rest);
@@ -530,7 +568,29 @@ async function main(): Promise<void> {
     case "message": {
       const sub = positionals[0];
       if (sub === "send") { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self }, positionals[1] ?? "", positionals.slice(2).join(" ")); }
-      else if (sub === "inbox") { const { runInbox } = await import("~/commands/inbox.js"); await runInbox({ json: !!flags.json }); }
+      else if (sub === "inbox") {
+        const sub2 = positionals[1];
+        if (sub2 === "flush") {
+          const { runInboxFlush } = await import("~/commands/inbox-actions.js");
+          await runInboxFlush({
+            mesh: flags.mesh as string | undefined,
+            before: flags.before as string | undefined,
+            all: !!flags.all,
+            json: !!flags.json,
+          });
+        } else if (sub2 === "delete" || sub2 === "rm") {
+          const { runInboxDelete } = await import("~/commands/inbox-actions.js");
+          await runInboxDelete(positionals[2] ?? "", { json: !!flags.json });
+        } else {
+          const { runInbox } = await import("~/commands/inbox.js");
+          await runInbox({
+            mesh: flags.mesh as string | undefined,
+            json: !!flags.json,
+            limit: typeof flags.limit === "number" ? flags.limit : (typeof flags.limit === "string" ? Number.parseInt(flags.limit, 10) : undefined),
+            unread: !!flags.unread,
+          });
+        }
+      }
       else if (sub === "status") { const { runMsgStatus } = await import("~/commands/broker-actions.js"); process.exit(await runMsgStatus(positionals[1], { mesh: flags.mesh as string, json: !!flags.json })); }
       else { console.error("Usage: claudemesh message <send|inbox|status>"); process.exit(EXIT.INVALID_ARGS); }
       break;

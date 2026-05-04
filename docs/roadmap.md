@@ -292,6 +292,117 @@ What's left for true v2.0.0 (next sessions):
 
 ---
 
+## v1.31.0 → v1.32.0 — *multi-session UX bundle* — *shipped*
+
+The Sprint B push that made multiple Claude Code sessions on the
+same daemon actually pleasant — self-identity via session pubkey,
+`--self` fan-out, broker welcome.
+
+- **1.31.x** — peer list shows `profile.role` and groups; resolves
+  hex prefixes to full pubkeys before send; clean rebuild path with
+  correct VERSION baked in.
+- **1.32.0** — multi-session UX bundle (self-identity, `--self`
+  fan-out, broker welcome). *Shipped 2026-05-04 in CLI v1.32.0.*
+
+---
+
+## v1.34.x — *multi-session correctness train* — *shipped*
+
+The 2026-05-04 ship train — seven releases over a few hours that
+took claudemesh from "works for one session" to "internally
+consistent for N sessions on one daemon." Every layer that was
+shared between sessions either grew per-recipient scoping or
+demuxed at its boundary.
+
+The throughline: any time the daemon held shared state — bus,
+inbox, broker fan-out — two sessions belonging to the same member
+silently saw each other's traffic. Each release fixed one layer,
+each release exposed the next gap.
+
+- **1.34.7 — inbox flush + delete commands.** First-class CLI
+  cleanup for the persisted inbox; previously you had to drop into
+  raw `sqlite3`. `claudemesh inbox flush --mesh|--before|--all`
+  with `--all` confirmation guard, plus `claudemesh inbox delete
+  <id>`. *Shipped 2026-05-04.*
+- **1.34.8 — read-state + TTL prune + first echo guard.** New
+  `seen_at` column on `inbox`; live channel emits + interactive
+  listings flip it; welcome filters on `seen_at IS NULL` instead
+  of an arbitrary 24h window. Hourly prune deletes rows older than
+  30 days. First attempt at a self-echo guard at the WS boundary
+  (later proven incomplete in 1.34.13). *Shipped 2026-05-04.*
+- **1.34.9 — broader echo guard + system event polish.** Daemon-WS
+  guard relaxed (1.34.8 required both axes; session-attributed
+  echoes carry session pubkey on `senderPubkey` so the strict
+  filter never triggered). Session-WS skips system events to dedupe
+  peer_join broadcasts. Richer peer-join channel render
+  (pubkey prefix + groups + last-seen for `peer_returned`).
+  Daemon-staleness warning when CLI ≠ running daemon version.
+  *Shipped 2026-05-04.*
+- **1.34.10 — per-session SSE demux + universal daemon.** The
+  bus stays single-shot; demux happens at the SSE bind layer
+  via `SseFilterOptions`. Each subscriber's session token resolves
+  server-side to a session pubkey + member pubkey, and
+  `shouldDeliver` filters on `recipient_pubkey` + `recipient_kind`.
+  Also: `daemon up` and `install-service` deprecate `--mesh` /
+  `--name` (universal daemon attaches to every joined mesh
+  automatically); `daemon_started` boot log stamps the version.
+  *Shipped 2026-05-04.*
+- **1.34.11 — inbox per-recipient column.** Storage half of
+  1.34.10. New `recipient_pubkey` + `recipient_kind` columns on
+  `inbox` (indexed, non-destructive migration; legacy rows land
+  NULL and stay visible to everyone). `listInbox` accepts
+  `recipientPubkey` + `recipientMemberPubkey`; `/v1/inbox`
+  resolves them from the session token. Welcome auto-fixes —
+  it already passed the token. *Shipped 2026-05-04.*
+- **1.34.12 — `daemon up` detaches by default.** Pre-1.34.12
+  ran in foreground and streamed JSON logs to the terminal until
+  Ctrl-C. Now spawns a detached child re-execing `daemon up
+  --foreground` with stdout/stderr → `~/.claudemesh/daemon/
+  daemon.log`; parent exits cleanly with pid + log path.
+  Service units (launchd plist, systemd-user) explicitly pass
+  `--foreground` so the service manager owns lifecycle.
+  *Shipped 2026-05-04.*
+- **1.34.13 — MCP forwards session token on `/v1/events`.** The
+  actual fix that activated 1.34.10's demux. The MCP server's
+  SSE subscription wasn't sending the session token, so the
+  daemon's `/v1/events` resolved `session` to null and the demux
+  filter was empty — every MCP received the unfiltered global
+  stream. `subscribeEvents` now passes `Authorization:
+  ClaudeMesh-Session <token>`. *Shipped 2026-05-04.*
+
+### Architecture invariant after 1.34.13
+
+Every shared store / channel on the daemon now scopes by recipient.
+Single bus + single tables remain canonical; demux is isolated to
+one chokepoint per layer.
+
+| Layer | Scoping mechanism | Shipped |
+|---|---|---|
+| EventBus | SSE demux at bind layer + token forwarding | 1.34.10 + 1.34.13 |
+| inbox.db | `recipient_pubkey` / `recipient_kind` columns | 1.34.11 |
+| outbox.db | `sender_session_pubkey` for routing | 1.34.0 |
+
+### Known gaps tracked for follow-ups
+
+- `claudemesh launch` exports `CLAUDEMESH_CONFIG_DIR` /
+  `CLAUDEMESH_IPC_TOKEN_FILE` into the parent shell; vars persist
+  after the launched session exits and silently break subsequent
+  CLI calls until unset. Fish lacks `unset`; users hit
+  `set -e CLAUDEMESH_CONFIG_DIR`.
+- Broker `listPeers` ignores `--mesh` filter (server-side returns
+  global peer set across all meshes regardless of the query
+  param). Read-view noise only; doesn't affect correctness.
+- `kick` on a daemon's control-plane WS is effectively a no-op
+  (it auto-reconnects within seconds). Wants either a mesh-admin
+  cap check or a `presence pause [--mesh X]` verb.
+- Session capabilities don't exist as a first-class concept — a
+  launched session inherits ALL of its parent member's grants.
+  Parent attestation is just an existence proof; it doesn't carry
+  a capability subset. Worth filling in before any cross-org
+  use case lands.
+
+---
+
 ## v2.0.0 — *HKDF cross-machine identity*
 
 The remaining v2 promise after Sprint A: the user's account secret

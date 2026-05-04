@@ -11,19 +11,17 @@ import { migrateInbox } from "./db/inbox.js";
 import { DaemonBrokerClient } from "./broker.js";
 import { SessionBrokerClient } from "./session-broker.js";
 import { startDrainWorker, type DrainHandle } from "./drain.js";
+import { startInboxPruner, type InboxPrunerHandle } from "./inbox-pruner.js";
 import { handleBrokerPush } from "./inbound.js";
 import { EventBus } from "./events.js";
 import { checkFingerprint, type ClonePolicy } from "./identity.js";
 import { readConfig } from "~/services/config/facade.js";
+import { VERSION } from "~/constants/urls.js";
 
 export interface RunDaemonOptions {
   /** Disable TCP loopback (UDS-only). Defaults true in container envs. */
   tcpEnabled?: boolean;
   publicHealthCheck?: boolean;
-  /** Mesh slug to attach to. Required when the user has joined multiple meshes. */
-  mesh?: string;
-  /** Daemon's display name on the mesh. */
-  displayName?: string;
   /** Behavior on host_fingerprint mismatch. Defaults 'refuse'. */
   clonePolicy?: ClonePolicy;
 }
@@ -95,30 +93,27 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
 
   const bus = new EventBus();
 
-  // 1.26.0 — multi-mesh by default. With --mesh <slug>, the daemon
-  // scopes to one mesh (legacy mode). Without it, attaches to every
-  // joined mesh simultaneously so ambient mode (raw `claude`) works
-  // for all meshes with one daemon process.
+  // 1.34.10: the daemon is universal — attaches to every mesh listed
+  // in config.json. Single-mesh isolation is handled by simply joining
+  // only one mesh in that environment (containers, etc.). No --mesh
+  // flag, no per-mesh service unit; one daemon, every mesh.
   const cfg = readConfig();
-  let meshes: Array<typeof cfg.meshes[number]>;
-  if (opts.mesh) {
-    const found = cfg.meshes.find((m) => m.slug === opts.mesh);
-    if (!found) {
-      process.stderr.write(`mesh not found: ${opts.mesh}\n`);
-      process.stderr.write(`joined meshes: ${cfg.meshes.map((m) => m.slug).join(", ") || "(none)"}\n`);
-      releaseSingletonLock();
-      try { outboxDb.close(); } catch { /* ignore */ }
-      return 2;
-    }
-    meshes = [found];
-  } else if (cfg.meshes.length === 0) {
+  if (cfg.meshes.length === 0) {
     process.stderr.write(`no mesh joined; run \`claudemesh join <invite-url>\` first\n`);
     releaseSingletonLock();
     try { outboxDb.close(); } catch { /* ignore */ }
     return 2;
-  } else {
-    meshes = cfg.meshes;
   }
+  const meshes = cfg.meshes;
+
+  // 1.34.9 — declared upfront so the daemon-WS onPush closure can
+  // reach into the per-session map for the isOwnPubkey filter (drops
+  // peer_joined / peer_left events for our own session pubkeys before
+  // they surface as `[system] Peer "<self>" joined`). Populated below
+  // by setRegistryHooks; empty until the first session registers, but
+  // that's fine — the closure walks it lazily.
+  const sessionBrokers = new Map<string, SessionBrokerClient>();
+  const sessionBrokersByPubkey = new Map<string, SessionBrokerClient>();
 
   // Spin up one broker per mesh. Connection failures are non-fatal:
   // the outbox keeps queuing per-mesh and reconnect logic in
@@ -127,8 +122,11 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
   const meshConfigs = new Map<string, typeof cfg.meshes[number]>();
   for (const mesh of meshes) {
     meshConfigs.set(mesh.slug, mesh);
+    // 1.34.10: no global displayName override anymore. Each mesh's
+    // hello uses its own per-mesh display name from config.json (set
+    // at `claudemesh join` time). Sessions advertise their own name
+    // via `claudemesh launch --name`.
     const broker: DaemonBrokerClient = new DaemonBrokerClient(mesh, {
-      displayName: opts.displayName,
       onStatusChange: (s) => {
         process.stdout.write(JSON.stringify({
           msg: "broker_status", status: s, mesh: mesh.slug, ts: new Date().toISOString(),
@@ -141,6 +139,22 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
         // 1.32.1 and decrypt with the session secret there. Anything that
         // arrives here can only be member-keyed (broadcasts, member DMs,
         // system events) — pass member secret only.
+        // 1.34.9: drop self-echoes — broker fan-out paths mirror an
+        // outbound back to the SAME daemon's member-WS even when the
+        // send originated on a session-WS (because both connections
+        // belong to the same member from the broker's view). Filter on
+        // senderMemberPubkey alone: anything attributed to OUR member is
+        // either our own send echoing back or, theoretically, a peer
+        // send from a different connection that happens to share our
+        // pubkey — but two-different-clients-same-pubkey is impossible
+        // by construction (member pubkeys are stable + unique per
+        // identity). Sibling-session DMs don't fan to our member-WS;
+        // they fan session-to-session. So this is safe.
+        const senderMemberPk = String((m as Record<string, unknown>).senderMemberPubkey ?? "").toLowerCase();
+        const ownMember = mesh.pubkey.toLowerCase();
+        if (senderMemberPk && senderMemberPk === ownMember) {
+          return;
+        }
         void handleBrokerPush(m, {
           db: inboxDb,
           bus,
@@ -149,6 +163,18 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
           // v2 agentic-comms (M1): client_ack closes the at-least-once
           // loop. Broker holds the row claimed (not delivered) until ack.
           ackClientMessage: (cmid, bmid) => broker.sendClientAck(cmid, bmid),
+          // 1.34.9: drop self-join system events. Member pubkey + every
+          // live session pubkey on this daemon all count as "us".
+          isOwnPubkey: (pubkey) => {
+            const lower = pubkey.toLowerCase();
+            if (lower === ownMember) return true;
+            return sessionBrokersByPubkey.has(lower);
+          },
+          // 1.34.10: tag the bus event with our member pubkey so the
+          // SSE demux only fans this row to MCPs whose subscriber
+          // matches (member-keyed broadcasts / DMs).
+          recipientPubkey: mesh.pubkey,
+          recipientKind: "member",
         });
       },
     });
@@ -156,16 +182,33 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
     brokers.set(mesh.slug, broker);
   }
 
-  // Start the drain worker. With multi-mesh, drain dispatches each
-  // outbox row to its mesh's broker via the `mesh` column.
-  let drain: DrainHandle | null = null;
-  drain = startDrainWorker({ db: outboxDb, brokers });
-
   // 1.30.0 — per-session broker presence. Always on. Older CLIs that
   // don't include `presence` material in the register body just won't
   // get a session WS; the daemon's own member-keyed broker still
   // covers them.
-  const sessionBrokers = new Map<string, SessionBrokerClient>();
+  //
+  // The two index maps (sessionBrokers by token, sessionBrokersByPubkey
+  // by session pubkey) are declared earlier in this function so the
+  // daemon-WS onPush closure can reference them for the isOwnPubkey
+  // self-join filter.
+
+  // Start the drain worker. With multi-mesh, drain dispatches each
+  // outbox row to its mesh's broker via the `mesh` column.
+  // 1.34.0: drain also accepts a session-pubkey lookup so rows
+  // written by authenticated sessions route via the matching session-WS
+  // (broker fan-out then attributes the push to the session pubkey).
+  let drain: DrainHandle | null = null;
+  drain = startDrainWorker({
+    db: outboxDb,
+    brokers,
+    getSessionBrokerByPubkey: (pubkey) => sessionBrokersByPubkey.get(pubkey),
+  });
+
+  // 1.34.8 — TTL prune for inbox.db. Runs hourly with a 30-day default
+  // retention. Without this the inbox grows unbounded; even on a moderate
+  // mesh that's tens of thousands of rows over a few weeks. Prune is a
+  // single DELETE; failures are non-fatal and the next interval retries.
+  const inboxPruner: InboxPrunerHandle = startInboxPruner({ db: inboxDb });
   setRegistryHooks({
     onRegister: (info) => {
       if (!info.presence) return;
@@ -181,6 +224,10 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
       const prior = sessionBrokers.get(info.token);
       if (prior) {
         sessionBrokers.delete(info.token);
+        // 1.34.0: keep both indices in sync.
+        if (sessionBrokersByPubkey.get(prior.sessionPubkey) === prior) {
+          sessionBrokersByPubkey.delete(prior.sessionPubkey);
+        }
         prior.close().catch(() => { /* ignore */ });
       }
       // 1.32.1 — wire push delivery. Messages targeted at the launched
@@ -190,6 +237,10 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
       // session secret key; member key remains the fallback for legacy
       // member-targeted traffic that happens to fan out here.
       const sessionSecretKeyHex = info.presence.sessionSecretKey;
+      // Capture the pubkey for the onPush closure below — TS can't
+      // narrow `info.presence` inside the async arrow even though we
+      // guard `if (!info.presence) return` earlier.
+      const sessionPubkeyHex = info.presence.sessionPubkey;
       const client: SessionBrokerClient = new SessionBrokerClient({
         mesh: meshConfig,
         sessionPubkey: info.presence.sessionPubkey,
@@ -209,10 +260,18 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
             sessionSecretKeyHex,
             // v2 agentic-comms (M1): close the at-least-once loop.
             ackClientMessage: (cmid, bmid) => client.sendClientAck(cmid, bmid),
+            // 1.34.10: tag the bus event with this session's pubkey so
+            // the SSE demux only delivers to the MCP serving THIS
+            // session — not its siblings on the same daemon. Without
+            // this, A's MCP also rendered DMs intended for B because
+            // the bus was a single shared stream.
+            recipientPubkey: sessionPubkeyHex,
+            recipientKind: "session",
           });
         },
       });
       sessionBrokers.set(info.token, client);
+      sessionBrokersByPubkey.set(info.presence.sessionPubkey, client);
       client.connect().catch((err) =>
         process.stderr.write(JSON.stringify({
           level: "warn", msg: "session_broker_connect_failed",
@@ -224,6 +283,11 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
       const client = sessionBrokers.get(info.token);
       if (!client) return;
       sessionBrokers.delete(info.token);
+      // 1.34.0: drop the pubkey index iff this client still owns it
+      // (a re-register may have already swapped the entry).
+      if (sessionBrokersByPubkey.get(client.sessionPubkey) === client) {
+        sessionBrokersByPubkey.delete(client.sessionPubkey);
+      }
       client.close().catch(() => { /* ignore */ });
     },
   });
@@ -252,6 +316,10 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
 
   process.stdout.write(JSON.stringify({
     msg: "daemon_started",
+    // 1.34.10: stamp the version so users can tell whether the
+    // running daemon picked up a recent CLI ship. Read off the same
+    // VERSION constant the IPC `/v1/version` endpoint serves.
+    version: VERSION,
     pid: process.pid,
     sock: DAEMON_PATHS.SOCK_FILE,
     tcp: tcpEnabled ? `127.0.0.1:47823` : null,
@@ -264,6 +332,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
     if (shuttingDown) return;
     shuttingDown = true;
     process.stdout.write(JSON.stringify({ msg: "daemon_shutdown", signal: sig, ts: new Date().toISOString() }) + "\n");
+    inboxPruner.stop();
     if (drain) await drain.close();
     for (const b of brokers.values()) {
       try { await b.close(); } catch { /* ignore */ }

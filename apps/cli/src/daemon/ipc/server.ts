@@ -5,7 +5,7 @@ import { timingSafeEqual } from "node:crypto";
 import { DAEMON_PATHS, DAEMON_TCP_HOST, DAEMON_TCP_DEFAULT_PORT } from "../paths.js";
 import type { SqliteDb } from "../db/sqlite.js";
 import { acceptSend, type SendRequest } from "./handlers/send.js";
-import { listInbox } from "../db/inbox.js";
+import { listInbox, deleteInboxRow, flushInbox, markInboxSeen } from "../db/inbox.js";
 import { listOutbox, requeueDeadOrPending, type OutboxStatus } from "../db/outbox.js";
 import { randomUUID } from "node:crypto";
 import { bindSseStream, type EventBus } from "../events.js";
@@ -319,7 +319,21 @@ function makeHandler(opts: {
         respond(res, 503, { error: "event bus not initialised" });
         return;
       }
-      bindSseStream(res, opts.bus);
+      // 1.34.10: per-session SSE demux. When the subscriber presented
+      // a ClaudeMesh-Session token (the MCP server always does post-
+      // 1.34.10), scope the stream to that session's pubkey + the
+      // matching mesh's member pubkey. Diagnostic callers without a
+      // session token (`claudemesh daemon events`) get the unfiltered
+      // legacy stream. The bus itself stays single-shot; demux lives
+      // entirely at the SSE bind layer (events.ts shouldDeliver).
+      const filter: Record<string, string> = {};
+      if (session?.presence?.sessionPubkey) filter.sessionPubkey = session.presence.sessionPubkey;
+      if (session?.mesh) {
+        filter.meshSlug = session.mesh;
+        const meshCfg = opts.meshConfigs?.get(session.mesh);
+        if (meshCfg?.pubkey) filter.memberPubkey = meshCfg.pubkey;
+      }
+      bindSseStream(res, opts.bus, filter);
       return;
     }
 
@@ -579,12 +593,46 @@ function makeHandler(opts: {
       const fromPubkey = url.searchParams.get("from") ?? undefined;
       const limitRaw = url.searchParams.get("limit");
       const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined;
+      // 1.34.0: mesh filter. Falls back to session-default if header set.
+      const meshFilter = meshFromCtx(url.searchParams.get("mesh")) ?? undefined;
+      // 1.34.8: read-state filter. ?unread_only=true narrows to rows
+      // whose seen_at is NULL — used by the welcome push so a freshly
+      // launched session surfaces only what it actually missed.
+      const unreadOnly = url.searchParams.get("unread_only") === "true";
+      // 1.34.8: ?mark_seen=false opts out of the auto-stamp behavior. By
+      // default an interactive listing flips seen_at on the rows it just
+      // returned (the user "saw" them), which is what we want for the
+      // CLI but not for diagnostic tooling that wants to peek without
+      // affecting state. The MCP server uses mark_seen=false on the
+      // welcome path; it stamps explicitly via /v1/inbox/seen instead.
+      const markSeen = url.searchParams.get("mark_seen") !== "false";
+      // 1.34.11: scope by recipient when the caller is an authenticated
+      // session. The daemon receives every inbox row for every session
+      // it hosts, so a query without scoping returns the global table —
+      // session A would see B's DMs (the bug 1.34.10 fixed for the
+      // live event path; this is the storage half). Scope = session
+      // pubkey (DMs) + member pubkey (broadcasts/member DMs the whole
+      // member should see) + NULL (legacy rows we can't attribute).
+      const recipientPubkey = session?.presence?.sessionPubkey;
+      const meshCfgForRecipient = session?.mesh ? opts.meshConfigs?.get(session.mesh) : undefined;
+      const recipientMemberPubkey = meshCfgForRecipient?.pubkey;
       const rows = listInbox(opts.inboxDb, {
         since: Number.isFinite(since) ? since : undefined,
         topic,
         fromPubkey,
+        ...(meshFilter ? { mesh: meshFilter } : {}),
+        unreadOnly,
+        ...(recipientPubkey ? { recipientPubkey } : {}),
+        ...(recipientMemberPubkey ? { recipientMemberPubkey } : {}),
         limit: Number.isFinite(limit ?? NaN) ? limit : undefined,
       });
+      let flippedCount = 0;
+      if (markSeen) {
+        const unreadIds = rows.filter((r) => r.seen_at == null).map((r) => r.id);
+        if (unreadIds.length > 0) {
+          flippedCount = markInboxSeen(opts.inboxDb, unreadIds);
+        }
+      }
       respond(res, 200, {
         items: rows.map((r) => ({
           id: r.id,
@@ -597,8 +645,69 @@ function makeHandler(opts: {
           body: r.body,
           received_at: new Date(r.received_at).toISOString(),
           reply_to_id: r.reply_to_id,
+          // 1.34.8: surface read-state. `null` = never seen (welcome
+          // candidate). Note that if mark_seen=true (default), we just
+          // stamped these rows — but the snapshot reflects the value
+          // BEFORE the stamp so callers can still tell which rows were
+          // unread when they asked.
+          seen_at: r.seen_at ? new Date(r.seen_at).toISOString() : null,
+          // 1.34.11: recipient context. Lets `--json` consumers tell
+          // a session DM apart from a member-keyed broadcast, and
+          // distinguishes pre-1.34.11 legacy rows (NULL) from
+          // properly-scoped ones.
+          recipient_pubkey: r.recipient_pubkey,
+          recipient_kind: r.recipient_kind,
         })),
+        // 1.34.8: how many rows just flipped from unread → seen. Useful
+        // for telemetry and lets the CLI render "marked N as read".
+        marked_seen: flippedCount,
       });
+      return;
+    }
+
+    // 1.34.8: explicit mark-seen endpoint. Used by the MCP server after
+    // it surfaces a live `<channel>` reminder for an inbox row — Claude
+    // Code already saw the row inline, so welcome shouldn't re-surface
+    // it on the next launch. Body: { ids: string[] }. Returns the
+    // number of rows that flipped from unread → seen.
+    if (req.method === "POST" && url.pathname === "/v1/inbox/seen") {
+      if (!opts.inboxDb) { respond(res, 503, { error: "inbox not initialised" }); return; }
+      try {
+        const body = await readJsonBody(req, 64 * 1024) as Record<string, unknown> | null;
+        const ids = Array.isArray(body?.ids)
+          ? (body!.ids as unknown[]).filter((x): x is string => typeof x === "string")
+          : [];
+        if (ids.length === 0) { respond(res, 400, { error: "missing 'ids' (string[])" }); return; }
+        const flipped = markInboxSeen(opts.inboxDb, ids);
+        respond(res, 200, { marked_seen: flipped });
+      } catch (e) {
+        respond(res, 400, { error: String(e) });
+      }
+      return;
+    }
+
+    // 1.34.7: inbox flush + per-row delete. The inbox is the daemon's
+    // local persisted SQLite store — there's no broker-side state to
+    // coordinate, so these are simple local writes.
+    if (req.method === "DELETE" && url.pathname === "/v1/inbox") {
+      if (!opts.inboxDb) { respond(res, 503, { error: "inbox not initialised" }); return; }
+      const meshFilter = meshFromCtx(url.searchParams.get("mesh")) ?? undefined;
+      const beforeRaw = url.searchParams.get("before");
+      const before = beforeRaw ? Date.parse(beforeRaw) : undefined;
+      const removed = flushInbox(opts.inboxDb, {
+        ...(meshFilter ? { mesh: meshFilter } : {}),
+        ...(Number.isFinite(before) ? { before } : {}),
+      });
+      respond(res, 200, { removed });
+      return;
+    }
+    if (req.method === "DELETE" && url.pathname.startsWith("/v1/inbox/")) {
+      if (!opts.inboxDb) { respond(res, 503, { error: "inbox not initialised" }); return; }
+      const id = url.pathname.slice("/v1/inbox/".length);
+      if (!id) { respond(res, 400, { error: "missing id" }); return; }
+      const ok = deleteInboxRow(opts.inboxDb, id);
+      if (!ok) { respond(res, 404, { error: "not found", id }); return; }
+      respond(res, 200, { removed: 1, id });
       return;
     }
 
@@ -701,12 +810,23 @@ function makeHandler(opts: {
             respond(res, 404, { error: "mesh_not_attached", mesh: chosenSlug });
             return;
           }
+          // 1.34.0: authenticated session sends encrypt with the session
+          // secret key + carry the session pubkey through to the outbox
+          // row, so the drain worker can route via SessionBrokerClient
+          // and the broker fan-out attributes the push to the session
+          // pubkey instead of the daemon's member pubkey. Cold-path
+          // sends (no session token) keep the legacy member-key flow.
+          const senderSessionPubkey = session?.presence?.sessionPubkey;
+          const senderSecretKey = session?.presence?.sessionSecretKey ?? meshCfg.secretKey;
           try {
-            const routed = await resolveAndEncrypt(parsed.req, broker, meshCfg.secretKey, chosenSlug);
+            const routed = await resolveAndEncrypt(parsed.req, broker, senderSecretKey, chosenSlug);
             parsed.req.target_spec = routed.target_spec;
             parsed.req.ciphertext  = routed.ciphertext;
             parsed.req.nonce       = routed.nonce;
             parsed.req.mesh        = routed.mesh;
+            if (senderSessionPubkey) {
+              parsed.req.sender_session_pubkey = senderSessionPubkey;
+            }
           } catch (e) {
             respond(res, 502, { error: "route_failed", detail: String(e) });
             return;

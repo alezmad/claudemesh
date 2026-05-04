@@ -1,3 +1,7 @@
+import { spawn } from "node:child_process";
+import { existsSync, openSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+
 import { runDaemon } from "~/daemon/run.js";
 import { ipc, IpcError } from "~/daemon/ipc/client.js";
 import { readRunningPid } from "~/daemon/lock.js";
@@ -9,6 +13,15 @@ export interface DaemonOptions {
   publicHealth?: boolean;
   mesh?: string;
   displayName?: string;
+  /** 1.34.12: keep the daemon attached to the current shell instead
+   *  of double-forking. Default behavior changed in 1.34.12 — `up`
+   *  now detaches by default and writes JSON logs to
+   *  ~/.claudemesh/daemon/daemon.log. Pass `--foreground` to get the
+   *  pre-1.34.12 behavior (logs streaming to stdout, blocks the
+   *  terminal until Ctrl-C). install-service and `claudemesh launch`'s
+   *  auto-spawn path always pass --foreground because their parents
+   *  (launchd / the launch helper) own the lifecycle. */
+  foreground?: boolean;
   /** outbox-list status filter, set from boolean flags --failed/--pending/etc. */
   outboxStatus?: "pending" | "inflight" | "done" | "dead" | "aborted";
   /** outbox requeue: optional id to mint a fresh client_message_id with. */
@@ -26,11 +39,40 @@ export async function runDaemonCommand(
 
     case "up":
     case "start":
+      // 1.34.10: `--mesh` and `--name` deprecated.
+      //   --mesh: daemon attaches to every joined mesh automatically;
+      //     pinning at start time blocks new meshes from being picked up.
+      //   --name: overrides the daemon-WS display name GLOBALLY across
+      //     every mesh, but each mesh has its own per-mesh display name
+      //     in config.json (set at `claudemesh join` time). Passing one
+      //     name flattens that out. Sessions advertise their own
+      //     CLAUDEMESH_DISPLAY_NAME at `claudemesh launch` time anyway,
+      //     and the daemon-WS presence is hidden from peer lists since
+      //     1.32, so the daemon's display name isn't user-visible.
+      if (opts.mesh) {
+        process.stderr.write(
+          `[claudemesh] --mesh on \`daemon up\` is deprecated; the daemon attaches to every joined mesh automatically. ` +
+          `Ignoring --mesh ${opts.mesh}.\n`,
+        );
+      }
+      if (opts.displayName) {
+        process.stderr.write(
+          `[claudemesh] --name on \`daemon up\` is deprecated; per-mesh display names live in config.json (set at join time), ` +
+          `and session display names come from \`claudemesh launch --name\`. Ignoring --name ${opts.displayName}.\n`,
+        );
+      }
+      // 1.34.12: detach by default. The pre-1.34.12 behavior streamed
+      // JSON logs to the controlling terminal and blocked the shell —
+      // fine for debugging, surprising for users who just want the
+      // daemon "up." `--foreground` opts back into the old behavior;
+      // launchd / systemd-user units always pass it because the unit
+      // manager owns lifecycle and stdio redirection.
+      if (!opts.foreground) {
+        return spawnDetachedDaemon(opts);
+      }
       return runDaemon({
         tcpEnabled: !opts.noTcp,
         publicHealthCheck: opts.publicHealth,
-        mesh: opts.mesh,
-        displayName: opts.displayName,
       });
 
     case "help":
@@ -74,19 +116,18 @@ USAGE
   claudemesh daemon <command> [options]
 
 COMMANDS
-  up | start                   start the daemon in the foreground
+  up | start                   start the daemon (detached by default)
   status                       show running pid + IPC health
   version                      ipc + schema version of the running daemon
   down | stop                  stop the running daemon (SIGTERM, then wait)
   accept-host                  pin the current host fingerprint
   outbox list                  list local outbox rows (newest first)
   outbox requeue <id>          re-enqueue an aborted / dead outbox row
-  install-service --mesh <s>   write launchd (macOS) / systemd-user (Linux) unit
+  install-service              write launchd (macOS) / systemd-user (Linux) unit
   uninstall-service            remove the platform service unit
 
 OPTIONS
-  --mesh <slug>                attach to / target this mesh
-  --name <displayName>         override CLAUDEMESH_DISPLAY_NAME
+  --foreground                 keep daemon attached to terminal, JSON logs to stdout (1.34.12+)
   --no-tcp                     disable the loopback TCP listener (UDS only)
   --public-health              expose /v1/health unauthenticated on TCP
   --json                       machine-readable output where supported
@@ -192,9 +233,12 @@ async function runInstallService(opts: DaemonOptions): Promise<number> {
   }
   // Resolve the binary path. Prefer the running argv[0] when it's an
   // installed claudemesh binary; fall back to whichever `claudemesh` is
-  // first on PATH. --mesh is now optional: omit it to attach to every
-  // joined mesh (the 1.26.0 multi-mesh default); pass it to lock the
-  // unit to a single mesh for testing or single-mesh hosts.
+  // first on PATH.
+  // 1.34.10: install-service no longer bakes --mesh into the unit. The
+  // daemon attaches to every joined mesh by default, and pinning the
+  // unit to one slug at install time was the source of the "joined a
+  // new mesh but my service ignores it" footgun. If the user passes
+  // --mesh anyway, we warn + ignore.
   let binary = process.argv[1] ?? "";
   if (!binary || /\.ts$/.test(binary) || /node_modules|src\/entrypoints/.test(binary)) {
     try {
@@ -205,11 +249,19 @@ async function runInstallService(opts: DaemonOptions): Promise<number> {
       return 1;
     }
   }
+  if (opts.mesh) {
+    process.stderr.write(
+      `[claudemesh] --mesh on \`daemon install-service\` is deprecated and ignored; the daemon attaches to every joined mesh.\n`,
+    );
+  }
+  if (opts.displayName) {
+    process.stderr.write(
+      `[claudemesh] --name on \`daemon install-service\` is deprecated and ignored; per-mesh names live in config.json, session names come from \`claudemesh launch --name\`.\n`,
+    );
+  }
   try {
     const r = installService({
       binaryPath: binary,
-      ...(opts.mesh ? { meshSlug: opts.mesh } : {}),
-      ...(opts.displayName ? { displayName: opts.displayName } : {}),
     });
     if (opts.json) {
       process.stdout.write(JSON.stringify({ ok: true, ...r }) + "\n");
@@ -307,5 +359,73 @@ async function runStop(opts: DaemonOptions): Promise<number> {
   }
   if (opts.json) process.stdout.write(JSON.stringify({ stopped: false, pid, reason: "shutdown_timeout" }) + "\n");
   else process.stdout.write(`daemon: signaled but did not exit within 5s (pid ${pid})\n`);
+  return 1;
+}
+
+/**
+ * 1.34.12: spawn the daemon as a detached background process. Re-execs
+ * the same `claudemesh` binary with `daemon up --foreground` (so the
+ * child runs the long-lived loop), redirects stdout/stderr to
+ * ~/.claudemesh/daemon/daemon.log, and `unref()`s so the parent shell
+ * can exit cleanly.
+ *
+ * The parent waits up to ~3s for the UDS socket to appear before
+ * declaring success — that's the same liveness check `claudemesh launch`
+ * uses, and it catches the "child crashed during boot" case (config
+ * read failed, port bind failed, etc.) with an actionable error
+ * pointing at the log file rather than silent loss.
+ */
+async function spawnDetachedDaemon(opts: DaemonOptions): Promise<number> {
+  // Ensure the log directory exists before opening the FDs.
+  mkdirSync(DAEMON_PATHS.DAEMON_DIR, { recursive: true, mode: 0o700 });
+  const logPath = join(DAEMON_PATHS.DAEMON_DIR, "daemon.log");
+
+  // The CLI binary path. process.argv[1] is the entrypoint script the
+  // node runtime is currently executing — for an installed CLI that's
+  // .../bin/claudemesh, for `bun run` dev that's the local dist file.
+  // Either way it's the right thing to re-exec.
+  const binary = process.argv[1] ?? "claudemesh";
+  const args = ["daemon", "up", "--foreground"];
+  if (opts.noTcp) args.push("--no-tcp");
+  if (opts.publicHealth) args.push("--public-health");
+
+  const out = openSync(logPath, "a");
+  const err = openSync(logPath, "a");
+  const child = spawn(process.execPath, [binary, ...args], {
+    detached: true,
+    stdio: ["ignore", out, err],
+    env: process.env,
+  });
+  // Decouple the child from the parent's process group so closing the
+  // shell doesn't SIGHUP the daemon.
+  child.unref();
+
+  // Wait for the socket to appear — the daemon's IPC listener binds
+  // ~immediately after the broker WS handshake starts, so socket
+  // existence is a reliable "the daemon is alive enough to accept
+  // requests" signal.
+  const sockPath = DAEMON_PATHS.SOCK_FILE;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 3_000) {
+    if (existsSync(sockPath)) {
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ ok: true, detached: true, pid: child.pid, log: logPath }) + "\n");
+      } else {
+        process.stdout.write(`  ✔ daemon started (pid ${child.pid})\n`);
+        process.stdout.write(`  → log:  ${logPath}\n`);
+        process.stdout.write(`  → stop: claudemesh daemon down\n`);
+      }
+      return 0;
+    }
+    await new Promise<void>((r) => setTimeout(r, 100));
+  }
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ ok: false, detached: true, pid: child.pid, reason: "socket_not_appeared", log: logPath }) + "\n");
+  } else {
+    process.stderr.write(`  ✘ daemon spawn timeout: socket did not appear within 3s\n`);
+    process.stderr.write(`  → check log:  ${logPath}\n`);
+    process.stderr.write(`  → run foreground for live output: claudemesh daemon up --foreground\n`);
+  }
   return 1;
 }
