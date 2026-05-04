@@ -382,24 +382,46 @@ one chokepoint per layer.
 | inbox.db | `recipient_pubkey` / `recipient_kind` columns | 1.34.11 |
 | outbox.db | `sender_session_pubkey` for routing | 1.34.0 |
 
-### Known gaps tracked for follow-ups
+### Known gaps — status after the 2026-05-04 follow-up sprint
 
-- `claudemesh launch` exports `CLAUDEMESH_CONFIG_DIR` /
-  `CLAUDEMESH_IPC_TOKEN_FILE` into the parent shell; vars persist
-  after the launched session exits and silently break subsequent
-  CLI calls until unset. Fish lacks `unset`; users hit
-  `set -e CLAUDEMESH_CONFIG_DIR`.
-- Broker `listPeers` ignores `--mesh` filter (server-side returns
-  global peer set across all meshes regardless of the query
-  param). Read-view noise only; doesn't affect correctness.
-- `kick` on a daemon's control-plane WS is effectively a no-op
-  (it auto-reconnects within seconds). Wants either a mesh-admin
-  cap check or a `presence pause [--mesh X]` verb.
-- Session capabilities don't exist as a first-class concept — a
-  launched session inherits ALL of its parent member's grants.
-  Parent attestation is just an existence proof; it doesn't carry
-  a capability subset. Worth filling in before any cross-org
-  use case lands.
+Three of the four 1.34.x triage gaps shipped in 1.34.14 + 1.34.15
+(2026-05-04). Gap #4 is spec'd and queued.
+
+- ✅ **Stale `CLAUDEMESH_CONFIG_DIR` falls back** *(1.34.14)*. The
+  env var no longer silently breaks subsequent CLI calls. When the
+  inherited path points at a tmpdir that no longer exists,
+  `paths.ts` warns once on stderr (TTY-only) with a shell-specific
+  unset hint and falls back to `~/.claudemesh`. The dir-existence
+  check (not `config.json`) keeps fresh-launch first-write working.
+- ✅ **`peer list --mesh <slug>` actually scopes** *(1.34.15)*.
+  Diagnosis from the original triage was wrong — broker has been
+  scoping correctly since 1.26.0 via `conn.meshId`. Bug was CLI-
+  side: `tryListPeersViaDaemon()` was called with no argument in
+  `commands/peers.ts:140` and `commands/launch.ts:407`. Both now
+  forward the slug as `?mesh=<slug>`. `send.ts` cross-mesh hex-
+  prefix resolution intentionally untouched.
+- ✅ **`kick` refuses no-op kicks on control-plane** *(1.34.15)*.
+  Broker now skips peers where `peerRole === "control-plane"` and
+  surfaces them in a new additive ack field
+  `skipped_control_plane`; CLI reads it and points the user at
+  `ban` (remove member) or `daemon down` (take a daemon offline
+  locally). Soft `disconnect` keeps old behavior — useful when
+  intentionally nudging a control-plane peer to re-authenticate.
+  `PeerConn` gains a `peerRole` slot populated at both
+  `connections.set` sites. The richer `presence pause [--mesh X]`
+  verb (option (b) from the triage) deferred as its own feature.
+- 📋 **Session capabilities — spec only**. Launched sessions still
+  inherit all member grants transitively. Spec at
+  `.artifacts/specs/2026-05-04-session-capabilities.md` covers a v2
+  parent attestation alongside v1 with an `allowed_caps[]` subset,
+  broker enforcement as `intersection(member.peerGrants, session.
+  allowed_caps)`, and a bonus `state-write` cap to close the "any
+  session can clobber shared keys like `current-pr`" footgun.
+  Default when no caps subset is declared = full member set
+  (today's behavior; opt-in restriction). Ships behind a 1-week
+  dry-run window before flipping enforcement, mirroring the
+  original per-peer-capabilities rollout. ~1 sprint of focused
+  work; queued behind v0.3.0 topic-encryption.
 
 ---
 
