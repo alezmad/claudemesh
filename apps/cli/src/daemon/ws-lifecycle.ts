@@ -143,23 +143,27 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
     if (closed) return Promise.reject(new Error("client_closed"));
     setStatus("connecting");
 
+    log("info", "ws_open_attempt", { url: opts.url });
     const sock = new WebSocket(opts.url);
     ws = sock;
 
     return new Promise<void>((resolve, reject) => {
       sock.on("open", () => {
+        log("info", "ws_open_ok", { url: opts.url });
         // Build and send the hello inside a microtask so any sync
         // throws from buildHello() reject this connect attempt cleanly.
         (async () => {
           try {
             const hello = await opts.buildHello();
             sock.send(JSON.stringify(hello));
+            log("info", "ws_hello_sent", { url: opts.url });
             helloTimer = setTimeout(() => {
               log("warn", "hello_ack_timeout", { url: opts.url });
               try { sock.close(); } catch { /* ignore */ }
               reject(new Error("hello_ack_timeout"));
             }, helloAckTimeoutMs);
           } catch (e) {
+            log("warn", "ws_build_hello_threw", { err: String(e) });
             reject(e instanceof Error ? e : new Error(String(e)));
           }
         })();
@@ -174,9 +178,8 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
           if (helloTimer) { clearTimeout(helloTimer); helloTimer = null; }
           setStatus("open");
           reconnectAttempt = 0;
+          log("info", "ws_hello_acked", { url: opts.url });
           resolve();
-          // Don't forward hello_ack to onMessage — both pre-refactor
-          // clients consumed it inline and never delegated.
           return;
         }
 
@@ -186,6 +189,7 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
       sock.on("close", (code, reason) => {
         if (helloTimer) { clearTimeout(helloTimer); helloTimer = null; }
         const reasonStr = reason.toString("utf8");
+        log("warn", "ws_closed", { url: opts.url, code, reason: reasonStr, status });
         opts.onBeforeReconnect?.(code, reasonStr);
 
         if (closed) {
@@ -200,8 +204,6 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
           () => openOnce().catch((err) => log("warn", "ws_reconnect_failed", { url: opts.url, err: String(err) })),
           wait,
         );
-        // First attempt failure (still in connecting) also rejects the
-        // initial connect promise so callers can surface it.
         if (status === "connecting" || status === "reconnecting") {
           reject(new Error(`closed_before_hello_${code}`));
         }
