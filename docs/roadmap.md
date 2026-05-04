@@ -223,43 +223,80 @@ The v0.9.0 foundation got promoted in three quick releases:
   IPC accept time, drain is a forwarder. Adds `mesh`, `target_spec`,
   `nonce`, `ciphertext`, `priority` columns to the outbox.
 - **1.25.0** — CLI thin-client routing for `peer list`,
-  `skill list`, `skill get`. Same daemon-first / bridge / cold-path
-  fallback shape as `trySendViaDaemon`.
+  `skill list`, `skill get`.
 - **1.25.0** — ambient mode: raw `claude` Just Works after
-  `claudemesh install`. No more `claudemesh launch` ceremony for the
-  common case.
+  `claudemesh install`.
 
-What this leaves on the v2.0.0 redesign roadmap is documented at
-`.artifacts/specs/2026-05-04-v2-roadmap-completion.md`: daemon
-multi-mesh, full CLI-to-thin-client conversion, mesh→workspace
-rename, HKDF identity.
+What this leaves on the v2.0.0 redesign is documented at
+`.artifacts/specs/2026-05-04-v2-roadmap-completion.md`.
 
 ---
 
-## v2.0.0 — *the daemon redesign*
+## v1.26.0 → v1.29.0 — *Sprint A toward v2* — *shipped*
 
-The single largest architectural shift. Promotes the persistent
-thing (the user's account + identity) to a persistent process (the
-daemon), demotes the ephemeral thing (the Claude session) to a thin
-client. **Half-shipped via 1.24.0 + 1.25.0; remainder spec'd at
-`.artifacts/specs/2026-05-04-v2-roadmap-completion.md`.**
+The Sprint A push completed everything spec'd for v2.0.0 *except* HKDF
+identity (deferred for security review).
 
-- **`claudemesh-daemon`** — long-lived per-user launchd / systemd
-  unit. One WebSocket per workspace, persistent across reboots and
-  Claude restarts. Listens on `~/.claudemesh/sockets/<workspace>.sock`.
-- **HKDF-derived peer keypairs** — same identity across machines,
-  no key copy ritual. Web sign-up = CLI sign-up = same crypto identity.
-- **Stateless CLI verbs** — every existing command becomes a thin
-  socket client of the daemon. ~3000 LoC removed.
-- **MCP server shrinks to ~50 LoC** — just a daemon-socket →
-  `experimental.claude/channel` adapter.
-- **`claudemesh launch` deprecated** — ambient mode means `claude`
-  works with no flags. Launch becomes a one-line alias that prints
-  "ambient mode now, just run `claude`."
-- **"Mesh" → "workspace" public surface** — DB tables keep
-  `mesh_*` names for migration sanity.
+- **1.26.0** — multi-mesh daemon. One process attaches to every joined
+  workspace simultaneously. Aggregate read routes (`/v1/peers`,
+  `/v1/skills`) tag each record with its mesh; explicit `?mesh=<slug>`
+  narrows server-side. Outbox dispatch picks the right broker via the
+  `mesh` column.
+- **1.27.0** — thin-client expansion to state + memory. `state get`,
+  `state set`, `state list`, `remember`, `recall`, `forget` all route
+  through `/v1/state` and `/v1/memory`. First teaser of the
+  `claudemesh workspace <verb>` alias surface.
+- **1.27.1** — wired six previously-dead launch flags through the CLI
+  entrypoint (`--role`, `--groups`, `--message-mode`, `--system-prompt`,
+  `--continue`, `--quiet`). Pure plumbing fix.
+- **1.27.2** — bundled `SKILL.md` gains a canonical fully-populated
+  spawn template + per-flag annotation table for unattended scripting.
+- **1.27.3** — self-healing daemon lifecycle. Every CLI verb probes
+  `/v1/version` (no more stale-socket false positives), auto-spawns a
+  detached `daemon up` under a file-lock when down, polls until live.
+  30 s recently-failed marker prevents thundering-herd retries.
+- **1.28.0** — bridge tier deletion (~600 LoC dead code removed) +
+  per-process daemon policy: `--strict` (refuse cold fallback) and
+  `--no-daemon` (skip daemon entirely). Single chokepoint at
+  `withMesh`. Env equivalents.
+- **1.29.0** — per-session IPC tokens. Every `claudemesh launch` mints
+  a 32-byte token under tmpdir mode-0600, registers it with the
+  daemon, exposes the path via `CLAUDEMESH_IPC_TOKEN_FILE` to children.
+  Daemon resolves `Authorization: ClaudeMesh-Session <hex>` to a
+  `SessionInfo`. CLI invocations from inside a launched session
+  auto-scope to its workspace instead of aggregating across all
+  joined meshes (verified: `peer list` returns 1 workspace's peers
+  with token, all 3 without). Server-side `meshFromCtx()` plumbing
+  on every read route.
 
-Spec: `.artifacts/specs/2026-05-02-roadmap.md`.
+What's left for true v2.0.0 (next sessions):
+
+- **1.30.0** — launch wizard refactor (single render loop, daemon-as-
+  step probe panel, last-used persistence, drop `@ts-nocheck`).
+- **1.31.0** — setup wizard refactor (state-detection snapshot, four-
+  branch flow, daemon install offer, post-join panel).
+- **1.32.0** — full mesh→workspace public-surface rename in help/docs/
+  site; mesh aliases tagged deprecated; protocol/DB stay `mesh_*`.
+
+---
+
+## v2.0.0 — *HKDF cross-machine identity*
+
+The remaining v2 promise after Sprint A: the user's account secret
+derives a deterministic ed25519 keypair per workspace. Same identity
+across laptop + desktop + server, no key copy ritual.
+
+- **`HKDF(account_secret, info: "claudemesh/mesh/<mesh_id>/peer",
+  salt: <user_id>)`** — derived per-workspace.
+- **Broker `account_secret` distribution** — vended on first
+  authenticated install over TLS. Needs design review on key
+  compromise recovery story.
+- **Migration** — existing keypairs in config keep working. Opt-in
+  re-enrollment for users who want cross-machine sync.
+- **Hello-sig protocol** — unchanged.
+
+Reserved as its own sprint with an explicit security-review window.
+Estimated 2-3 weeks.
 
 ---
 
