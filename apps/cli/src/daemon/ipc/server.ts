@@ -10,6 +10,10 @@ import { listOutbox, requeueDeadOrPending, type OutboxStatus } from "../db/outbo
 import { randomUUID } from "node:crypto";
 import { bindSseStream, type EventBus } from "../events.js";
 import type { DaemonBrokerClient } from "../broker.js";
+import {
+  registerSession, deregisterByToken, resolveToken, listSessions, startReaper,
+  type SessionInfo,
+} from "../session-registry.js";
 import { VERSION } from "~/constants/urls.js";
 
 /**
@@ -172,12 +176,28 @@ function makeHandler(opts: {
       }
     }
 
+    // Per-session token resolution. Layers on top of the machine-level
+    // local-token auth above: callers from inside a `claudemesh launch`-
+    // spawned session pass `Authorization: ClaudeMesh-Session <hex>`
+    // (instead of, or in addition to, Bearer over TCP) and we resolve
+    // it to a SessionInfo that downstream routes use for default-mesh
+    // scoping and attribution.
+    let session: SessionInfo | null = null;
+    {
+      const authz = req.headers.authorization ?? "";
+      const sm = /^ClaudeMesh-Session\s+([0-9a-f]{64})$/i.exec(authz.trim());
+      if (sm && sm[1]) session = resolveToken(sm[1].toLowerCase());
+    }
+    /** Pick mesh from explicit body/query first, then session default. */
+    const meshFromCtx = (explicit?: string | null): string | null =>
+      (explicit && explicit.trim()) ? explicit : (session?.mesh ?? null);
+
     // Routing.
     if (req.method === "GET" && url.pathname === "/v1/version") {
       respond(res, 200, {
         daemon_version: VERSION,
         ipc_api: "v1",
-        ipc_features: ["version", "health", "send", "inbox", "events", "peers", "profile", "skills", "state", "memory"],
+        ipc_features: ["version", "health", "send", "inbox", "events", "peers", "profile", "skills", "state", "memory", "sessions"],
         schema_version: 1,
       });
       return;
@@ -185,6 +205,59 @@ function makeHandler(opts: {
 
     if (req.method === "GET" && url.pathname === "/v1/health") {
       respond(res, 200, { ok: true, pid: process.pid });
+      return;
+    }
+
+    // Session registry routes (1.29.0)
+    if (req.method === "POST" && url.pathname === "/v1/sessions/register") {
+      try {
+        const body = await readJsonBody(req, 64 * 1024) as Record<string, unknown> | null;
+        if (!body) { respond(res, 400, { error: "missing body" }); return; }
+        const token = typeof body.token === "string" ? body.token : "";
+        if (!/^[0-9a-f]{64}$/i.test(token)) { respond(res, 400, { error: "token must be 64 hex chars" }); return; }
+        const sessionId = typeof body.session_id === "string" ? body.session_id : "";
+        const mesh = typeof body.mesh === "string" ? body.mesh : "";
+        const displayName = typeof body.display_name === "string" ? body.display_name : "";
+        const pid = typeof body.pid === "number" ? body.pid : 0;
+        if (!sessionId || !mesh || !displayName || !pid) {
+          respond(res, 400, { error: "session_id, mesh, display_name, pid all required" });
+          return;
+        }
+        const cwd = typeof body.cwd === "string" ? body.cwd : undefined;
+        const role = typeof body.role === "string" ? body.role : undefined;
+        const groups = Array.isArray(body.groups)
+          ? body.groups.filter((g): g is string => typeof g === "string")
+          : undefined;
+        const stored = registerSession({
+          token: token.toLowerCase(),
+          sessionId, mesh, displayName, pid, cwd, role, groups,
+        });
+        opts.log("info", "session_registered", { sessionId, mesh, pid });
+        respond(res, 200, { ok: true, registered_at: stored.registeredAt });
+      } catch (e) {
+        respond(res, 400, { error: String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname.startsWith("/v1/sessions/")) {
+      const tail = url.pathname.slice("/v1/sessions/".length);
+      if (!/^[0-9a-f]{64}$/i.test(tail)) { respond(res, 400, { error: "invalid token" }); return; }
+      const ok = deregisterByToken(tail.toLowerCase());
+      respond(res, ok ? 200 : 404, { ok, token_prefix: tail.slice(0, 8) });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/v1/sessions/me") {
+      if (!session) { respond(res, 401, { error: "no session token" }); return; }
+      const { token, ...redacted } = session;
+      respond(res, 200, { session: { ...redacted, token_prefix: token.slice(0, 8) } });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/v1/sessions") {
+      const all = listSessions().map(({ token, ...rest }) => ({ ...rest, token_prefix: token.slice(0, 8) }));
+      respond(res, 200, { sessions: all });
       return;
     }
 
@@ -202,7 +275,7 @@ function makeHandler(opts: {
         respond(res, 503, { error: "broker not initialised" });
         return;
       }
-      const filterMesh = url.searchParams.get("mesh") ?? undefined;
+      const filterMesh = meshFromCtx(url.searchParams.get("mesh")) ?? undefined;
       try {
         // Aggregate across all attached meshes; each peer record gets a
         // `mesh` field so the caller can scope client-side. A single
@@ -229,7 +302,7 @@ function makeHandler(opts: {
         respond(res, 503, { error: "broker not initialised" });
         return;
       }
-      const filterMesh = url.searchParams.get("mesh") ?? undefined;
+      const filterMesh = meshFromCtx(url.searchParams.get("mesh")) ?? undefined;
       const key = url.searchParams.get("key");
       try {
         if (key) {
@@ -268,7 +341,7 @@ function makeHandler(opts: {
           respond(res, 400, { error: "missing 'key' (string)" });
           return;
         }
-        const requested = (typeof body.mesh === "string" ? body.mesh : null) || null;
+        const requested = meshFromCtx(typeof body.mesh === "string" ? body.mesh : null);
         let chosen = requested;
         if (!chosen && opts.brokers.size === 1) chosen = opts.brokers.keys().next().value as string;
         if (!chosen) {
@@ -291,7 +364,7 @@ function makeHandler(opts: {
         return;
       }
       const query = url.searchParams.get("q") ?? "";
-      const filterMesh = url.searchParams.get("mesh") ?? undefined;
+      const filterMesh = meshFromCtx(url.searchParams.get("mesh")) ?? undefined;
       try {
         const all: Array<Record<string, unknown> & { mesh: string }> = [];
         for (const [slug, b] of opts.brokers.entries()) {
@@ -317,7 +390,7 @@ function makeHandler(opts: {
           respond(res, 400, { error: "missing 'content' (string)" });
           return;
         }
-        const requested = (typeof body.mesh === "string" ? body.mesh : null) || null;
+        const requested = meshFromCtx(typeof body.mesh === "string" ? body.mesh : null);
         let chosen = requested;
         if (!chosen && opts.brokers.size === 1) chosen = opts.brokers.keys().next().value as string;
         if (!chosen) {
@@ -363,7 +436,7 @@ function makeHandler(opts: {
         return;
       }
       const query = url.searchParams.get("query") ?? undefined;
-      const filterMesh = url.searchParams.get("mesh") ?? undefined;
+      const filterMesh = meshFromCtx(url.searchParams.get("mesh")) ?? undefined;
       try {
         const all: Array<Record<string, unknown> & { mesh: string }> = [];
         for (const [slug, b] of opts.brokers.entries()) {
@@ -389,7 +462,7 @@ function makeHandler(opts: {
       }
       const name = decodeURIComponent(url.pathname.slice("/v1/skills/".length));
       if (!name) { respond(res, 400, { error: "missing skill name" }); return; }
-      const filterMesh = url.searchParams.get("mesh") ?? undefined;
+      const filterMesh = meshFromCtx(url.searchParams.get("mesh")) ?? undefined;
       try {
         // First mesh that has the skill wins. With ?mesh=<slug>, only that
         // mesh is queried.
@@ -417,7 +490,7 @@ function makeHandler(opts: {
         // present in the body or query, otherwise broadcast to all attached
         // meshes (presence is per-mesh, but most users want consistent
         // presence across all of theirs).
-        const requested = (typeof body.mesh === "string" ? body.mesh : url.searchParams.get("mesh")) || null;
+        const requested = meshFromCtx(typeof body.mesh === "string" ? body.mesh : url.searchParams.get("mesh"));
         const targets = requested
           ? [opts.brokers.get(requested)].filter(Boolean) as DaemonBrokerClient[]
           : [...opts.brokers.values()];

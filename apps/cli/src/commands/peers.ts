@@ -119,7 +119,19 @@ function annotateSelf(
 
 export async function runPeers(flags: PeersFlags): Promise<void> {
   const config = readConfig();
-  const slugs = flags.mesh ? [flags.mesh] : config.meshes.map((m) => m.slug);
+
+  // Mesh selection precedence:
+  //   1. explicit --mesh <slug>  (always wins)
+  //   2. session-token mesh      (when invoked from inside a launched session)
+  //   3. all joined meshes       (default for bare shells)
+  let slugs: string[];
+  if (flags.mesh) {
+    slugs = [flags.mesh];
+  } else {
+    const { getSessionInfo } = await import("~/services/session/resolve.js");
+    const sess = await getSessionInfo();
+    slugs = sess ? [sess.mesh] : config.meshes.map((m) => m.slug);
+  }
 
   if (slugs.length === 0) {
     render.err("No meshes joined.");

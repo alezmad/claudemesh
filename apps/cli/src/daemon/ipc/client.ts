@@ -2,6 +2,7 @@ import { request as httpRequest } from "node:http";
 
 import { DAEMON_PATHS, DAEMON_TCP_HOST, DAEMON_TCP_DEFAULT_PORT } from "../paths.js";
 import { readLocalToken } from "../local-token.js";
+import { readSessionTokenFromEnv } from "~/services/session/token.js";
 
 export interface IpcRequestOptions {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
@@ -42,6 +43,19 @@ export async function ipc<T = unknown>(opts: IpcRequestOptions): Promise<IpcResp
     const tok = readLocalToken();
     if (!tok) throw new IpcError(0, null, "daemon local token not found; is the daemon running?");
     headers.authorization = `Bearer ${tok}`;
+  }
+
+  // Per-session token attribution. When the calling process has
+  // CLAUDEMESH_IPC_TOKEN_FILE set (a launched session and its
+  // descendants), attach the session token. The daemon's auth
+  // middleware resolves it to a SessionInfo and uses it for default-
+  // mesh scoping. Sent as a second Authorization header is not
+  // possible per HTTP semantics, so we layer: when both UDS and a
+  // session token exist, send the session token; the bearer remains
+  // only for TCP loopback callers.
+  if (!useTcp) {
+    const sessionTok = readSessionTokenFromEnv();
+    if (sessionTok) headers.authorization = `ClaudeMesh-Session ${sessionTok}`;
   }
 
   return new Promise<IpcResponse<T>>((resolve, reject) => {

@@ -653,6 +653,49 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     "utf-8",
   );
 
+  // 4b. Mint a per-session IPC token, persist it under tmpDir, and
+  //     register it with the daemon. The token's path is exposed to
+  //     the spawned claude (and all its descendants) via env so
+  //     CLI invocations from inside the session auto-attribute to it.
+  let sessionTokenFilePath: string | null = null;
+  let sessionTokenForCleanup: string | null = null;
+  try {
+    const { mintSessionToken, TOKEN_FILE_ENV } = await import("~/services/session/token.js");
+    const minted = mintSessionToken(tmpDir);
+    sessionTokenFilePath = minted.filePath;
+    sessionTokenForCleanup = minted.token;
+
+    // Register with the daemon. Best-effort: a daemon failure here
+    // means the session falls back to user-level scope, which is fine.
+    const { ipc } = await import("~/daemon/ipc/client.js");
+    const sessionIdForRegister = claudeSessionId ?? randomUUID();
+    await ipc({
+      method: "POST",
+      path: "/v1/sessions/register",
+      timeoutMs: 3_000,
+      body: {
+        token: minted.token,
+        session_id: sessionIdForRegister,
+        mesh: mesh.slug,
+        display_name: displayName,
+        pid: process.pid,
+        cwd: process.cwd(),
+        ...(role ? { role } : {}),
+        ...(parsedGroups.length > 0 ? { groups: parsedGroups.map((g) => `@${g.name}${g.role ? `:${g.role}` : ""}`) } : {}),
+      },
+    }).catch(() => null);
+
+    // Pin the env name on a global so the spawn block below can pick it up.
+    (process as unknown as { _claudemeshTokenEnv?: { name: string; value: string } })._claudemeshTokenEnv = {
+      name: TOKEN_FILE_ENV,
+      value: minted.filePath,
+    };
+  } catch {
+    // Token mint or registration failed — proceed without per-session
+    // attribution. CLI invocations from the session will still work,
+    // they'll just default to user-level scope.
+  }
+
   // 5. Print summary banner (wizard already handled all interactive config).
   if (!args.quiet) {
     printBanner(displayName, mesh.slug, role, parsedGroups, messageMode);
@@ -774,7 +817,14 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
         writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2) + "\n", "utf-8");
       } catch { /* best effort */ }
     }
-    // Ephemeral config dir
+    // The token's session-token file lives inside tmpDir; rmSync below
+    // shreds the secret. The daemon's session reaper notices the
+    // launched session's pid is gone within 30s and drops the registry
+    // entry. Explicit DELETE on /v1/sessions is feasible only from an
+    // async exit hook, which adds complexity for ~30s of memory the
+    // reaper will reclaim anyway. Leaving as-is; revisit if the
+    // registry ever grows persistence.
+    // Ephemeral config dir (also drops the session-token file)
     try {
       rmSync(tmpDir, { recursive: true, force: true });
     } catch { /* best effort */ }
@@ -836,6 +886,7 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
       CLAUDEMESH_CONFIG_DIR: tmpDir,
       CLAUDEMESH_DISPLAY_NAME: displayName,
       ...(claudeSessionId ? { CLAUDEMESH_SESSION_ID: claudeSessionId } : {}),
+      ...(sessionTokenFilePath ? { CLAUDEMESH_IPC_TOKEN_FILE: sessionTokenFilePath } : {}),
       MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? "30000",
       MAX_MCP_OUTPUT_TOKENS: process.env.MAX_MCP_OUTPUT_TOKENS ?? "50000",
       ...(role ? { CLAUDEMESH_ROLE: role } : {}),

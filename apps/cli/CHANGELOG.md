@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.29.0 (2026-05-04) — per-session IPC tokens + auto-scoping
+
+Sprint A Phase 2. Every `claudemesh launch`-spawned session gets a
+unique 32-byte cryptographic token that the daemon resolves on every
+IPC call to identify which session is talking to it. CLI invocations
+from inside that session auto-scope to its workspace instead of
+aggregating across every joined mesh.
+
+### What landed
+
+- **`services/session/token.ts`** — mint random 32-byte token, write
+  to `<tmpdir>/session-token` (mode 0o600). Reader pulls from
+  `CLAUDEMESH_IPC_TOKEN_FILE` env (path, not value, to keep the secret
+  off `ps eww`). Optional `CLAUDEMESH_IPC_TOKEN` direct-value escape
+  hatch for tests.
+- **`daemon/session-registry.ts`** — in-memory `Map<token,
+  SessionInfo>` keyed by token, secondary index by sessionId. 30 s
+  reaper drops entries whose pid is dead; 24 h hard TTL ceiling guards
+  forgotten sessions.
+- **IPC routes** — `POST /v1/sessions/register`, `DELETE
+  /v1/sessions/:token`, `GET /v1/sessions/me`, `GET /v1/sessions`.
+- **IPC auth middleware** — parses `Authorization: ClaudeMesh-Session
+  <hex>` and attaches the resolved `SessionInfo` to request context.
+  Layered on top of the existing local-token auth (used for TCP
+  loopback). Backward-compatible: tokenless callers behave exactly
+  as before.
+- **`services/session/resolve.ts`** — CLI-side helper that asks the
+  daemon `GET /v1/sessions/me` once per process and caches the result.
+  Used by verbs that iterate meshes client-side.
+- **`launch.ts`** — mints a token, registers it with the daemon, sets
+  `CLAUDEMESH_IPC_TOKEN_FILE` on the spawned `claude` env. Token file
+  lives in the same tmpdir as the session config; gets shredded on
+  cleanup. The daemon's reaper handles dead sessions.
+- **`peers.ts`** — selection precedence is now `--mesh` flag → session
+  token's mesh → all joined meshes.
+
+### Server-side scoping
+
+Every read route that takes `?mesh=<slug>` (peers, state, memory,
+skills) now uses a `meshFromCtx()` helper: explicit query/body wins,
+session default fills in when missing. Write routes (set state,
+remember, deregister, profile-update) follow the same pattern. Pass
+`--mesh` to override.
+
+### Verified end-to-end
+
+| Setup | `peer list` returns |
+|---|---|
+| no token | 3 meshes' peers (aggregate, unchanged) |
+| token registered for prueba1 | 4 peers, all `mesh: prueba1` |
+
+### Out of scope (deferred)
+
+- SQLite persistence for the registry — restart loses it; the reaper
+  (or callers re-registering) covers most cases.
+- `SO_PEERCRED`-strict pid binding — needs a tiny native binding.
+- Per-session policy DSL.
+- Cross-machine session sync (waiting on 2.0.0 HKDF identity).
+
 ## 1.28.0 (2026-05-04) — bridge tier deletion + daemon-policy flags
 
 First Sprint A drop on the way to v2 thin-client. Two structural changes:

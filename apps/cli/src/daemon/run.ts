@@ -4,6 +4,7 @@ import { DAEMON_PATHS } from "./paths.js";
 import { acquireSingletonLock, releaseSingletonLock } from "./lock.js";
 import { ensureLocalToken } from "./local-token.js";
 import { startIpcServer } from "./ipc/server.js";
+import { startReaper } from "./session-registry.js";
 import { openSqlite, type SqliteDb } from "./db/sqlite.js";
 import { migrateOutbox } from "./db/outbox.js";
 import { migrateInbox } from "./db/inbox.js";
@@ -152,6 +153,8 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
   // outbox row to its mesh's broker via the `mesh` column.
   let drain: DrainHandle | null = null;
   drain = startDrainWorker({ db: outboxDb, brokers });
+
+  startReaper();
 
   const ipc = startIpcServer({
     localToken,
