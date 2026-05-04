@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.31.3 (2026-05-04) — clean rebuild of 1.31.2
+
+1.31.2 published with the right code change but a stale baked-in
+VERSION string ("1.31.1") because the build ran before the version
+bump. Same fix as 1.31.2, rebuilt cleanly.
+
 ## 1.31.2 (2026-05-04) — daemon paths no longer follow per-session CLAUDEMESH_CONFIG_DIR
 
 **Production bug observed in real installs:** every CLI verb invoked from
