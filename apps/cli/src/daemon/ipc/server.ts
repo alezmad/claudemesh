@@ -177,7 +177,7 @@ function makeHandler(opts: {
       respond(res, 200, {
         daemon_version: VERSION,
         ipc_api: "v1",
-        ipc_features: ["version", "health", "send", "inbox", "events", "peers", "profile", "skills"],
+        ipc_features: ["version", "health", "send", "inbox", "events", "peers", "profile", "skills", "state", "memory"],
         schema_version: 1,
       });
       return;
@@ -221,6 +221,139 @@ function makeHandler(opts: {
       } catch (e) {
         respond(res, 502, { error: "broker_unreachable", detail: String(e) });
       }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/v1/state") {
+      if (!opts.brokers || opts.brokers.size === 0) {
+        respond(res, 503, { error: "broker not initialised" });
+        return;
+      }
+      const filterMesh = url.searchParams.get("mesh") ?? undefined;
+      const key = url.searchParams.get("key");
+      try {
+        if (key) {
+          // Single key lookup. Walk attached meshes; first match wins
+          // (or ?mesh=<slug> scopes the search).
+          for (const [slug, b] of opts.brokers.entries()) {
+            if (filterMesh && filterMesh !== slug) continue;
+            const row = await b.getState(key).catch(() => null);
+            if (row) { respond(res, 200, { state: { ...row, mesh: slug } }); return; }
+          }
+          respond(res, 404, { error: "state_not_found", key });
+          return;
+        }
+        // No key — list all entries across attached meshes.
+        const all: Array<Record<string, unknown> & { mesh: string }> = [];
+        for (const [slug, b] of opts.brokers.entries()) {
+          if (filterMesh && filterMesh !== slug) continue;
+          const rows = await b.listState().catch(() => []);
+          for (const r of rows) all.push({ ...(r as unknown as Record<string, unknown>), mesh: slug });
+        }
+        respond(res, 200, { entries: all });
+      } catch (e) {
+        respond(res, 502, { error: "broker_unreachable", detail: String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/state") {
+      if (!opts.brokers || opts.brokers.size === 0) {
+        respond(res, 503, { error: "broker not initialised" });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req, 256 * 1024) as Record<string, unknown> | null;
+        if (!body || typeof body.key !== "string") {
+          respond(res, 400, { error: "missing 'key' (string)" });
+          return;
+        }
+        const requested = (typeof body.mesh === "string" ? body.mesh : null) || null;
+        let chosen = requested;
+        if (!chosen && opts.brokers.size === 1) chosen = opts.brokers.keys().next().value as string;
+        if (!chosen) {
+          respond(res, 400, { error: "mesh_required", attached: [...opts.brokers.keys()] });
+          return;
+        }
+        const broker = opts.brokers.get(chosen);
+        if (!broker) { respond(res, 404, { error: "mesh_not_attached", mesh: chosen }); return; }
+        broker.setState(body.key, body.value);
+        respond(res, 200, { ok: true, key: body.key, mesh: chosen });
+      } catch (e) {
+        respond(res, 400, { error: String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/v1/memory") {
+      if (!opts.brokers || opts.brokers.size === 0) {
+        respond(res, 503, { error: "broker not initialised" });
+        return;
+      }
+      const query = url.searchParams.get("q") ?? "";
+      const filterMesh = url.searchParams.get("mesh") ?? undefined;
+      try {
+        const all: Array<Record<string, unknown> & { mesh: string }> = [];
+        for (const [slug, b] of opts.brokers.entries()) {
+          if (filterMesh && filterMesh !== slug) continue;
+          const rows = await b.recall(query).catch(() => []);
+          for (const r of rows) all.push({ ...(r as unknown as Record<string, unknown>), mesh: slug });
+        }
+        respond(res, 200, { matches: all });
+      } catch (e) {
+        respond(res, 502, { error: "broker_unreachable", detail: String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/v1/memory") {
+      if (!opts.brokers || opts.brokers.size === 0) {
+        respond(res, 503, { error: "broker not initialised" });
+        return;
+      }
+      try {
+        const body = await readJsonBody(req, 256 * 1024) as Record<string, unknown> | null;
+        if (!body || typeof body.content !== "string") {
+          respond(res, 400, { error: "missing 'content' (string)" });
+          return;
+        }
+        const requested = (typeof body.mesh === "string" ? body.mesh : null) || null;
+        let chosen = requested;
+        if (!chosen && opts.brokers.size === 1) chosen = opts.brokers.keys().next().value as string;
+        if (!chosen) {
+          respond(res, 400, { error: "mesh_required", attached: [...opts.brokers.keys()] });
+          return;
+        }
+        const broker = opts.brokers.get(chosen);
+        if (!broker) { respond(res, 404, { error: "mesh_not_attached", mesh: chosen }); return; }
+        const tags = Array.isArray(body.tags) ? body.tags.filter((t) => typeof t === "string") as string[] : undefined;
+        const id = await broker.remember(body.content, tags);
+        if (!id) { respond(res, 502, { error: "remember_timeout" }); return; }
+        respond(res, 200, { id, mesh: chosen });
+      } catch (e) {
+        respond(res, 400, { error: String(e) });
+      }
+      return;
+    }
+
+    if (req.method === "DELETE" && url.pathname.startsWith("/v1/memory/")) {
+      if (!opts.brokers || opts.brokers.size === 0) {
+        respond(res, 503, { error: "broker not initialised" });
+        return;
+      }
+      const id = decodeURIComponent(url.pathname.slice("/v1/memory/".length));
+      if (!id) { respond(res, 400, { error: "missing memory id" }); return; }
+      const requested = url.searchParams.get("mesh");
+      let chosen = requested;
+      if (!chosen && opts.brokers.size === 1) chosen = opts.brokers.keys().next().value as string;
+      if (!chosen) {
+        respond(res, 400, { error: "mesh_required", attached: [...opts.brokers.keys()] });
+        return;
+      }
+      const broker = opts.brokers.get(chosen);
+      if (!broker) { respond(res, 404, { error: "mesh_not_attached", mesh: chosen }); return; }
+      broker.forget(id);
+      respond(res, 200, { ok: true, id, mesh: chosen });
       return;
     }
 

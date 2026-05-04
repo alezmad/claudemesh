@@ -69,6 +69,21 @@ export interface SkillFull extends SkillSummary {
   manifest?: unknown;
 }
 
+export interface StateRow {
+  key: string;
+  value: unknown;
+  updatedBy: string;
+  updatedAt: string;
+}
+
+export interface MemoryRow {
+  id: string;
+  content: string;
+  tags: string[];
+  rememberedBy: string;
+  rememberedAt: string;
+}
+
 const HELLO_ACK_TIMEOUT_MS = 5_000;
 const SEND_ACK_TIMEOUT_MS  = 15_000;
 const BACKOFF_CAPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
@@ -91,6 +106,10 @@ export class DaemonBrokerClient {
   private peerListResolvers = new Map<string, PendingPeerList>();
   private skillListResolvers = new Map<string, { resolve: (rows: SkillSummary[]) => void; timer: NodeJS.Timeout }>();
   private skillDataResolvers = new Map<string, { resolve: (row: SkillFull | null) => void; timer: NodeJS.Timeout }>();
+  private stateGetResolvers = new Map<string, { resolve: (row: StateRow | null) => void; timer: NodeJS.Timeout }>();
+  private stateListResolvers = new Map<string, { resolve: (rows: StateRow[]) => void; timer: NodeJS.Timeout }>();
+  private memoryStoreResolvers = new Map<string, { resolve: (id: string | null) => void; timer: NodeJS.Timeout }>();
+  private memoryRecallResolvers = new Map<string, { resolve: (rows: MemoryRow[]) => void; timer: NodeJS.Timeout }>();
   private sessionPubkey: string | null = null;
   private sessionSecretKey: string | null = null;
   private opens: Array<() => void> = [];
@@ -226,6 +245,50 @@ export class DaemonBrokerClient {
           return;
         }
 
+        if (msg.type === "state_value" || msg.type === "state_data") {
+          const reqId = String(msg._reqId ?? "");
+          const pending = this.stateGetResolvers.get(reqId);
+          if (pending) {
+            this.stateGetResolvers.delete(reqId);
+            clearTimeout(pending.timer);
+            pending.resolve((msg.state ?? msg.row ?? null) as StateRow | null);
+          }
+          return;
+        }
+
+        if (msg.type === "state_list") {
+          const reqId = String(msg._reqId ?? "");
+          const pending = this.stateListResolvers.get(reqId);
+          if (pending) {
+            this.stateListResolvers.delete(reqId);
+            clearTimeout(pending.timer);
+            pending.resolve(Array.isArray(msg.entries) ? (msg.entries as StateRow[]) : []);
+          }
+          return;
+        }
+
+        if (msg.type === "memory_stored") {
+          const reqId = String(msg._reqId ?? "");
+          const pending = this.memoryStoreResolvers.get(reqId);
+          if (pending) {
+            this.memoryStoreResolvers.delete(reqId);
+            clearTimeout(pending.timer);
+            pending.resolve(typeof msg.memoryId === "string" ? msg.memoryId : null);
+          }
+          return;
+        }
+
+        if (msg.type === "memory_recall_result") {
+          const reqId = String(msg._reqId ?? "");
+          const pending = this.memoryRecallResolvers.get(reqId);
+          if (pending) {
+            this.memoryRecallResolvers.delete(reqId);
+            clearTimeout(pending.timer);
+            pending.resolve(Array.isArray(msg.matches) ? (msg.matches as MemoryRow[]) : []);
+          }
+          return;
+        }
+
         if (msg.type === "push" || msg.type === "inbound") {
           this.opts.onPush?.(msg);
           return;
@@ -327,6 +390,76 @@ export class DaemonBrokerClient {
       try { this.ws!.send(JSON.stringify({ type: "get_skill", name, _reqId: reqId })); }
       catch { this.skillDataResolvers.delete(reqId); clearTimeout(timer); resolve(null); }
     });
+  }
+
+  /** Read a single shared state row. Null on disconnect / timeout / not-found. */
+  async getState(key: string, timeoutMs = 5_000): Promise<StateRow | null> {
+    if (this._status !== "open" || !this.ws) return null;
+    return new Promise<StateRow | null>((resolve) => {
+      const reqId = `sg-${++this.reqCounter}`;
+      const timer = setTimeout(() => {
+        if (this.stateGetResolvers.delete(reqId)) resolve(null);
+      }, timeoutMs);
+      this.stateGetResolvers.set(reqId, { resolve, timer });
+      try { this.ws!.send(JSON.stringify({ type: "get_state", key, _reqId: reqId })); }
+      catch { this.stateGetResolvers.delete(reqId); clearTimeout(timer); resolve(null); }
+    });
+  }
+
+  /** List all shared state rows in the mesh. */
+  async listState(timeoutMs = 5_000): Promise<StateRow[]> {
+    if (this._status !== "open" || !this.ws) return [];
+    return new Promise<StateRow[]>((resolve) => {
+      const reqId = `sl-${++this.reqCounter}`;
+      const timer = setTimeout(() => {
+        if (this.stateListResolvers.delete(reqId)) resolve([]);
+      }, timeoutMs);
+      this.stateListResolvers.set(reqId, { resolve, timer });
+      try { this.ws!.send(JSON.stringify({ type: "list_state", _reqId: reqId })); }
+      catch { this.stateListResolvers.delete(reqId); clearTimeout(timer); resolve([]); }
+    });
+  }
+
+  /** Set a shared state value. Fire-and-forget. */
+  setState(key: string, value: unknown): void {
+    if (this._status !== "open" || !this.ws) return;
+    try { this.ws.send(JSON.stringify({ type: "set_state", key, value })); }
+    catch { /* ignore */ }
+  }
+
+  /** Store a memory in the mesh. Returns the assigned id, or null on timeout. */
+  async remember(content: string, tags?: string[], timeoutMs = 5_000): Promise<string | null> {
+    if (this._status !== "open" || !this.ws) return null;
+    return new Promise<string | null>((resolve) => {
+      const reqId = `mr-${++this.reqCounter}`;
+      const timer = setTimeout(() => {
+        if (this.memoryStoreResolvers.delete(reqId)) resolve(null);
+      }, timeoutMs);
+      this.memoryStoreResolvers.set(reqId, { resolve, timer });
+      try { this.ws!.send(JSON.stringify({ type: "remember", content, tags, _reqId: reqId })); }
+      catch { this.memoryStoreResolvers.delete(reqId); clearTimeout(timer); resolve(null); }
+    });
+  }
+
+  /** Search memories by relevance. */
+  async recall(query: string, timeoutMs = 5_000): Promise<MemoryRow[]> {
+    if (this._status !== "open" || !this.ws) return [];
+    return new Promise<MemoryRow[]>((resolve) => {
+      const reqId = `mc-${++this.reqCounter}`;
+      const timer = setTimeout(() => {
+        if (this.memoryRecallResolvers.delete(reqId)) resolve([]);
+      }, timeoutMs);
+      this.memoryRecallResolvers.set(reqId, { resolve, timer });
+      try { this.ws!.send(JSON.stringify({ type: "recall", query, _reqId: reqId })); }
+      catch { this.memoryRecallResolvers.delete(reqId); clearTimeout(timer); resolve([]); }
+    });
+  }
+
+  /** Forget a memory by id. Fire-and-forget. */
+  forget(memoryId: string): void {
+    if (this._status !== "open" || !this.ws) return;
+    try { this.ws.send(JSON.stringify({ type: "forget", memoryId })); }
+    catch { /* ignore */ }
   }
 
   /** Set the daemon's profile (avatar/title/bio/capabilities). Fire-and-forget. */

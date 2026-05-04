@@ -67,7 +67,7 @@ USAGE
   claudemesh <invite-url>                     join a mesh, then launch
   claudemesh launch --name <n> --join <url>   join + launch in one step
 
-Mesh
+Mesh  (alias: "workspace" — claudemesh workspace <verb> mirrors each)
   claudemesh create <name>         create a new mesh
   claudemesh join <url>            join a mesh (accepts short /i/ or long /join/ link)
   claudemesh launch [slug]         launch Claude Code on a mesh (alias: connect)
@@ -324,6 +324,31 @@ async function main(): Promise<void> {
     case "delete": case "rm": { const { deleteMesh } = await import("~/commands/delete-mesh.js"); process.exit(await deleteMesh(positionals[0] ?? "", { yes: !!flags.y || !!flags.yes })); break; }
     case "rename": { const { rename } = await import("~/commands/rename.js"); process.exit(await rename(positionals[0] ?? "", positionals[1] ?? "")); break; }
     case "share": case "invite": { const { invite } = await import("~/commands/invite.js"); process.exit(await invite(positionals[0], { mesh: flags.mesh as string, json: !!flags.json })); break; }
+    // workspace — alias surface for mesh-management verbs (v1.27.0 teaser; full
+    // rename arrives in 1.28.0). Each sub mirrors an existing top-level verb.
+    case "workspace": {
+      const sub = positionals[0];
+      if (!sub || sub === "launch" || sub === "connect" || sub === "open") {
+        const { runLaunch } = await import("~/commands/launch.js");
+        await runLaunch({
+          mesh: positionals[1] ?? flags.mesh as string,
+          name: flags.name as string,
+          join: flags.join as string,
+          yes: !!flags.y || !!flags.yes,
+          resume: flags.resume as string,
+        }, process.argv.slice(2));
+      }
+      else if (sub === "list" || sub === "ls") { const { runList } = await import("~/commands/list.js"); await runList(); }
+      else if (sub === "info") { const { runInfo } = await import("~/commands/info.js"); await runInfo({}); }
+      else if (sub === "create" || sub === "new") { const { newMesh } = await import("~/commands/new.js"); process.exit(await newMesh(positionals[1] ?? "", { json: !!flags.json })); }
+      else if (sub === "join" || sub === "add") { const { runJoin } = await import("~/commands/join.js"); await runJoin(positionals.slice(1)); }
+      else if (sub === "delete" || sub === "rm") { const { deleteMesh } = await import("~/commands/delete-mesh.js"); process.exit(await deleteMesh(positionals[1] ?? "", { yes: !!flags.y || !!flags.yes })); }
+      else if (sub === "rename") { const { rename } = await import("~/commands/rename.js"); process.exit(await rename(positionals[1] ?? "", positionals[2] ?? "")); }
+      else if (sub === "share" || sub === "invite") { const { invite } = await import("~/commands/invite.js"); process.exit(await invite(positionals[1], { mesh: flags.mesh as string, json: !!flags.json })); }
+      else if (sub === "overview") { const { runMe } = await import("~/commands/me.js"); process.exit(await runMe({ mesh: flags.mesh as string, json: !!flags.json })); }
+      else { console.error("Usage: claudemesh workspace <list|info|create|join|delete|rename|share|launch|overview>"); process.exit(EXIT.INVALID_ARGS); }
+      break;
+    }
     case "disconnect": { const { runDisconnect } = await import("~/commands/kick.js"); process.exit(await runDisconnect(positionals[0], { mesh: flags.mesh as string, stale: flags.stale as string, all: !!flags.all })); break; }
     case "kick": { const { runKick } = await import("~/commands/kick.js"); process.exit(await runKick(positionals[0], { mesh: flags.mesh as string, stale: flags.stale as string, all: !!flags.all })); break; }
     case "ban": { const { runBan } = await import("~/commands/ban.js"); process.exit(await runBan(positionals[0], { mesh: flags.mesh as string })); break; }

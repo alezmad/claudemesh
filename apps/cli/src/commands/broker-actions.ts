@@ -17,6 +17,7 @@
 import { withMesh } from "./connect.js";
 import { readConfig } from "~/services/config/facade.js";
 import { tryBridge } from "~/services/bridge/client.js";
+import { tryForgetViaDaemon } from "~/services/bridge/daemon-route.js";
 import { render } from "~/ui/render.js";
 import { bold, clay, dim } from "~/ui/styles.js";
 import { EXIT } from "~/constants/exit-codes.js";
@@ -173,6 +174,14 @@ export async function runForget(id: string | undefined, opts: StateFlags): Promi
     render.err("Usage: claudemesh forget <memory-id>");
     return EXIT.INVALID_ARGS;
   }
+
+  // Daemon path first.
+  if (await tryForgetViaDaemon(id, opts.mesh)) {
+    if (opts.json) { console.log(JSON.stringify({ id, forgotten: true })); return EXIT.SUCCESS; }
+    render.ok(`forgot ${dim(id.slice(0, 8))}`);
+    return EXIT.SUCCESS;
+  }
+
   await withMesh({ meshSlug: opts.mesh ?? null }, async (client) => {
     await client.forget(id);
   });

@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.27.0 (2026-05-04) — state + memory through the daemon, workspace alias
+
+Two more verb families now route through the local daemon's IPC for the
+warm path: `state get/set/list` and `remember/recall/forget`. Same
+pattern as 1.25.0 for peers/skills — try the socket first (~1 ms warm),
+fall back to the cold WS path when the daemon isn't running.
+
+### What changed
+
+- `claudemesh state get|set|list` route through `/v1/state` when the
+  daemon socket is present. `--mesh <slug>` forwards as a query/body
+  field. Single-mesh daemons auto-pick; multi-mesh daemons require
+  `--mesh` for `state set`.
+- `claudemesh remember`, `claudemesh recall`, `claudemesh forget`
+  (and `claudemesh memory <sub>`) route through `/v1/memory`.
+  Aggregates across attached meshes for `recall`; requires `--mesh`
+  for `remember`/`forget` when ambiguous.
+- New `claudemesh workspace <verb>` alias surface — early teaser for
+  the 1.28.0 mesh→workspace public rename. Mirrors `list`, `info`,
+  `create`, `join`, `delete`, `rename`, `share`, `launch`, `overview`.
+  No-arg `claudemesh workspace` falls through to `launch` (same as
+  bare `claudemesh`).
+
+### IPC surface
+
+- `GET /v1/state` — list (`?mesh=<slug>` filter) or single key lookup
+  (`?key=<k>&mesh=<slug>`). Returns 404 with `{ error: "state_not_found" }`
+  when missing.
+- `POST /v1/state` — `{ key, value, mesh? }`. 400 + attached list when
+  multi-mesh and no `mesh` field.
+- `GET /v1/memory?q=<query>&mesh=<slug>` — recall. Aggregates across
+  meshes, each match tagged with its `mesh` field.
+- `POST /v1/memory` — `{ content, tags?, mesh? }`. Returns
+  `{ id, mesh }`.
+- `DELETE /v1/memory/:id?mesh=<slug>` — forget.
+- `ipc_features` gains `state` and `memory` keys.
+
+### Why this matters
+
+State and memory were the last verbs that opened a fresh broker WS on
+every invocation. Now they reuse the daemon's existing connection — the
+warm-path latency cliff (~150 ms cold WS handshake → ~1 ms IPC) extends
+to two more flows agents poll heavily.
+
+The `workspace` alias is cosmetic but lays the groundwork for 1.28.0's
+documented rename without breaking anyone's muscle memory.
+
 ## 1.26.0 (2026-05-04) — multi-mesh daemon
 
 The daemon now attaches to **all joined meshes simultaneously** by

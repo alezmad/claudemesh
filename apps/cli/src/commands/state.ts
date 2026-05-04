@@ -5,6 +5,7 @@
  */
 
 import { withMesh } from "./connect.js";
+import { tryGetStateViaDaemon, tryListStateViaDaemon, trySetStateViaDaemon } from "~/services/bridge/daemon-route.js";
 import { render } from "~/ui/render.js";
 import { bold, dim } from "~/ui/styles.js";
 
@@ -14,6 +15,16 @@ export interface StateFlags {
 }
 
 export async function runStateGet(flags: StateFlags, key: string): Promise<void> {
+  // Daemon path first.
+  const daemonEntry = await tryGetStateViaDaemon(key, flags.mesh);
+  if (daemonEntry !== null) {
+    if (!daemonEntry) { render.info(dim("(not set)")); return; }
+    if (flags.json) { console.log(JSON.stringify(daemonEntry, null, 2)); return; }
+    const val = typeof daemonEntry.value === "string" ? daemonEntry.value : JSON.stringify(daemonEntry.value);
+    render.info(val);
+    render.info(dim(`  set by ${daemonEntry.updatedBy} at ${new Date(daemonEntry.updatedAt).toLocaleString()}`));
+    return;
+  }
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
     const entry = await client.getState(key);
     if (!entry) {
@@ -38,6 +49,12 @@ export async function runStateSet(flags: StateFlags, key: string, value: string)
     parsed = value;
   }
 
+  // Daemon path first.
+  const daemonOk = await trySetStateViaDaemon(key, parsed, flags.mesh);
+  if (daemonOk) {
+    render.ok(`${bold(key)} = ${JSON.stringify(parsed)}`);
+    return;
+  }
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
     await client.setState(key, parsed);
     render.ok(`${bold(key)} = ${JSON.stringify(parsed)}`);
@@ -45,6 +62,19 @@ export async function runStateSet(flags: StateFlags, key: string, value: string)
 }
 
 export async function runStateList(flags: StateFlags): Promise<void> {
+  // Daemon path first.
+  const daemonRows = await tryListStateViaDaemon(flags.mesh);
+  if (daemonRows !== null) {
+    if (flags.json) { console.log(JSON.stringify(daemonRows, null, 2)); return; }
+    if (daemonRows.length === 0) { render.info(dim("(no state)")); return; }
+    render.section(`state (${daemonRows.length})`);
+    for (const e of daemonRows) {
+      const val = typeof e.value === "string" ? e.value : JSON.stringify(e.value);
+      process.stdout.write(`  ${bold(e.key)}: ${val}\n`);
+      process.stdout.write(`    ${dim(e.updatedBy + "  ·  " + new Date(e.updatedAt).toLocaleString())}\n`);
+    }
+    return;
+  }
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client, mesh) => {
     const entries = await client.listState();
 

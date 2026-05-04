@@ -7,13 +7,17 @@ import { existsSync } from "node:fs";
 import { ipc } from "~/daemon/ipc/client.js";
 import { DAEMON_PATHS } from "~/daemon/paths.js";
 
+function meshQuery(mesh?: string): string {
+  return mesh ? `?mesh=${encodeURIComponent(mesh)}` : "";
+}
+
 /** Try fetching the peer list through the daemon (~1ms warm IPC).
  *  Returns null when the daemon socket isn't present so the caller can
  *  fall back to bridge / cold paths. */
-export async function tryListPeersViaDaemon(): Promise<unknown[] | null> {
+export async function tryListPeersViaDaemon(mesh?: string): Promise<unknown[] | null> {
   if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
   try {
-    const res = await ipc<{ peers?: unknown[] }>({ path: "/v1/peers", timeoutMs: 3_000 });
+    const res = await ipc<{ peers?: unknown[] }>({ path: `/v1/peers${meshQuery(mesh)}`, timeoutMs: 3_000 });
     if (res.status !== 200) return null;
     return Array.isArray(res.body.peers) ? res.body.peers : [];
   } catch (err) {
@@ -24,10 +28,10 @@ export async function tryListPeersViaDaemon(): Promise<unknown[] | null> {
 }
 
 /** Try fetching mesh-published skills through the daemon. */
-export async function tryListSkillsViaDaemon(): Promise<unknown[] | null> {
+export async function tryListSkillsViaDaemon(mesh?: string): Promise<unknown[] | null> {
   if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
   try {
-    const res = await ipc<{ skills?: unknown[] }>({ path: "/v1/skills", timeoutMs: 3_000 });
+    const res = await ipc<{ skills?: unknown[] }>({ path: `/v1/skills${meshQuery(mesh)}`, timeoutMs: 3_000 });
     if (res.status !== 200) return null;
     return Array.isArray(res.body.skills) ? res.body.skills : [];
   } catch (err) {
@@ -38,17 +42,120 @@ export async function tryListSkillsViaDaemon(): Promise<unknown[] | null> {
 }
 
 /** Try fetching one skill body through the daemon. */
-export async function tryGetSkillViaDaemon(name: string): Promise<unknown | null> {
+export async function tryGetSkillViaDaemon(name: string, mesh?: string): Promise<unknown | null> {
   if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
   try {
     const res = await ipc<{ skill?: unknown }>({
-      path: `/v1/skills/${encodeURIComponent(name)}`,
+      path: `/v1/skills/${encodeURIComponent(name)}${meshQuery(mesh)}`,
       timeoutMs: 3_000,
     });
     if (res.status === 404) return null;
     if (res.status !== 200) return null;
     return res.body.skill ?? null;
   } catch { return null; }
+}
+
+// --- state ---
+
+export type StateEntry = {
+  key: string;
+  value: unknown;
+  updatedBy: string;
+  updatedAt: string;
+  mesh?: string;
+};
+
+/** Try reading a single state key through the daemon. Returns:
+ *   - the entry when the daemon found it
+ *   - undefined when the daemon ran but the key is unset (404)
+ *   - null when the daemon socket isn't present (caller falls back) */
+export async function tryGetStateViaDaemon(key: string, mesh?: string): Promise<StateEntry | undefined | null> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  try {
+    const path = `/v1/state?key=${encodeURIComponent(key)}${mesh ? `&mesh=${encodeURIComponent(mesh)}` : ""}`;
+    const res = await ipc<{ state?: StateEntry; error?: string }>({ path, timeoutMs: 3_000 });
+    if (res.status === 404) return undefined;
+    if (res.status !== 200) return null;
+    return res.body.state ?? undefined;
+  } catch (err) {
+    const msg = String(err);
+    if (/ENOENT|ECONNREFUSED|ipc_timeout/.test(msg)) return null;
+    return null;
+  }
+}
+
+export async function tryListStateViaDaemon(mesh?: string): Promise<StateEntry[] | null> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  try {
+    const res = await ipc<{ entries?: StateEntry[] }>({ path: `/v1/state${meshQuery(mesh)}`, timeoutMs: 3_000 });
+    if (res.status !== 200) return null;
+    return Array.isArray(res.body.entries) ? res.body.entries : [];
+  } catch (err) {
+    const msg = String(err);
+    if (/ENOENT|ECONNREFUSED|ipc_timeout/.test(msg)) return null;
+    return null;
+  }
+}
+
+export async function trySetStateViaDaemon(key: string, value: unknown, mesh?: string): Promise<boolean> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return false;
+  try {
+    const res = await ipc<{ ok?: boolean; error?: string }>({
+      method: "POST",
+      path: "/v1/state",
+      timeoutMs: 3_000,
+      body: { key, value, ...(mesh ? { mesh } : {}) },
+    });
+    return res.status === 200 && res.body.ok === true;
+  } catch { return false; }
+}
+
+// --- memory ---
+
+export type MemoryEntry = {
+  id: string;
+  content: string;
+  tags: string[];
+  rememberedBy: string;
+  rememberedAt: string;
+  mesh?: string;
+};
+
+export async function tryRememberViaDaemon(content: string, tags?: string[], mesh?: string): Promise<{ id: string; mesh?: string } | null> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  try {
+    const res = await ipc<{ id?: string; mesh?: string; error?: string }>({
+      method: "POST",
+      path: "/v1/memory",
+      timeoutMs: 5_000,
+      body: { content, ...(tags?.length ? { tags } : {}), ...(mesh ? { mesh } : {}) },
+    });
+    if (res.status !== 200 || !res.body.id) return null;
+    return { id: res.body.id, mesh: res.body.mesh };
+  } catch { return null; }
+}
+
+export async function tryRecallViaDaemon(query: string, mesh?: string): Promise<MemoryEntry[] | null> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  try {
+    const path = `/v1/memory?q=${encodeURIComponent(query)}${mesh ? `&mesh=${encodeURIComponent(mesh)}` : ""}`;
+    const res = await ipc<{ matches?: MemoryEntry[] }>({ path, timeoutMs: 5_000 });
+    if (res.status !== 200) return null;
+    return Array.isArray(res.body.matches) ? res.body.matches : [];
+  } catch (err) {
+    const msg = String(err);
+    if (/ENOENT|ECONNREFUSED|ipc_timeout/.test(msg)) return null;
+    return null;
+  }
+}
+
+export async function tryForgetViaDaemon(id: string, mesh?: string): Promise<boolean> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return false;
+  try {
+    const path = `/v1/memory/${encodeURIComponent(id)}${meshQuery(mesh)}`;
+    const res = await ipc<{ ok?: boolean }>({ method: "DELETE", path, timeoutMs: 3_000 });
+    return res.status === 200 && res.body.ok === true;
+  } catch { return false; }
 }
 
 export type DaemonSendOk = {
