@@ -326,6 +326,14 @@ export const presence = meshSchema.table("presence", {
   statusUpdatedAt: timestamp().defaultNow().notNull(),
   summary: text(),
   groups: jsonb().$type<{ name: string; role?: string }[]>().default([]),
+  // v2 agentic-comms (M1): connection role for routing/visibility.
+  //   'control-plane' — long-lived daemon WS (claudemesh daemon),
+  //                     used for fan-out and presence orchestration.
+  //                     Hidden from user-facing peer lists.
+  //   'session'       — per-Claude-Code session WS (default).
+  //   'service'       — autonomous bots/services attached to the mesh.
+  // Always populated; default 'session' keeps legacy hellos working.
+  role: text().notNull().default("session"),
   connectedAt: timestamp().defaultNow().notNull(),
   lastPingAt: timestamp().defaultNow().notNull(),
   disconnectedAt: timestamp(),
@@ -367,6 +375,14 @@ export const messageQueue = meshSchema.table("message_queue", {
   // §4.4), hex-encoded. Nullable for legacy traffic. Brokers that want
   // to enforce idempotency on retries will read this column.
   requestFingerprint: text("request_fingerprint"),
+  // v2 agentic-comms (M1): two-phase claim/deliver with lease.
+  // `drainForMember` claims a row by setting (claimedAt, claimId,
+  // claimExpiresAt) — NOT deliveredAt. The recipient's WS only marks
+  // deliveredAt after replying with a `client_ack`. A periodic sweeper
+  // reaps expired claims so dropped pushes are redelivered (at-least-once).
+  claimedAt: timestamp(),
+  claimId: text("claim_id"),
+  claimExpiresAt: timestamp(),
 });
 
 /**
