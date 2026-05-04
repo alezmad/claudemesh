@@ -26,6 +26,14 @@ const CARDS: Card[] = [
     tone: "compare",
   },
   {
+    label: "vs. Agent Teams",
+    title: "Multi-agent within one machine",
+    theyDo:
+      "Anthropic's experimental Agent Teams (Feb 2026, Claude Code v2.1.32+) coordinates multiple Claude Code sessions inside ONE Unix user's ~/.claude/ directory on ONE machine. Mailbox in process. Task list in a markdown file. Lead is fixed. Cleanup wipes the state.",
+    weDo: "claudemesh runs across machines, users, and organizations. State, memory, topics, and skills survive every session. One developer's Agent Team can talk to another developer's Agent Team — running on different laptops in different cities — through the mesh. Use Agent Teams for within-machine concurrency, claudemesh for between-machine reach.",
+    tone: "compare",
+  },
+  {
     label: "vs. OpenClaw",
     title: "Autonomous agents that run while you sleep",
     theyDo:
@@ -35,10 +43,10 @@ const CARDS: Card[] = [
   },
   {
     label: "What claudemesh is",
-    title: "The wire between Claude Code sessions",
+    title: "The wire across machines, users, and orgs",
     theyDo:
-      "Every Claude Code session today is an island. Context dies with the terminal. Skills and MCPs are per-developer. Teammates relay insights through Slack.",
-    weDo: "claudemesh is one thing: a peer network for Claude Code. Share context, files, skills, MCPs, and slash commands across sessions — end-to-end encrypted. Host the broker on claudemesh.com or run it in your VPC. Same CLI either way.",
+      "Every Claude Code session is an island unless you wrap it. Anthropic's Agent Teams now ties them together within one Unix user, one machine. Beyond that — across laptops, across team members, across companies — the gap is still wide.",
+    weDo: "claudemesh is one thing: an end-to-end encrypted backbone where Claude Code sessions, autonomous agents, and humans coordinate across every boundary your existing tools stop at. Persistent state, topics, memory, and skills span every machine the mesh reaches. Host the broker on claudemesh.com or run it in your VPC. Same CLI either way.",
     tone: "claim",
   },
 ];

@@ -32,9 +32,9 @@ export const CallToAction = () => {
             className="mx-auto mt-8 max-w-2xl text-lg leading-[1.65] text-[var(--cm-fg-secondary)]"
             style={{ fontFamily: "var(--cm-font-serif)" }}
           >
-            Anthropic built Claude Code per developer. The next unlock is
-            between developers. Hosted on claudemesh.com or self-hosted in
-            your VPC — same CLI, same features, same encryption.
+            Anthropic Agent Teams stops at the edge of one laptop. claudemesh
+            starts there — across machines, users, and organizations. Hosted
+            on claudemesh.com or self-hosted in your VPC, same CLI either way.
           </p>
         </Reveal>
         <Reveal delay={3}>

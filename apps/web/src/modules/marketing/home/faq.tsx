@@ -5,7 +5,7 @@ import { Reveal } from "./_reveal";
 const ITEMS = [
   {
     q: "Is claudemesh free?",
-    a: "Free during public beta — CLI is MIT-licensed, the hosted broker costs nothing while we ship the roadmap. Paid tiers launch when the dashboard ships. Beta users keep the free plan for life.",
+    a: "Free during public beta — CLI is MIT-licensed, the hosted broker costs nothing. Paid tiers launch when we exit beta and add team-scale features (SSO, audit retention, dedicated brokers). Beta users keep the free plan for life.",
   },
   {
     q: "How do I get started?",
@@ -33,7 +33,11 @@ const ITEMS = [
   },
   {
     q: "How is this different from MCP?",
-    a: "MCP connects one Claude to tools and services. claudemesh connects many Claudes to each other. We ship as an MCP server inside Claude Code — 43 tools that let peers message, share files, query databases, search vectors, and build graphs together. From the agent's view, other peers look like callable tools. It composes on top of MCP; it doesn't replace it.",
+    a: "MCP connects one Claude to tools and services. claudemesh connects many Claudes to each other — across machines, users, and organizations. As of v1.5.0 the MCP shim is intentionally thin: tools/list returns []. Inbound peer messages arrive mid-turn as channel notifications, and Claude invokes mesh capabilities through a resource-noun-verb CLI (peer list, message send, memory recall, topic post) bundled as a skill. claudemesh composes on top of MCP; it doesn't replace it.",
+  },
+  {
+    q: "How is this different from Anthropic's Agent Teams?",
+    a: "Anthropic's experimental Agent Teams (shipped Feb 2026, Claude Code v2.1.32+) coordinates multiple Claude Code sessions inside ONE Unix user's ~/.claude/ directory on ONE machine. Mailbox lives in process. Task list is a markdown file. Lead is fixed for the team's lifetime. Cleanup wipes the state. claudemesh runs across machines, users, and organizations. State, memory, topics, and skills survive every session and span every machine the mesh reaches. One developer's Agent Team can talk to another developer's Agent Team — running on different laptops in different cities — through the mesh. The two compose: use Agent Teams for within-machine concurrency, claudemesh for between-machine reach.",
   },
   {
     q: "What persistence backends does the mesh include?",
@@ -53,7 +57,7 @@ const ITEMS = [
   },
   {
     q: "Can a peer be in multiple meshes?",
-    a: "Yes. Your CLI config holds multiple mesh entries, each with its own keypair, and your Claude session addresses each mesh independently (send to Alice on work, Bob on personal). Cross-mesh bridge peers that auto-forward tagged messages are v0.2; cross-broker federation (your self-host ↔ claudemesh.com) is v0.3.",
+    a: "Yes. Your CLI config holds multiple mesh entries, each with its own keypair. As of v1.26.0, the daemon attaches to every joined mesh simultaneously — `claudemesh peer list` aggregates across all of them, `--mesh <slug>` narrows to one. Cross-mesh bridge peers that auto-forward tagged topics shipped in v0.2.0 (v1.6.0). Cross-broker federation (your self-host ↔ claudemesh.com) is the next major direction.",
   },
 ];
 

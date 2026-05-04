@@ -111,8 +111,9 @@ export const Pricing = () => {
                   className="mb-4 text-[12px] leading-[1.5] text-[var(--cm-fg-tertiary)]"
                   style={{ fontFamily: "var(--cm-font-sans)" }}
                 >
-                  Paid tiers launch when the dashboard ships. Beta users keep
-                  the free plan for life.
+                  Paid tiers launch when we exit beta and add team-scale
+                  features (SSO, audit retention, dedicated brokers). Beta
+                  users keep the free plan for life.
                 </p>
                 <Link
                   href="/auth/register"
