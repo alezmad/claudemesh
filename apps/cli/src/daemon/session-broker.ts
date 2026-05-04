@@ -15,8 +15,10 @@
  *     DaemonBrokerClient's job. Keeps the responsibility split clean
  *     and avoids two clients fighting over the same outbox row.
  *   - Does NOT carry list_peers / state / memory RPCs. This client is
- *     presence-only (and inbound DM delivery for messages targeted at
- *     the session pubkey).
+ *     presence-only PLUS inbound DM delivery for messages targeted at
+ *     the session pubkey — pushes are forwarded via the `onPush`
+ *     callback to the daemon's shared handleBrokerPush, decrypted with
+ *     this session's secret key.
  *
  * Old brokers reply with `unknown_message_type` on session_hello — we
  * surface that as a one-shot `error` event and the daemon decides
@@ -62,6 +64,14 @@ export interface SessionBrokerOptions {
   /** Pid of the launched session (NOT the daemon). */
   pid: number;
   onStatusChange?: (s: SessionBrokerStatus) => void;
+  /**
+   * Inbound push/inbound dispatch. The broker fans messages targeted at
+   * a session pubkey out over the corresponding session WS — without
+   * this callback they hit the floor and the daemon's inbox.db never
+   * sees them. Wired in run.ts to a handleBrokerPush call that decrypts
+   * with this session's secret key (member key as fallback).
+   */
+  onPush?: (msg: Record<string, unknown>) => void;
   log?: (level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -167,8 +177,14 @@ export class SessionBrokerClient {
           }
           return;
         }
-        // push / inbound — presence-only client ignores them; the daemon's
-        // member-keyed client handles all DM decryption.
+
+        // 1.32.1 — DMs targeted at the launched session's pubkey arrive
+        // here, NOT on the daemon's member-keyed WS. Forward to the
+        // daemon-level push handler so they land in inbox.db.
+        if (msg.type === "push" || msg.type === "inbound") {
+          this.opts.onPush?.(msg);
+          return;
+        }
       });
 
       ws.on("close", (code, reason) => {

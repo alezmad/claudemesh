@@ -177,6 +177,13 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
         sessionBrokers.delete(info.token);
         prior.close().catch(() => { /* ignore */ });
       }
+      // 1.32.1 — wire push delivery. Messages targeted at the launched
+      // session's pubkey land on THIS WS, not on the member-keyed one,
+      // so without this forward they'd silently disappear (the bug that
+      // kept inbox.db at zero rows since 1.30.0). Decrypt prefers the
+      // session secret key; member key remains the fallback for legacy
+      // member-targeted traffic that happens to fan out here.
+      const sessionSecretKeyHex = info.presence.sessionSecretKey;
       const client = new SessionBrokerClient({
         mesh: meshConfig,
         sessionPubkey: info.presence.sessionPubkey,
@@ -187,6 +194,15 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
         ...(info.role ? { role: info.role } : {}),
         ...(info.cwd ? { cwd: info.cwd } : {}),
         pid: info.pid,
+        onPush: (m) => {
+          void handleBrokerPush(m, {
+            db: inboxDb,
+            bus,
+            meshSlug: meshConfig.slug,
+            recipientSecretKeyHex: meshConfig.secretKey,
+            sessionSecretKeyHex,
+          });
+        },
       });
       sessionBrokers.set(info.token, client);
       client.connect().catch((err) =>

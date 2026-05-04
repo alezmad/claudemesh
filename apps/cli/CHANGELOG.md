@@ -1,5 +1,39 @@
 # Changelog
 
+## 1.32.1 (2026-05-04) — DMs to session pubkeys actually deliver now
+
+Critical fix. Sessions launched via `claudemesh launch` (1.30.0+) hold a
+per-launch session WebSocket on the broker, separate from the daemon's
+member-keyed WS. The broker correctly fans direct messages targeted at a
+session pubkey out over THAT session WS — but the daemon's
+`SessionBrokerClient` was constructed without a push handler and silently
+dropped every inbound `push` / `inbound` frame. The header docstring
+even claimed it handled "inbound DM delivery for messages targeted at
+the session pubkey"; the code never wired the callback.
+
+Net effect since 1.30.0: any DM sent to a peer's session pubkey
+(everything `peer list` returns these days, since session pubkey is the
+canonical routing key) was queued, broker-acked, marked `delivered_at`
+on the broker side, and then thrown away by the recipient daemon. The
+local `inbox.db` stayed at zero rows forever and `claudemesh inbox`
+reported "no messages" no matter what arrived.
+
+Two-session smoke test that surfaced this: peer A sent "hola" to peer
+B's session pubkey — sender outbox showed `status=done` with a
+`broker_message_id`, recipient inbox stayed empty, both sides confused.
+
+The fix wires `SessionBrokerClient` to forward `push` / `inbound` frames
+to the same `handleBrokerPush` the member-keyed broker already uses. The
+session's secret key (registered via `/v1/sessions/register`) is passed
+as `sessionSecretKeyHex` so `decryptOrFallback` tries it first; the
+parent member key remains the fallback for legacy member-targeted
+traffic that happens to fan out here.
+
+Files: `apps/cli/src/daemon/session-broker.ts`,
+`apps/cli/src/daemon/run.ts`. No broker change required — the broker
+half (queue + fan-out + sendToPeer on the session WS) was already
+correct; only the daemon-side intake was missing.
+
 ## 1.32.0 (2026-05-04) — multi-session UX bundle
 
 Nine UX bugs surfaced from a real two-session interconnect smoke test
