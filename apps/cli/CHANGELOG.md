@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.31.2 (2026-05-04) — daemon paths no longer follow per-session CLAUDEMESH_CONFIG_DIR
+
+**Production bug observed in real installs:** every CLI verb invoked from
+inside a `claudemesh launch`-spawned session printed
+
+```
+[claudemesh] warn service-managed daemon not responding within 8000ms
+```
+
+even when the launchd-managed daemon was healthy and responding to
+direct probes in ~10 ms.
+
+Root cause: `claudemesh launch` exports `CLAUDEMESH_CONFIG_DIR` to a
+per-session tmpdir so that joined-mesh state and the session IPC
+token stay isolated from the host's shared config. `DAEMON_PATHS`
+read its base directory from the same env var, so inside a launched
+session the CLI looked for `daemon.sock` at e.g.
+`/var/folders/.../claudemesh-XXXX/daemon/daemon.sock` — which never
+exists. The CLI declared the daemon down, fell into the
+service-managed wait branch, and timed out.
+
+The daemon is a per-machine singleton serving every session; its
+files belong at `~/.claudemesh/daemon/` regardless of any per-session
+overlay. Fix: pin `DAEMON_PATHS.DAEMON_DIR` to `~/.claudemesh/daemon/`
+and ignore `CLAUDEMESH_CONFIG_DIR`. A new `CLAUDEMESH_DAEMON_DIR`
+override is preserved for tests / multi-daemon dev setups; production
+callers should never set it.
+
+After this fix, all CLI verbs from within a launched session take the
+warm-path (~10 ms IPC) again instead of the cold path (~600-1200 ms).
+
 ## 1.31.1 (2026-05-04) — hotfix: reaper stops blocking the daemon event loop
 
 1.31.0 shipped a session reaper that called `execFileSync("ps")`
