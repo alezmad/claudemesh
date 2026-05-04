@@ -228,12 +228,55 @@ function makeHandler(opts: {
         const groups = Array.isArray(body.groups)
           ? body.groups.filter((g): g is string => typeof g === "string")
           : undefined;
+
+        // 1.30.0 — optional per-session presence material. Older CLIs
+        // omit this; the daemon's session-broker subsystem just won't
+        // open a per-session WS for those.
+        let presence: SessionInfo["presence"] | undefined;
+        const rawPresence = body.presence;
+        if (rawPresence && typeof rawPresence === "object") {
+          const p = rawPresence as Record<string, unknown>;
+          const sessionPubkey = typeof p.session_pubkey === "string" ? p.session_pubkey.toLowerCase() : "";
+          const sessionSecretKey = typeof p.session_secret_key === "string" ? p.session_secret_key.toLowerCase() : "";
+          const att = p.parent_attestation as Record<string, unknown> | undefined;
+          if (
+            /^[0-9a-f]{64}$/.test(sessionPubkey) &&
+            /^[0-9a-f]{128}$/.test(sessionSecretKey) &&
+            att && typeof att === "object" &&
+            typeof att.session_pubkey === "string" &&
+            typeof att.parent_member_pubkey === "string" &&
+            typeof att.expires_at === "number" &&
+            typeof att.signature === "string"
+          ) {
+            presence = {
+              sessionPubkey,
+              sessionSecretKey,
+              parentAttestation: {
+                sessionPubkey: (att.session_pubkey as string).toLowerCase(),
+                parentMemberPubkey: (att.parent_member_pubkey as string).toLowerCase(),
+                expiresAt: att.expires_at as number,
+                signature: (att.signature as string).toLowerCase(),
+              },
+            };
+          } else {
+            opts.log("warn", "session_register_presence_malformed", { mesh });
+          }
+        }
+
         const stored = registerSession({
           token: token.toLowerCase(),
           sessionId, mesh, displayName, pid, cwd, role, groups,
+          ...(presence ? { presence } : {}),
         });
-        opts.log("info", "session_registered", { sessionId, mesh, pid });
-        respond(res, 200, { ok: true, registered_at: stored.registeredAt });
+        opts.log("info", "session_registered", {
+          sessionId, mesh, pid,
+          presence: presence ? "yes" : "no",
+        });
+        respond(res, 200, {
+          ok: true,
+          registered_at: stored.registeredAt,
+          presence_accepted: !!presence,
+        });
       } catch (e) {
         respond(res, 400, { error: String(e) });
       }

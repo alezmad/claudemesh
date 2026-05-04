@@ -20,6 +20,26 @@
  * session have no token to begin with.
  */
 
+/**
+ * Optional per-launch presence material. Carried opaquely through the
+ * registry; the daemon's session-broker subsystem (1.30.0+) reads it to
+ * open a long-lived broker WebSocket per session. Absent on older CLIs
+ * — register accepts payloads without it for backward compat.
+ */
+export interface SessionPresence {
+  /** Hex ed25519 pubkey, 64 chars. */
+  sessionPubkey: string;
+  /** Hex ed25519 secret key (held in-memory only; never disk). */
+  sessionSecretKey: string;
+  /** Parent-member-signed attestation; see signParentAttestation. */
+  parentAttestation: {
+    sessionPubkey: string;
+    parentMemberPubkey: string;
+    expiresAt: number;
+    signature: string;
+  };
+}
+
 export interface SessionInfo {
   token: string;
   sessionId: string;
@@ -29,7 +49,15 @@ export interface SessionInfo {
   cwd?: string;
   role?: string;
   groups?: string[];
+  /** 1.30.0+: per-launch presence material. */
+  presence?: SessionPresence;
   registeredAt: number;
+}
+
+/** Lifecycle callbacks invoked synchronously after registry mutation. */
+export interface RegistryHooks {
+  onRegister?: (info: SessionInfo) => void;
+  onDeregister?: (info: SessionInfo) => void;
 }
 
 const TTL_MS = 24 * 60 * 60 * 1000;
@@ -37,6 +65,7 @@ const REAPER_INTERVAL_MS = 30 * 1000;
 
 const byToken = new Map<string, SessionInfo>();
 const bySessionId = new Map<string, string>();
+const hooks: RegistryHooks = {};
 
 let reaperHandle: NodeJS.Timeout | null = null;
 
@@ -49,14 +78,30 @@ export function stopReaper(): void {
   if (reaperHandle) { clearInterval(reaperHandle); reaperHandle = null; }
 }
 
+/**
+ * Wire daemon-level lifecycle hooks. Called once at daemon boot — passing
+ * `{}` clears them. Idempotent across calls so tests can re-bind.
+ */
+export function setRegistryHooks(next: RegistryHooks): void {
+  hooks.onRegister = next.onRegister;
+  hooks.onDeregister = next.onDeregister;
+}
+
 export function registerSession(info: Omit<SessionInfo, "registeredAt">): SessionInfo {
   // Replace any prior entry under the same sessionId.
   const priorToken = bySessionId.get(info.sessionId);
-  if (priorToken && priorToken !== info.token) byToken.delete(priorToken);
+  if (priorToken && priorToken !== info.token) {
+    const prior = byToken.get(priorToken);
+    if (prior) {
+      byToken.delete(priorToken);
+      try { hooks.onDeregister?.(prior); } catch { /* hook errors must never throttle the registry */ }
+    }
+  }
 
   const stored: SessionInfo = { ...info, registeredAt: Date.now() };
   byToken.set(info.token, stored);
   bySessionId.set(info.sessionId, info.token);
+  try { hooks.onRegister?.(stored); } catch { /* see above */ }
   return stored;
 }
 
@@ -65,6 +110,7 @@ export function deregisterByToken(token: string): boolean {
   if (!entry) return false;
   byToken.delete(token);
   if (bySessionId.get(entry.sessionId) === token) bySessionId.delete(entry.sessionId);
+  try { hooks.onDeregister?.(entry); } catch { /* see above */ }
   return true;
 }
 
@@ -95,4 +141,6 @@ function reapDead(): void {
 export function _resetRegistry(): void {
   byToken.clear();
   bySessionId.clear();
+  hooks.onRegister = undefined;
+  hooks.onDeregister = undefined;
 }
