@@ -136,13 +136,16 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
         bus.publish("broker_status", { mesh: mesh.slug, status: s });
       },
       onPush: (m) => {
-        const sessionKeys = broker.getSessionKeys();
+        // Daemon-WS is member-keyed, not session-keyed. Session-targeted
+        // DMs land on the per-session WS (SessionBrokerClient) since
+        // 1.32.1 and decrypt with the session secret there. Anything that
+        // arrives here can only be member-keyed (broadcasts, member DMs,
+        // system events) — pass member secret only.
         void handleBrokerPush(m, {
           db: inboxDb,
           bus,
           meshSlug: mesh.slug,
           recipientSecretKeyHex: mesh.secretKey,
-          sessionSecretKeyHex: sessionKeys?.sessionSecretKey,
         });
       },
     });

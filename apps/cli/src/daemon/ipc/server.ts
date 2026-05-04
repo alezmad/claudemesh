@@ -870,11 +870,14 @@ async function resolveAndEncrypt(
     return { target_spec: to, ciphertext, nonce, mesh: meshSlug ?? "" };
   }
 
-  // 64-char hex pubkey → DM directly.
+  // 64-char hex pubkey → DM directly. Encrypt with the daemon's member
+  // secret: recipient decrypts using THEIR session pubkey's matching
+  // secret on their session-WS, so the sender side just needs any
+  // private key whose public counterpart is known to the recipient as
+  // "the sender". Member key is the stable choice and is what the
+  // recipient already trusts via mesh membership.
   if (/^[0-9a-f]{64}$/i.test(to)) {
-    const sessionKeys = broker.getSessionKeys();
-    const senderSecret = sessionKeys?.sessionSecretKey ?? meshSecretKey;
-    const env = await encryptDirect(req.message, to, senderSecret);
+    const env = await encryptDirect(req.message, to, meshSecretKey);
     return { target_spec: to, ciphertext: env.ciphertext, nonce: env.nonce, mesh: meshSlug ?? "" };
   }
 
@@ -890,9 +893,7 @@ async function resolveAndEncrypt(
     if (matches.length === 0) throw new Error(`no peer matching prefix "${to}"`);
     if (matches.length > 1) throw new Error(`prefix "${to}" is ambiguous (${matches.length} matches)`);
     const recipient = matches[0]!.pubkey;
-    const sessionKeys = broker.getSessionKeys();
-    const senderSecret = sessionKeys?.sessionSecretKey ?? meshSecretKey;
-    const env = await encryptDirect(req.message, recipient, senderSecret);
+    const env = await encryptDirect(req.message, recipient, meshSecretKey);
     return { target_spec: recipient, ciphertext: env.ciphertext, nonce: env.nonce, mesh: meshSlug ?? "" };
   }
 
@@ -900,9 +901,7 @@ async function resolveAndEncrypt(
   const match = peers.find((p) => p.displayName.toLowerCase() === to.toLowerCase());
   if (!match) throw new Error(`peer "${to}" not found`);
   const recipient = match.pubkey;
-  const sessionKeys = broker.getSessionKeys();
-  const senderSecret = sessionKeys?.sessionSecretKey ?? meshSecretKey;
-  const env = await encryptDirect(req.message, recipient, senderSecret);
+  const env = await encryptDirect(req.message, recipient, meshSecretKey);
   return { target_spec: recipient, ciphertext: env.ciphertext, nonce: env.nonce, mesh: meshSlug ?? "" };
 }
 

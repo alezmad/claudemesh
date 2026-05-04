@@ -7,13 +7,19 @@
 //   - Wire envelope adds `client_message_id` (broker may ignore in legacy
 //     mode; Sprint 7 promotes it to authoritative dedupe).
 //   - Reconnect with exponential backoff, signaled to the drain worker.
-
-import WebSocket from "ws";
+//
+// 2026-05-04: lifecycle (connect / hello-ack / close-reconnect) now
+// lives in `ws-lifecycle.ts`. This class supplies the daemon-WS hello
+// content and routes incoming RPC replies / pushes; the helper handles
+// the rest. The hello no longer carries an ephemeral `sessionPubkey` —
+// session-targeted DMs land on the per-session WS (SessionBrokerClient)
+// since 1.32.1, so this socket only needs the member identity.
 
 import type { JoinedMesh } from "~/services/config/facade.js";
 import { signHello } from "~/services/broker/hello-sig.js";
+import { connectWsWithBackoff, type WsLifecycle, type WsStatus } from "./ws-lifecycle.js";
 
-export type ConnStatus = "connecting" | "open" | "closed" | "reconnecting";
+export type ConnStatus = WsStatus;
 
 export interface BrokerSendArgs {
   /** Target as the broker expects it: peer name | pubkey | @group | * | topic. */
@@ -49,6 +55,8 @@ export interface PeerSummary {
   hostname?: string;
   peerType?: string;
   channel?: string;
+  /** Broker-side classification, added 2026-05-04. Missing in older brokers. */
+  role?: "control-plane" | "session" | "service";
 }
 
 interface PendingPeerList {
@@ -84,9 +92,7 @@ export interface MemoryRow {
   rememberedAt: string;
 }
 
-const HELLO_ACK_TIMEOUT_MS = 5_000;
-const SEND_ACK_TIMEOUT_MS  = 15_000;
-const BACKOFF_CAPS_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+const SEND_ACK_TIMEOUT_MS = 15_000;
 
 export interface DaemonBrokerOptions {
   displayName?: string;
@@ -96,12 +102,9 @@ export interface DaemonBrokerOptions {
 }
 
 export class DaemonBrokerClient {
-  private ws: WebSocket | null = null;
+  private lifecycle: WsLifecycle | null = null;
   private _status: ConnStatus = "closed";
   private closed = false;
-  private reconnectAttempt = 0;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private helloTimer: NodeJS.Timeout | null = null;
   private pendingAcks = new Map<string, PendingAck>();
   private peerListResolvers = new Map<string, PendingPeerList>();
   private skillListResolvers = new Map<string, { resolve: (rows: SkillSummary[]) => void; timer: NodeJS.Timeout }>();
@@ -110,8 +113,6 @@ export class DaemonBrokerClient {
   private stateListResolvers = new Map<string, { resolve: (rows: StateRow[]) => void; timer: NodeJS.Timeout }>();
   private memoryStoreResolvers = new Map<string, { resolve: (id: string | null) => void; timer: NodeJS.Timeout }>();
   private memoryRecallResolvers = new Map<string, { resolve: (rows: MemoryRow[]) => void; timer: NodeJS.Timeout }>();
-  private sessionPubkey: string | null = null;
-  private sessionSecretKey: string | null = null;
   private opens: Array<() => void> = [];
   private reqCounter = 0;
 
@@ -125,198 +126,166 @@ export class DaemonBrokerClient {
     (this.opts.log ?? defaultLog)(level, msg, { mesh: this.mesh.slug, ...meta });
   };
 
-  private setConnStatus(s: ConnStatus) {
-    if (this._status === s) return;
-    this._status = s;
-    this.opts.onStatusChange?.(s);
-  }
-
   /** Open the WS, run the hello handshake, resolve once the broker accepts. */
   async connect(): Promise<void> {
     if (this.closed) throw new Error("client_closed");
     if (this._status === "connecting" || this._status === "open") return;
-    this.setConnStatus("connecting");
 
-    const ws = new WebSocket(this.mesh.brokerUrl);
-    this.ws = ws;
-
-    return new Promise<void>((resolve, reject) => {
-      ws.on("open", async () => {
-        try {
-          if (!this.sessionPubkey) {
-            const { generateKeypair } = await import("~/services/crypto/facade.js");
-            const kp = await generateKeypair();
-            this.sessionPubkey = kp.publicKey;
-            this.sessionSecretKey = kp.secretKey;
-          }
-          const { timestamp, signature } = await signHello(
-            this.mesh.meshId, this.mesh.memberId, this.mesh.pubkey, this.mesh.secretKey,
-          );
-          ws.send(JSON.stringify({
-            type: "hello",
-            meshId: this.mesh.meshId,
-            memberId: this.mesh.memberId,
-            pubkey: this.mesh.pubkey,
-            sessionPubkey: this.sessionPubkey,
-            displayName: this.opts.displayName,
-            sessionId: `daemon-${process.pid}`,
-            pid: process.pid,
-            cwd: process.cwd(),
-            hostname: require("node:os").hostname(),
-            peerType: "ai" as const,
-            channel: "claudemesh-daemon",
-            timestamp,
-            signature,
-          }));
-          this.helloTimer = setTimeout(() => {
-            this.log("warn", "broker_hello_ack_timeout");
-            try { ws.close(); } catch { /* ignore */ }
-            reject(new Error("hello_ack_timeout"));
-          }, HELLO_ACK_TIMEOUT_MS);
-        } catch (e) {
-          reject(e instanceof Error ? e : new Error(String(e)));
-        }
-      });
-
-      ws.on("message", (raw) => {
-        let msg: Record<string, unknown>;
-        try { msg = JSON.parse(raw.toString()) as Record<string, unknown>; }
-        catch { return; }
-
-        if (msg.type === "hello_ack") {
-          if (this.helloTimer) clearTimeout(this.helloTimer);
-          this.helloTimer = null;
-          this.setConnStatus("open");
-          this.reconnectAttempt = 0;
-          // Flush deferred openers (drain worker, etc.)
+    this.lifecycle = await connectWsWithBackoff({
+      url: this.mesh.brokerUrl,
+      buildHello: async () => {
+        const { timestamp, signature } = await signHello(
+          this.mesh.meshId, this.mesh.memberId, this.mesh.pubkey, this.mesh.secretKey,
+        );
+        return {
+          type: "hello",
+          meshId: this.mesh.meshId,
+          memberId: this.mesh.memberId,
+          pubkey: this.mesh.pubkey,
+          // No `sessionPubkey` — daemon-WS is member-keyed only. The
+          // per-session presence WS (SessionBrokerClient) carries the
+          // ephemeral session pubkey. Spec §"Layer 1: Identity → Member identity".
+          displayName: this.opts.displayName,
+          sessionId: `daemon-${process.pid}`,
+          pid: process.pid,
+          cwd: process.cwd(),
+          hostname: require("node:os").hostname(),
+          peerType: "ai" as const,
+          channel: "claudemesh-daemon",
+          timestamp,
+          signature,
+        };
+      },
+      isHelloAck: (msg) => msg.type === "hello_ack",
+      onMessage: (msg) => this.handleMessage(msg),
+      onStatusChange: (s) => {
+        this._status = s;
+        this.opts.onStatusChange?.(s);
+        if (s === "open") {
+          // Flush deferred openers (drain worker, etc.).
           const queued = this.opens.slice();
           this.opens.length = 0;
-          for (const fn of queued) { try { fn(); } catch (e) { this.log("warn", "open_handler_failed", { err: String(e) }); } }
-          resolve();
-          return;
-        }
-
-        if (msg.type === "ack") {
-          // Broker shape: { type: "ack", id, messageId, queued, error? }
-          const id = String(msg.id ?? "");
-          const ack = this.pendingAcks.get(id);
-          if (ack) {
-            this.pendingAcks.delete(id);
-            clearTimeout(ack.timer);
-            if (typeof msg.error === "string" && msg.error.length > 0) {
-              ack.resolve({ ok: false, error: msg.error, permanent: classifyPermanent(msg.error) });
-            } else {
-              ack.resolve({ ok: true, messageId: String(msg.messageId ?? id) });
-            }
+          for (const fn of queued) {
+            try { fn(); } catch (e) { this.log("warn", "open_handler_failed", { err: String(e) }); }
           }
-          return;
         }
-
-        if (msg.type === "peers_list") {
-          const reqId = String(msg._reqId ?? "");
-          const pending = this.peerListResolvers.get(reqId);
-          if (pending) {
-            this.peerListResolvers.delete(reqId);
-            clearTimeout(pending.timer);
-            pending.resolve(Array.isArray(msg.peers) ? (msg.peers as PeerSummary[]) : []);
-          }
-          return;
-        }
-
-        if (msg.type === "skill_list") {
-          const reqId = String(msg._reqId ?? "");
-          const pending = this.skillListResolvers.get(reqId);
-          if (pending) {
-            this.skillListResolvers.delete(reqId);
-            clearTimeout(pending.timer);
-            pending.resolve(Array.isArray(msg.skills) ? (msg.skills as SkillSummary[]) : []);
-          }
-          return;
-        }
-
-        if (msg.type === "skill_data") {
-          const reqId = String(msg._reqId ?? "");
-          const pending = this.skillDataResolvers.get(reqId);
-          if (pending) {
-            this.skillDataResolvers.delete(reqId);
-            clearTimeout(pending.timer);
-            pending.resolve((msg.skill as SkillFull) ?? null);
-          }
-          return;
-        }
-
-        if (msg.type === "state_value" || msg.type === "state_data") {
-          const reqId = String(msg._reqId ?? "");
-          const pending = this.stateGetResolvers.get(reqId);
-          if (pending) {
-            this.stateGetResolvers.delete(reqId);
-            clearTimeout(pending.timer);
-            pending.resolve((msg.state ?? msg.row ?? null) as StateRow | null);
-          }
-          return;
-        }
-
-        if (msg.type === "state_list") {
-          const reqId = String(msg._reqId ?? "");
-          const pending = this.stateListResolvers.get(reqId);
-          if (pending) {
-            this.stateListResolvers.delete(reqId);
-            clearTimeout(pending.timer);
-            pending.resolve(Array.isArray(msg.entries) ? (msg.entries as StateRow[]) : []);
-          }
-          return;
-        }
-
-        if (msg.type === "memory_stored") {
-          const reqId = String(msg._reqId ?? "");
-          const pending = this.memoryStoreResolvers.get(reqId);
-          if (pending) {
-            this.memoryStoreResolvers.delete(reqId);
-            clearTimeout(pending.timer);
-            pending.resolve(typeof msg.memoryId === "string" ? msg.memoryId : null);
-          }
-          return;
-        }
-
-        if (msg.type === "memory_recall_result") {
-          const reqId = String(msg._reqId ?? "");
-          const pending = this.memoryRecallResolvers.get(reqId);
-          if (pending) {
-            this.memoryRecallResolvers.delete(reqId);
-            clearTimeout(pending.timer);
-            pending.resolve(Array.isArray(msg.matches) ? (msg.matches as MemoryRow[]) : []);
-          }
-          return;
-        }
-
-        if (msg.type === "push" || msg.type === "inbound") {
-          this.opts.onPush?.(msg);
-          return;
-        }
-      });
-
-      ws.on("close", (code, reason) => {
-        if (this.helloTimer) { clearTimeout(this.helloTimer); this.helloTimer = null; }
-        this.failPendingAcks(`broker_disconnected_${code}`);
-        if (this.closed) { this.setConnStatus("closed"); return; }
-        this.setConnStatus("reconnecting");
-        const wait = BACKOFF_CAPS_MS[Math.min(this.reconnectAttempt, BACKOFF_CAPS_MS.length - 1)] ?? 30_000;
-        this.reconnectAttempt++;
-        this.log("info", "broker_reconnect_scheduled", { wait_ms: wait, code, reason: reason.toString("utf8") });
-        this.reconnectTimer = setTimeout(() => this.connect().catch((err) => this.log("warn", "broker_reconnect_failed", { err: String(err) })), wait);
-        // First connection failure also rejects the original connect() promise.
-        if (this._status === "connecting") reject(new Error(`closed_before_hello_${code}`));
-      });
-
-      ws.on("error", (err) => this.log("warn", "broker_ws_error", { err: err.message }));
+      },
+      onBeforeReconnect: (code) => this.failPendingAcks(`broker_disconnected_${code}`),
+      log: (level, msg, meta) => this.log(level, `broker_${msg}`, meta),
     });
+  }
+
+  private handleMessage(msg: Record<string, unknown>): void {
+    if (msg.type === "ack") {
+      // Broker shape: { type: "ack", id, messageId, queued, error? }
+      const id = String(msg.id ?? "");
+      const ack = this.pendingAcks.get(id);
+      if (ack) {
+        this.pendingAcks.delete(id);
+        clearTimeout(ack.timer);
+        if (typeof msg.error === "string" && msg.error.length > 0) {
+          ack.resolve({ ok: false, error: msg.error, permanent: classifyPermanent(msg.error) });
+        } else {
+          ack.resolve({ ok: true, messageId: String(msg.messageId ?? id) });
+        }
+      }
+      return;
+    }
+
+    if (msg.type === "peers_list") {
+      const reqId = String(msg._reqId ?? "");
+      const pending = this.peerListResolvers.get(reqId);
+      if (pending) {
+        this.peerListResolvers.delete(reqId);
+        clearTimeout(pending.timer);
+        pending.resolve(Array.isArray(msg.peers) ? (msg.peers as PeerSummary[]) : []);
+      }
+      return;
+    }
+
+    if (msg.type === "skill_list") {
+      const reqId = String(msg._reqId ?? "");
+      const pending = this.skillListResolvers.get(reqId);
+      if (pending) {
+        this.skillListResolvers.delete(reqId);
+        clearTimeout(pending.timer);
+        pending.resolve(Array.isArray(msg.skills) ? (msg.skills as SkillSummary[]) : []);
+      }
+      return;
+    }
+
+    if (msg.type === "skill_data") {
+      const reqId = String(msg._reqId ?? "");
+      const pending = this.skillDataResolvers.get(reqId);
+      if (pending) {
+        this.skillDataResolvers.delete(reqId);
+        clearTimeout(pending.timer);
+        pending.resolve((msg.skill as SkillFull) ?? null);
+      }
+      return;
+    }
+
+    if (msg.type === "state_value" || msg.type === "state_data") {
+      const reqId = String(msg._reqId ?? "");
+      const pending = this.stateGetResolvers.get(reqId);
+      if (pending) {
+        this.stateGetResolvers.delete(reqId);
+        clearTimeout(pending.timer);
+        pending.resolve((msg.state ?? msg.row ?? null) as StateRow | null);
+      }
+      return;
+    }
+
+    if (msg.type === "state_list") {
+      const reqId = String(msg._reqId ?? "");
+      const pending = this.stateListResolvers.get(reqId);
+      if (pending) {
+        this.stateListResolvers.delete(reqId);
+        clearTimeout(pending.timer);
+        pending.resolve(Array.isArray(msg.entries) ? (msg.entries as StateRow[]) : []);
+      }
+      return;
+    }
+
+    if (msg.type === "memory_stored") {
+      const reqId = String(msg._reqId ?? "");
+      const pending = this.memoryStoreResolvers.get(reqId);
+      if (pending) {
+        this.memoryStoreResolvers.delete(reqId);
+        clearTimeout(pending.timer);
+        pending.resolve(typeof msg.memoryId === "string" ? msg.memoryId : null);
+      }
+      return;
+    }
+
+    if (msg.type === "memory_recall_result") {
+      const reqId = String(msg._reqId ?? "");
+      const pending = this.memoryRecallResolvers.get(reqId);
+      if (pending) {
+        this.memoryRecallResolvers.delete(reqId);
+        clearTimeout(pending.timer);
+        pending.resolve(Array.isArray(msg.matches) ? (msg.matches as MemoryRow[]) : []);
+      }
+      return;
+    }
+
+    if (msg.type === "push" || msg.type === "inbound") {
+      this.opts.onPush?.(msg);
+      return;
+    }
+  }
+
+  /** True when underlying socket is OPEN-ready for direct sends. */
+  private isOpen(): boolean {
+    const sock = this.lifecycle?.ws;
+    return !!sock && sock.readyState === sock.OPEN;
   }
 
   /** Send one outbox row. Resolves on broker ack/timeout. */
   send(req: BrokerSendArgs): Promise<BrokerSendResult> {
     return new Promise<BrokerSendResult>((resolve) => {
       const dispatch = () => {
-        if (!this.ws || this.ws.readyState !== this.ws.OPEN) {
+        if (!this.isOpen()) {
           resolve({ ok: false, error: "broker_not_open", permanent: false });
           return;
         }
@@ -328,7 +297,7 @@ export class DaemonBrokerClient {
         }, SEND_ACK_TIMEOUT_MS);
         this.pendingAcks.set(id, { resolve, timer });
         try {
-          this.ws.send(JSON.stringify({
+          this.lifecycle!.send({
             type: "send",
             id,                                  // legacy correlation id
             client_message_id: id,               // forward-compat per spec §4.2
@@ -337,7 +306,7 @@ export class DaemonBrokerClient {
             priority: req.priority,
             nonce: req.nonce,
             ciphertext: req.ciphertext,
-          }));
+          });
         } catch (e) {
           this.pendingAcks.delete(id);
           clearTimeout(timer);
@@ -352,153 +321,149 @@ export class DaemonBrokerClient {
 
   /** Ask the broker for the current peer list. */
   async listPeers(timeoutMs = 5_000): Promise<PeerSummary[]> {
-    if (this._status !== "open" || !this.ws) return [];
+    if (this._status !== "open" || !this.lifecycle) return [];
     return new Promise<PeerSummary[]>((resolve) => {
       const reqId = `pl-${++this.reqCounter}`;
       const timer = setTimeout(() => {
         if (this.peerListResolvers.delete(reqId)) resolve([]);
       }, timeoutMs);
       this.peerListResolvers.set(reqId, { resolve, timer });
-      try { this.ws!.send(JSON.stringify({ type: "list_peers", _reqId: reqId })); }
+      try { this.lifecycle!.send({ type: "list_peers", _reqId: reqId }); }
       catch { this.peerListResolvers.delete(reqId); clearTimeout(timer); resolve([]); }
     });
   }
 
   /** List mesh-published skills. Empty array on disconnect / timeout. */
   async listSkills(query?: string, timeoutMs = 5_000): Promise<SkillSummary[]> {
-    if (this._status !== "open" || !this.ws) return [];
+    if (this._status !== "open" || !this.lifecycle) return [];
     return new Promise<SkillSummary[]>((resolve) => {
       const reqId = `sl-${++this.reqCounter}`;
       const timer = setTimeout(() => {
         if (this.skillListResolvers.delete(reqId)) resolve([]);
       }, timeoutMs);
       this.skillListResolvers.set(reqId, { resolve, timer });
-      try { this.ws!.send(JSON.stringify({ type: "list_skills", query, _reqId: reqId })); }
+      try { this.lifecycle!.send({ type: "list_skills", query, _reqId: reqId }); }
       catch { this.skillListResolvers.delete(reqId); clearTimeout(timer); resolve([]); }
     });
   }
 
   /** Fetch one skill's full body. Null on not-found / disconnect / timeout. */
   async getSkill(name: string, timeoutMs = 5_000): Promise<SkillFull | null> {
-    if (this._status !== "open" || !this.ws) return null;
+    if (this._status !== "open" || !this.lifecycle) return null;
     return new Promise<SkillFull | null>((resolve) => {
       const reqId = `sg-${++this.reqCounter}`;
       const timer = setTimeout(() => {
         if (this.skillDataResolvers.delete(reqId)) resolve(null);
       }, timeoutMs);
       this.skillDataResolvers.set(reqId, { resolve, timer });
-      try { this.ws!.send(JSON.stringify({ type: "get_skill", name, _reqId: reqId })); }
+      try { this.lifecycle!.send({ type: "get_skill", name, _reqId: reqId }); }
       catch { this.skillDataResolvers.delete(reqId); clearTimeout(timer); resolve(null); }
     });
   }
 
   /** Read a single shared state row. Null on disconnect / timeout / not-found. */
   async getState(key: string, timeoutMs = 5_000): Promise<StateRow | null> {
-    if (this._status !== "open" || !this.ws) return null;
+    if (this._status !== "open" || !this.lifecycle) return null;
     return new Promise<StateRow | null>((resolve) => {
       const reqId = `sg-${++this.reqCounter}`;
       const timer = setTimeout(() => {
         if (this.stateGetResolvers.delete(reqId)) resolve(null);
       }, timeoutMs);
       this.stateGetResolvers.set(reqId, { resolve, timer });
-      try { this.ws!.send(JSON.stringify({ type: "get_state", key, _reqId: reqId })); }
+      try { this.lifecycle!.send({ type: "get_state", key, _reqId: reqId }); }
       catch { this.stateGetResolvers.delete(reqId); clearTimeout(timer); resolve(null); }
     });
   }
 
   /** List all shared state rows in the mesh. */
   async listState(timeoutMs = 5_000): Promise<StateRow[]> {
-    if (this._status !== "open" || !this.ws) return [];
+    if (this._status !== "open" || !this.lifecycle) return [];
     return new Promise<StateRow[]>((resolve) => {
       const reqId = `sl-${++this.reqCounter}`;
       const timer = setTimeout(() => {
         if (this.stateListResolvers.delete(reqId)) resolve([]);
       }, timeoutMs);
       this.stateListResolvers.set(reqId, { resolve, timer });
-      try { this.ws!.send(JSON.stringify({ type: "list_state", _reqId: reqId })); }
+      try { this.lifecycle!.send({ type: "list_state", _reqId: reqId }); }
       catch { this.stateListResolvers.delete(reqId); clearTimeout(timer); resolve([]); }
     });
   }
 
   /** Set a shared state value. Fire-and-forget. */
   setState(key: string, value: unknown): void {
-    if (this._status !== "open" || !this.ws) return;
-    try { this.ws.send(JSON.stringify({ type: "set_state", key, value })); }
+    if (this._status !== "open" || !this.lifecycle) return;
+    try { this.lifecycle.send({ type: "set_state", key, value }); }
     catch { /* ignore */ }
   }
 
   /** Store a memory in the mesh. Returns the assigned id, or null on timeout. */
   async remember(content: string, tags?: string[], timeoutMs = 5_000): Promise<string | null> {
-    if (this._status !== "open" || !this.ws) return null;
+    if (this._status !== "open" || !this.lifecycle) return null;
     return new Promise<string | null>((resolve) => {
       const reqId = `mr-${++this.reqCounter}`;
       const timer = setTimeout(() => {
         if (this.memoryStoreResolvers.delete(reqId)) resolve(null);
       }, timeoutMs);
       this.memoryStoreResolvers.set(reqId, { resolve, timer });
-      try { this.ws!.send(JSON.stringify({ type: "remember", content, tags, _reqId: reqId })); }
+      try { this.lifecycle!.send({ type: "remember", content, tags, _reqId: reqId }); }
       catch { this.memoryStoreResolvers.delete(reqId); clearTimeout(timer); resolve(null); }
     });
   }
 
   /** Search memories by relevance. */
   async recall(query: string, timeoutMs = 5_000): Promise<MemoryRow[]> {
-    if (this._status !== "open" || !this.ws) return [];
+    if (this._status !== "open" || !this.lifecycle) return [];
     return new Promise<MemoryRow[]>((resolve) => {
       const reqId = `mc-${++this.reqCounter}`;
       const timer = setTimeout(() => {
         if (this.memoryRecallResolvers.delete(reqId)) resolve([]);
       }, timeoutMs);
       this.memoryRecallResolvers.set(reqId, { resolve, timer });
-      try { this.ws!.send(JSON.stringify({ type: "recall", query, _reqId: reqId })); }
+      try { this.lifecycle!.send({ type: "recall", query, _reqId: reqId }); }
       catch { this.memoryRecallResolvers.delete(reqId); clearTimeout(timer); resolve([]); }
     });
   }
 
   /** Forget a memory by id. Fire-and-forget. */
   forget(memoryId: string): void {
-    if (this._status !== "open" || !this.ws) return;
-    try { this.ws.send(JSON.stringify({ type: "forget", memoryId })); }
+    if (this._status !== "open" || !this.lifecycle) return;
+    try { this.lifecycle.send({ type: "forget", memoryId }); }
     catch { /* ignore */ }
   }
 
   /** Set the daemon's profile (avatar/title/bio/capabilities). Fire-and-forget. */
   setProfile(profile: { avatar?: string; title?: string; bio?: string; capabilities?: string[] }): void {
-    if (this._status !== "open" || !this.ws) return;
-    try { this.ws.send(JSON.stringify({ type: "set_profile", ...profile })); }
+    if (this._status !== "open" || !this.lifecycle) return;
+    try { this.lifecycle.send({ type: "set_profile", ...profile }); }
     catch { /* ignore */ }
   }
 
   setSummary(summary: string): void {
-    if (this._status !== "open" || !this.ws) return;
-    try { this.ws.send(JSON.stringify({ type: "set_summary", summary })); }
+    if (this._status !== "open" || !this.lifecycle) return;
+    try { this.lifecycle.send({ type: "set_summary", summary }); }
     catch { /* ignore */ }
   }
 
   setStatus(status: "idle" | "working" | "dnd"): void {
-    if (this._status !== "open" || !this.ws) return;
-    try { this.ws.send(JSON.stringify({ type: "set_status", status })); }
+    if (this._status !== "open" || !this.lifecycle) return;
+    try { this.lifecycle.send({ type: "set_status", status }); }
     catch { /* ignore */ }
   }
 
   setVisible(visible: boolean): void {
-    if (this._status !== "open" || !this.ws) return;
-    try { this.ws.send(JSON.stringify({ type: "set_visible", visible })); }
+    if (this._status !== "open" || !this.lifecycle) return;
+    try { this.lifecycle.send({ type: "set_visible", visible }); }
     catch { /* ignore */ }
   }
 
   async close(): Promise<void> {
     this.closed = true;
-    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
-    if (this.helloTimer) { clearTimeout(this.helloTimer); this.helloTimer = null; }
     this.failPendingAcks("daemon_shutdown");
-    try { this.ws?.close(); } catch { /* ignore */ }
-    this.setConnStatus("closed");
-  }
-
-  getSessionKeys(): { sessionPubkey: string; sessionSecretKey: string } | null {
-    if (!this.sessionPubkey || !this.sessionSecretKey) return null;
-    return { sessionPubkey: this.sessionPubkey, sessionSecretKey: this.sessionSecretKey };
+    if (this.lifecycle) {
+      try { await this.lifecycle.close(); } catch { /* ignore */ }
+      this.lifecycle = null;
+    }
+    this._status = "closed";
   }
 
   private failPendingAcks(reason: string) {

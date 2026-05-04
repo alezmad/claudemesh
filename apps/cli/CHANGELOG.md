@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased — Milestone 1 lifecycle cleanups
+
+Foundational refactor before the agentic-comms architecture work
+(`.artifacts/specs/2026-05-04-agentic-comms-architecture-v2.md`). Three
+changes, all behavior-preserving:
+
+- **`connectWsWithBackoff` helper** (`apps/cli/src/daemon/ws-lifecycle.ts`).
+  Both `DaemonBrokerClient` and `SessionBrokerClient` now share one
+  lifecycle implementation — connect, hello-handshake, ack-timeout,
+  close + backoff reconnect. Each client supplies `buildHello` /
+  `isHelloAck` / `onMessage` and keeps its own RPC bookkeeping
+  (pendingAcks, peerListResolvers, onPush, etc). Composition over
+  inheritance per Codex's review; no protocol shape changes.
+
+- **Drop daemon-WS ephemeral session pubkey.** `DaemonBrokerClient` no
+  longer mints + sends a per-reconnect ephemeral keypair in its hello.
+  Session-targeted DMs land on `SessionBrokerClient` (since 1.32.1),
+  not the member-keyed daemon-WS, so the field was vestigial. The
+  daemon's send-encrypt path now signs DMs with the stable mesh member
+  secret. Inbound on daemon-WS only attempts member-key decryption —
+  session decryption is the session-WS's job.
+
+- **Role-aware peer list.** `peer list` now hides peers whose
+  broker-emitted `role` is `'control-plane'` (the daemon's own
+  member-keyed presence). `--all` opts back in. JSON output emits
+  `role` at the top level. Older brokers that don't emit `role` yet
+  default to `'session'`, so legacy peer rows stay visible without
+  the broker-side change shipped first. Replaces the prior
+  `peerType === 'claudemesh-daemon'` channel-name hack.
+
 ## 1.32.1 (2026-05-04) — DMs to session pubkeys actually deliver now
 
 Critical fix. Sessions launched via `claudemesh launch` (1.30.0+) hold a
