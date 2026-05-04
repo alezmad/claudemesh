@@ -76,12 +76,32 @@ export async function runKick(
   if ("error" in built) { render.err(String(built.error)); return EXIT.INVALID_ARGS; }
 
   return await withMesh({ meshSlug }, async (client) => {
-    const result = await client.sendAndWait(built as Record<string, unknown>) as { affected?: string[]; kicked?: string[] };
+    const result = await client.sendAndWait(built as Record<string, unknown>) as {
+      affected?: string[];
+      kicked?: string[];
+      // 1.34.15: broker refuses to kick control-plane WSes (they'd
+      // just auto-reconnect). Older brokers don't emit this field.
+      skipped_control_plane?: string[];
+    };
     const peers = result?.affected ?? result?.kicked ?? [];
-    if (peers.length === 0) render.info("No peers matched.");
-    else {
+    const skipped = result?.skipped_control_plane ?? [];
+
+    if (peers.length === 0 && skipped.length === 0) {
+      render.info("No peers matched.");
+    } else if (peers.length === 0 && skipped.length > 0) {
+      render.warn(
+        `${skipped.length} match(es) refused: ${skipped.join(", ")} — control-plane connections (daemon / dashboard) auto-reconnect, so kick is a no-op.`,
+        "To take a daemon offline locally, run `claudemesh daemon down` on that machine. To remove a member from the mesh, use `claudemesh ban <peer>`.",
+      );
+    } else {
       render.ok(`Kicked ${peers.length} peer(s): ${peers.join(", ")}`);
       render.hint("Their Claude Code session ended. They can rejoin anytime by running `claudemesh`.");
+      if (skipped.length > 0) {
+        render.warn(
+          `(also refused ${skipped.length} control-plane connection(s): ${skipped.join(", ")})`,
+          "Daemon / dashboard connections auto-reconnect; kick is a no-op against them. Use `claudemesh ban <peer>` to remove a member entirely.",
+        );
+      }
     }
     return EXIT.SUCCESS;
   });

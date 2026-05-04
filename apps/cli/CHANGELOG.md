@@ -1,5 +1,110 @@
 # Changelog
 
+## 1.34.15 (2026-05-04) — `peer list --mesh` actually scopes + `kick` refuses control-plane
+
+Two follow-ups from the 1.34.x train, both backwards-compatible.
+
+### `peer list --mesh <slug>` no longer aggregates across meshes
+
+`apps/cli/src/commands/peers.ts:140` was calling
+`tryListPeersViaDaemon()` with no argument, so a multi-mesh daemon
+returned peers from EVERY attached mesh and the renderer printed
+"peers on flexicar" with cross-mesh rows mixed in. The daemon's
+`/v1/peers?mesh=<slug>` filter (server-side, since 1.26.0) was
+already correctly scoping when the slug was passed; the CLI just
+wasn't passing it. Fixed.
+
+`apps/cli/src/commands/launch.ts:407` (the `printBrokerWelcome` peer
+count in the launch banner) had the same bug. The "N peers online"
+line in the welcome now shows the count for the launched mesh only.
+
+`apps/cli/src/commands/send.ts` cross-mesh hex-prefix resolution is
+intentionally cross-mesh (the user is targeting by hex without
+specifying a mesh) and was deliberately left as-is.
+
+### `claudemesh kick` refuses no-op kicks on control-plane connections
+
+Pre-1.34.15, kicking a daemon's member-WS or a dashboard connection
+just closed the socket — the daemon's WS-lifecycle reconnect loop
+brought it back within seconds, the kicker's CLI rendered "Their
+Claude Code session ended" (which was misleading), and the user-
+visible state was unchanged. The verb was effectively a no-op, but
+the user had to learn that the hard way.
+
+The broker's kick handler (`apps/broker/src/index.ts:4628+`) now
+skips peers where `peerRole === "control-plane"` and surfaces the
+skipped peers in a new additive ack field `skipped_control_plane`.
+The soft `disconnect` verb keeps the old behavior — useful when
+intentionally nudging a control-plane peer to re-authenticate.
+
+The CLI (`apps/cli/src/commands/kick.ts`) reads the new field and
+prints a clearer message: refused peers are listed, with the hint
+that `claudemesh ban <peer>` is the right tool to remove a member,
+or `claudemesh daemon down` to take a daemon offline locally.
+
+`apps/broker/src/index.ts` adds `peerRole` to the in-memory
+`PeerConn` shape, populated from both connection paths
+(member-keyed `hello` → `"control-plane"`, per-launch
+`session_hello` → `"session"`). The DB-side role taxonomy is
+unchanged.
+
+### Back-compat
+
+- Older CLI clients ignore the new `skipped_control_plane` ack
+  field; their kick continues to print "Kicked 0 peer(s)" against
+  a control-plane target as before.
+- Older brokers don't emit the field at all; newer CLI handles
+  the absence (the new branch is only reached when the field is
+  present and non-empty).
+- The new `peerRole` slot on `PeerConn` is filled at every
+  `connections.set` callsite, so older code paths never read
+  `undefined`.
+
+### Tests
+
+- `apps/broker/tests/kick-control-plane-skip.test.ts` — 5 cases
+  covering the kick/disconnect × control-plane/session/service
+  truth table.
+
+## 1.34.14 (2026-05-04) — stale `CLAUDEMESH_CONFIG_DIR` falls back
+
+`claudemesh launch` exports `CLAUDEMESH_CONFIG_DIR=<tmpdir>` to its
+spawned `claude` so the per-session mesh selection is isolated from
+`~/.claudemesh/config.json`. The tmpdir is `rmSync`'d on launch exit
+via the `process.on('exit', cleanup)` handler.
+
+Footgun: if a later `claudemesh` invocation INHERITED that env — a
+Bash tool call inside Claude Code, a tmux pane that captured the env
+via `update-environment`, an exported var the user forgot to clear —
+the inherited path pointed at a tmpdir that no longer existed.
+Pre-1.34.14 we silently used the dead path, `readConfig()` came back
+empty, and the user saw "No meshes joined" from an otherwise-working
+install. Fish users hit it harder because fish has no `unset` —
+they had to discover `set -e CLAUDEMESH_CONFIG_DIR`.
+
+`apps/cli/src/constants/paths.ts` now resolves `CONFIG_DIR` once via
+a memoized `resolveConfigDir()`:
+
+  1. No env var → `~/.claudemesh` (default, unchanged).
+  2. Env points at a dir containing `config.json` → trust it. The
+     legitimate per-session-launch case is byte-identical to before.
+  3. Env set but stale (dir gone) → warn once on stderr (TTY-only —
+     CI / MCP boot / piped scripts stay quiet) with a shell-specific
+     unset hint, then fall back to `~/.claudemesh`.
+
+The check is on the directory's existence, not on `config.json`,
+because a fresh-launch tmpdir legitimately has no `config.json` until
+the first write. The stale signature we catch is the outer launch's
+`rmSync(tmpDir, {recursive: true})` cleanup, which removes the
+directory entirely.
+
+The "no meshes" check from the original triage was deliberately NOT
+adopted: a launched session that legitimately joins one mesh would
+hit it.
+
+No back-compat surface affected. No other files changed. `_resetPathsForTest()`
+exported for unit tests.
+
 ## 1.34.13 (2026-05-04) — MCP forwards session token on /v1/events
 
 The 1.34.10 SSE demux + 1.34.11 inbox per-recipient column were both

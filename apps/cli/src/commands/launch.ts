@@ -400,11 +400,13 @@ async function printBrokerWelcome(meshSlug: string): Promise<void> {
     }
   } catch { /* daemon unreachable — not fatal */ }
 
-  // Peer count (best-effort).
+  // Peer count (best-effort). 1.34.15: scope to the launched mesh so
+  // multi-mesh daemons don't inflate the welcome banner with peers
+  // from other meshes the user didn't just attach to.
   let peerCount = -1;
   try {
     const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
-    const peers = (await tryListPeersViaDaemon()) ?? [];
+    const peers = (await tryListPeersViaDaemon(meshSlug)) ?? [];
     peerCount = peers.filter((p) =>
       (p as { channel?: string }).channel !== "claudemesh-daemon",
     ).length;

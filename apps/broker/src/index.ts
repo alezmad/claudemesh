@@ -156,6 +156,11 @@ interface PeerConn {
     bio?: string;
     capabilities?: string[];
   };
+  /** v2 agentic-comms presence taxonomy. Mirrors the value passed to
+   *  `recordPresence`. Used by the kick handler to refuse no-op kicks
+   *  on long-lived control-plane connections (daemon, dashboard) that
+   *  would just auto-reconnect. */
+  peerRole: "control-plane" | "session" | "service";
 }
 
 const connections = new Map<string, PeerConn>();
@@ -1797,6 +1802,7 @@ async function handleHello(
     groups: initialGroups,
     visible: saved?.visible ?? true,
     profile: saved?.profile ?? {},
+    peerRole: "control-plane",
   });
   incMeshCount(hello.meshId);
   void audit(hello.meshId, "peer_joined", member.id, effectiveDisplayName, {
@@ -2022,6 +2028,7 @@ async function handleSessionHello(
     groups: initialGroups,
     visible: true,
     profile: {},
+    peerRole: "session",
   });
   incMeshCount(hello.meshId);
   void audit(hello.meshId, "peer_joined", member.id, effectiveDisplayName, {
@@ -4645,11 +4652,30 @@ function handleConnection(ws: WebSocket): void {
           }
 
           const affected: string[] = [];
+          // 1.34.15 (gap #3a): kick was a no-op against long-lived
+          // control-plane connections (daemon, dashboard) — closing
+          // their WS just triggered the auto-reconnect loop, the
+          // kicker's CLI rendered "Their Claude Code session ended"
+          // (which was misleading), and the user-visible state was
+          // unchanged seconds later. We now refuse to close control-
+          // plane WSes and surface the skipped peers in a new
+          // additive ack field. Pre-1.34.15 CLI clients only read
+          // `kicked`/`affected`, so this stays back-compat.
+          //
+          // For `kick`-only: the soft `disconnect` verb still closes
+          // control-plane WSes intentionally — that's what users want
+          // when they're nudging a peer for it to re-authenticate.
+          const skippedControlPlane: string[] = [];
+          const skipControlPlane = isKick;
           const now = Date.now();
 
           if (km.all) {
             for (const [pid, peer] of connections) {
               if (peer.meshId !== conn.meshId || pid === presenceId) continue;
+              if (skipControlPlane && peer.peerRole === "control-plane") {
+                skippedControlPlane.push(peer.displayName || pid);
+                continue;
+              }
               try { peer.ws.close(closeCode, closeReason); } catch {}
               connections.delete(pid);
               void disconnectPresence(pid);
@@ -4661,6 +4687,10 @@ function handleConnection(ws: WebSocket): void {
               if (peer.meshId !== conn.meshId || pid === presenceId) continue;
               const [pres] = await db.select({ lastPingAt: presence.lastPingAt }).from(presence).where(eq(presence.id, pid)).limit(1);
               if (pres && pres.lastPingAt && pres.lastPingAt.getTime() < cutoff) {
+                if (skipControlPlane && peer.peerRole === "control-plane") {
+                  skippedControlPlane.push(peer.displayName || pid);
+                  continue;
+                }
                 try { peer.ws.close(closeCode, `${closeReason}_stale`); } catch {}
                 connections.delete(pid);
                 void disconnectPresence(pid);
@@ -4671,6 +4701,10 @@ function handleConnection(ws: WebSocket): void {
             for (const [pid, peer] of connections) {
               if (peer.meshId !== conn.meshId) continue;
               if (peer.displayName === km.target || peer.memberPubkey === km.target || peer.memberPubkey.startsWith(km.target)) {
+                if (skipControlPlane && peer.peerRole === "control-plane") {
+                  skippedControlPlane.push(peer.displayName || pid);
+                  continue;
+                }
                 try { peer.ws.close(closeCode, closeReason); } catch {}
                 connections.delete(pid);
                 void disconnectPresence(pid);
@@ -4679,8 +4713,20 @@ function handleConnection(ws: WebSocket): void {
             }
           }
 
-          conn.ws.send(JSON.stringify({ type: ackType, kicked: affected, affected, _reqId: km._reqId }));
-          log.info(`ws ${closeReason}`, { presence_id: presenceId, count: affected.length, target: km.target ?? km.stale ?? "all" });
+          conn.ws.send(JSON.stringify({
+            type: ackType,
+            kicked: affected,
+            affected,
+            // Additive — older CLI clients ignore this field.
+            ...(skippedControlPlane.length > 0 ? { skipped_control_plane: skippedControlPlane } : {}),
+            _reqId: km._reqId,
+          }));
+          log.info(`ws ${closeReason}`, {
+            presence_id: presenceId,
+            count: affected.length,
+            target: km.target ?? km.stale ?? "all",
+            skipped_control_plane: skippedControlPlane.length,
+          });
           break;
         }
 

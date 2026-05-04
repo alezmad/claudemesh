@@ -135,9 +135,17 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
   // lifecycle helper inside tryListPeersViaDaemon auto-spawns the
   // daemon if it's down and probes it for liveness — no separate bridge
   // tier is needed any more (1.28.0).
+  //
+  // 1.34.15: forward `slug` to the daemon as `?mesh=<slug>` so the
+  // server-side aggregator narrows to the requested mesh. Pre-1.34.15
+  // we called this with no argument, so a multi-mesh daemon returned
+  // peers from every attached mesh and the renderer printed "peers on
+  // flexicar" with cross-mesh rows mixed in. The daemon's
+  // `meshFromCtx` already does the right scoping when the slug is
+  // passed; the CLI just wasn't passing it.
   try {
     const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
-    const dr = await tryListPeersViaDaemon();
+    const dr = await tryListPeersViaDaemon(slug);
     if (dr !== null) {
       return dr.map((p) => annotateSelf(p as PeerRecord, selfMemberPubkey, selfSessionPubkey));
     }
