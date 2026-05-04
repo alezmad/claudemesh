@@ -28,18 +28,6 @@ export interface RunDaemonOptions {
   clonePolicy?: ClonePolicy;
 }
 
-/**
- * 1.30.0 feature flag. Default ON — the daemon opens a long-lived WS per
- * registered session so siblings see each other in `peer list`. Set
- * CLAUDEMESH_SESSION_PRESENCE=0 (or "false"/"off") to disable for
- * rollback if the broker side is misbehaving on a given mesh.
- */
-function isSessionPresenceEnabled(): boolean {
-  const v = process.env.CLAUDEMESH_SESSION_PRESENCE;
-  if (v === undefined || v === "") return true;
-  return v !== "0" && v.toLowerCase() !== "false" && v.toLowerCase() !== "off";
-}
-
 /** Detect a few common container environments to pick UDS-only by default. */
 function detectContainer(): boolean {
   if (process.env.KUBERNETES_SERVICE_HOST) return true;
@@ -167,14 +155,13 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
   let drain: DrainHandle | null = null;
   drain = startDrainWorker({ db: outboxDb, brokers });
 
-  // 1.30.0 — per-session broker presence. Default OFF for one release
-  // cycle so the broker side bakes before the flag flips. Opt-in via
-  // CLAUDEMESH_SESSION_PRESENCE=1; flips to default-on in 1.30.0 GA.
-  const sessionPresenceEnabled = isSessionPresenceEnabled();
+  // 1.30.0 — per-session broker presence. Always on. Older CLIs that
+  // don't include `presence` material in the register body just won't
+  // get a session WS; the daemon's own member-keyed broker still
+  // covers them.
   const sessionBrokers = new Map<string, SessionBrokerClient>();
   setRegistryHooks({
     onRegister: (info) => {
-      if (!sessionPresenceEnabled) return;
       if (!info.presence) return;
       const meshConfig = meshConfigs.get(info.mesh);
       if (!meshConfig) {

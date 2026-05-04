@@ -277,8 +277,7 @@ identity (deferred for security review).
   signature checks; daemon adds a slim `SessionBrokerClient` and
   registry lifecycle hooks. Also fixes a latent 1.29.0 TDZ bug where
   `claudemesh launch`'s IPC session-token registration was silently
-  failing every run. Flag-gated for one cycle, default ON in this
-  release; set `CLAUDEMESH_SESSION_PRESENCE=0` for rollback. Spec at
+  failing every run. Spec at
   `.artifacts/specs/2026-05-04-per-session-presence.md`.
 
 What's left for true v2.0.0 (next sessions):

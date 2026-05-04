@@ -31,9 +31,12 @@ access shape).
   `parent_attestation`). Older payloads continue to work.
 - **`claudemesh launch`** — generates an ed25519 session keypair and a
   12 h parent attestation per launch (mesh secret key signs it),
-  forwards both to the daemon under `body.presence`. The flag
-  `CLAUDEMESH_SESSION_PRESENCE` defaults to ON; set `=0` to roll back
-  if a broker on a given mesh is misbehaving.
+  forwards both to the daemon under `body.presence`. Per-session
+  presence is always on; older brokers that don't recognize
+  `session_hello` reply `unknown_message_type` and the daemon quietly
+  drops the per-session WS for that mesh — the regular member-keyed
+  WS still covers all functionality, the only loss is sibling-session
+  visibility on that mesh.
 - **latent 1.29.0 bug fix** — `claudemesh launch` referenced
   `claudeSessionId` before its `const` declaration further down the
   file, hitting the temporal dead zone → `ReferenceError` silently
@@ -44,10 +47,9 @@ access shape).
 
 ### Sequencing
 
-The broker side ships first and bakes for ~24 h. Only then does the
-flag default flip on the CLI side. Older CLIs continue working
-unchanged (no per-session WS), and the protocol is purely additive on
-the wire.
+The broker side ships first and bakes for ~24 h. Older CLIs continue
+working unchanged (no per-session WS), and the protocol is purely
+additive on the wire.
 
 ### Verification (smoke)
 

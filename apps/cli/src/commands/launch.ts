@@ -680,9 +680,8 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     sessionTokenForCleanup = minted.token;
 
     // Per-session ephemeral keypair + parent attestation (1.30.0+).
-    // Behind CLAUDEMESH_SESSION_PRESENCE: the daemon ignores the
-    // presence material when the flag is off, so sending it always is
-    // forward-compatible.
+    // Older daemons ignore unknown body fields, so sending presence
+    // material always is forward-compatible.
     let presencePayload: {
       session_pubkey: string;
       session_secret_key: string;
