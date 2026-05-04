@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.27.2 (2026-05-04) — skill: full-flag launch templates
+
+Documentation-only ship. `skills/claudemesh/SKILL.md` gains a canonical
+"fully-populated spawn" recipe under "Wizard-free spawn templates" —
+every flag set explicitly, with a per-position annotation table — so
+agents and humans copy-paste a known-good kitchen-sink command instead
+of stitching one together from the flag table.
+
+Also corrects two pre-existing inaccuracies:
+- `--system-prompt` was documented as forwarding to
+  `claude --append-system-prompt`. It actually forwards to
+  `claude --system-prompt` (overrides the default; pass a string, not a
+  path).
+- `-q` was listed as a synonym for `--quiet`. The argv parser treats
+  short flags (`-X`) and long flags (`--xyz`) as separate keys; only
+  `--quiet` is wired. `-q` is currently a no-op.
+
+Carries a note that all twelve launch flags are end-to-end wired only as
+of `claudemesh-cli@1.27.1`.
+
 ## 1.27.1 (2026-05-04) — wire missing launch flags
 
 Fixes a wiring bug in `apps/cli/src/entrypoints/cli.ts` where six flags

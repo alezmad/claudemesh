@@ -80,14 +80,55 @@ Once `claudemesh install` has run (registers MCP entry + starts daemon service),
 | `--groups "name:role,name2:role2,all"` | the group selection prompt | comma-separated `<groupname>:<role>` entries; the literal `all` joins `@all` |
 | `--role <lead\|member\|observer>` | the role prompt | applied to all groups in `--groups` that didn't specify their own |
 | `--message-mode <push\|inbox>` | the message-mode prompt | `push` (default) emits `<channel>` notifications mid-turn; `inbox` only buffers — quieter for headless agents |
-| `--system-prompt <path>` | nothing — pure pass-through | forwarded to `claude --append-system-prompt` |
+| `--system-prompt <text>` | nothing — pure pass-through | forwarded to `claude --system-prompt` (overrides default; pass a string, not a path) |
 | `--resume <session-id>` | nothing — pure pass-through | forwarded to `claude --resume` to continue a prior Claude Code session |
-| `--continue` | nothing — pure pass-through | forwarded to `claude --continue` |
+| `--continue` | nothing — pure pass-through | forwarded to `claude --continue` (resumes the last session in this cwd) |
 | `-y` / `--yes` | every confirmation prompt | including the "you'll skip ALL permission prompts" gate. **Use for autonomous agents; omit for shared/multi-person meshes.** |
-| `-q` / `--quiet` | the welcome banner | useful when the spawning script wants clean stdout |
+| `--quiet` | the wizard + welcome banner | suppresses the launch wizard and banner. Combine with `-y` for true headless: `--quiet` alone won't bypass Claude's permission prompts, so a script using only `--quiet` will hang on the first tool call. |
 | `--` | (separator) | everything after `--` is forwarded verbatim to `claude`. Example: `claudemesh launch --name X -y -- --resume abc123 --model opus` |
 
+> **All twelve flags are end-to-end wired as of `claudemesh-cli@1.27.1`.** Earlier builds silently dropped `--role`, `--groups`, `--message-mode`, `--system-prompt`, `--continue`, and `--quiet` at the CLI entrypoint — they were declared but never reached `runLaunch`. If a script targets older versions, those flags are no-ops.
+
 ### Wizard-free spawn templates
+
+#### Canonical fully-populated spawn (every flag set explicitly)
+
+The kitchen-sink form — copy, set every value, and the session boots without a single interactive prompt or banner. Use as a base when scripting from cron, hooks, CI, or another agent:
+
+```bash
+claudemesh launch \
+  --name "ci-bot" \
+  --mesh openclaw \
+  --role member \
+  --groups "frontend:lead,reviewers:observer,all" \
+  --message-mode inbox \
+  --system-prompt "$(cat ~/agents/ci-bot.md)" \
+  --quiet \
+  -y \
+  -- \
+  --model opus \
+  --resume "$LAST_SESSION_ID"
+```
+
+Annotated:
+
+| Position | Value | Effect |
+|---|---|---|
+| `--name "ci-bot"` | identity | what peers see in `peer list` and `<channel from_name>` — pin so peers always see the same name across machines |
+| `--mesh openclaw` | workspace | required when you have ≥2 joined meshes; safe to include even with 1 (becomes a no-op assertion) |
+| `--role member` | session label | free-form tag used by group conventions; common values: `lead`, `member`, `observer`, `bot`, `oncall` |
+| `--groups "frontend:lead,..."` | group memberships | comma-separated `<group>:<role>` pairs; bare `all` joins `@all` with no role |
+| `--message-mode inbox` | delivery | `push` interrupts mid-turn (default); `inbox` buffers silently; `off` disables messages but keeps tool calls |
+| `--system-prompt "..."` | claude system prompt | overrides Claude's default. Pass a string, not a path — wrap with `$(cat …)` if you keep prompts in files |
+| `--quiet` | output | suppress the wizard and banner — clean stdout for the spawning script |
+| `-y` | consent | skips every permission prompt (claudemesh's policy gate **and** Claude's `--dangerously-skip-permissions`). Required for true headless |
+| `--` | separator | everything after is passed verbatim to `claude` |
+| `--model opus` | claude flag | example claude-side override |
+| `--resume "$LAST_SESSION_ID"` | claude flag | resume a prior Claude session inside this mesh identity |
+
+**Rule of thumb:** for any unattended spawn, the minimum is `--name + --mesh + -y + --quiet`. Add `--system-prompt` to seed task context, `--message-mode inbox` to keep the bot quiet, and `--role` + `--groups` so peers know how to address it. Drop `--quiet` when a human is watching the script's stdout.
+
+#### Trimmed templates
 
 ```bash
 # Minimal — single joined mesh, fresh agent, autonomous:
@@ -109,9 +150,9 @@ claudemesh launch --name "Mou" --mesh openclaw -y -- --resume abc123-...
 
 # Quiet, headless, system-prompt loaded — for cron / hooks:
 claudemesh launch --name "ci-bot" --mesh openclaw \
-  --system-prompt /path/to/ci-bot.md \
+  --system-prompt "$(cat ~/agents/ci-bot.md)" \
   --message-mode inbox \
-  -q -y
+  --quiet -y
 ```
 
 If any required flag is missing AND stdin is a TTY, `launch` falls back to its prompt for that single field. **In a non-TTY context (Bash tool, cron, AppleScript pipe), missing flags cause the verb to fail-closed — never silently use a default that affects identity.**
