@@ -49,46 +49,28 @@ export interface LaunchFlags {
  *
  * As of 1.24.0 the daemon owns the broker WS and feeds the MCP push-pipe
  * over IPC SSE. If the socket is absent when Claude boots its MCP shim,
- * the shim bails (no fallback). So we probe for the socket here and, if
- * missing, spawn `claudemesh daemon up --mesh <slug>` in the background,
- * waiting briefly for the socket to appear.
- *
- * Best-effort: if the daemon spawn fails, we surface the error and let
- * the launch proceed — Claude Code will print the same "daemon not
- * running" message and the user can fix it manually.
+ * the shim bails (no fallback). Delegates to the shared lifecycle helper
+ * (services/daemon/lifecycle.ts) which probes the socket properly
+ * (avoiding the stale-socket bug where existsSync was a false positive
+ * after a daemon crash), spawns under a file-lock, and polls for liveness.
  */
 async function ensureDaemonRunning(meshSlug: string, quiet: boolean): Promise<void> {
-  const { DAEMON_PATHS } = await import("~/daemon/paths.js");
-  if (existsSync(DAEMON_PATHS.SOCK_FILE)) return;
-
-  if (!quiet) render.info("starting claudemesh daemon…");
-  const { spawn } = await import("node:child_process");
-  const argv0 = process.argv[1] ?? "claudemesh";
-  let binary = argv0;
-  if (/\.ts$/.test(binary) || /node_modules|src\/entrypoints/.test(binary)) {
-    try {
-      const { execSync } = await import("node:child_process");
-      binary = execSync("which claudemesh", { encoding: "utf8" }).trim();
-    } catch { binary = "claudemesh"; }
+  const { ensureDaemonReady } = await import("~/services/daemon/lifecycle.js");
+  if (!quiet) render.info("ensuring claudemesh daemon is running…");
+  // Larger budget for `launch` — it's a one-shot flow where the user
+  // is actively waiting; cold node start + broker hello can take
+  // longer than the default 3s budget for ad-hoc verbs.
+  const res = await ensureDaemonReady({ budgetMs: 10_000, mesh: meshSlug });
+  if (res.state === "up") {
+    if (!quiet) render.ok("daemon already running");
+    return;
   }
-  const child = spawn(binary, ["daemon", "up", "--mesh", meshSlug], {
-    detached: true,
-    stdio: "ignore",
-  });
-  child.unref();
-
-  // Wait for the socket to appear. 10 s budget — covers cold node start +
-  // broker hello round-trip on slow links.
-  const start = Date.now();
-  while (Date.now() - start < 10_000) {
-    if (existsSync(DAEMON_PATHS.SOCK_FILE)) {
-      if (!quiet) render.ok("daemon ready");
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 200));
+  if (res.state === "started") {
+    if (!quiet) render.ok(`daemon ready (${res.durationMs}ms)`);
+    return;
   }
   render.warn(
-    "daemon failed to start within 10s",
+    `daemon ${res.state}${res.reason ? `: ${res.reason}` : ""}`,
     "Run `claudemesh daemon up --mesh " + meshSlug + "` manually, then re-launch.",
   );
 }

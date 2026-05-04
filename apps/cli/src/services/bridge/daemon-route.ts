@@ -1,21 +1,40 @@
 // Try forwarding a send through the local daemon's IPC. Returns null if
 // the daemon isn't running or the daemon's mesh doesn't match the target
 // mesh — the caller falls back to the bridge or cold path.
-
-import { existsSync } from "node:fs";
+//
+// Auto-recovery: when the daemon socket is missing or stale, every
+// helper here calls into the lifecycle module which probes, spawns
+// (under a lock), polls, and retries — so cold-path fallback only
+// fires if auto-spawn failed. The lifecycle module caches its
+// per-process result, so a script doing 50 sends pays the spawn cost
+// at most once.
 
 import { ipc } from "~/daemon/ipc/client.js";
-import { DAEMON_PATHS } from "~/daemon/paths.js";
+import { ensureDaemonReady } from "~/services/daemon/lifecycle.js";
+import { warnDaemonState } from "~/ui/warnings.ts";
 
 function meshQuery(mesh?: string): string {
   return mesh ? `?mesh=${encodeURIComponent(mesh)}` : "";
+}
+
+/** Common entry: ensure the daemon is reachable, emitting a one-shot
+ *  stderr warning describing what we did. Returns true when the daemon
+ *  is now reachable, false when the caller should fall back. */
+async function daemonReachable(): Promise<boolean> {
+  const res = await ensureDaemonReady();
+  // Suppress the warning under JSON / quiet at the call site —
+  // helpers here can't see those flags. JSON callers should switch
+  // to lifecycle directly. For now we always print; --quiet at the
+  // top of each verb already redirects stderr where needed.
+  warnDaemonState(res, {});
+  return res.state === "up" || res.state === "started";
 }
 
 /** Try fetching the peer list through the daemon (~1ms warm IPC).
  *  Returns null when the daemon socket isn't present so the caller can
  *  fall back to bridge / cold paths. */
 export async function tryListPeersViaDaemon(mesh?: string): Promise<unknown[] | null> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  if (!(await daemonReachable())) return null;
   try {
     const res = await ipc<{ peers?: unknown[] }>({ path: `/v1/peers${meshQuery(mesh)}`, timeoutMs: 3_000 });
     if (res.status !== 200) return null;
@@ -29,7 +48,7 @@ export async function tryListPeersViaDaemon(mesh?: string): Promise<unknown[] | 
 
 /** Try fetching mesh-published skills through the daemon. */
 export async function tryListSkillsViaDaemon(mesh?: string): Promise<unknown[] | null> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  if (!(await daemonReachable())) return null;
   try {
     const res = await ipc<{ skills?: unknown[] }>({ path: `/v1/skills${meshQuery(mesh)}`, timeoutMs: 3_000 });
     if (res.status !== 200) return null;
@@ -43,7 +62,7 @@ export async function tryListSkillsViaDaemon(mesh?: string): Promise<unknown[] |
 
 /** Try fetching one skill body through the daemon. */
 export async function tryGetSkillViaDaemon(name: string, mesh?: string): Promise<unknown | null> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  if (!(await daemonReachable())) return null;
   try {
     const res = await ipc<{ skill?: unknown }>({
       path: `/v1/skills/${encodeURIComponent(name)}${meshQuery(mesh)}`,
@@ -70,7 +89,7 @@ export type StateEntry = {
  *   - undefined when the daemon ran but the key is unset (404)
  *   - null when the daemon socket isn't present (caller falls back) */
 export async function tryGetStateViaDaemon(key: string, mesh?: string): Promise<StateEntry | undefined | null> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  if (!(await daemonReachable())) return null;
   try {
     const path = `/v1/state?key=${encodeURIComponent(key)}${mesh ? `&mesh=${encodeURIComponent(mesh)}` : ""}`;
     const res = await ipc<{ state?: StateEntry; error?: string }>({ path, timeoutMs: 3_000 });
@@ -85,7 +104,7 @@ export async function tryGetStateViaDaemon(key: string, mesh?: string): Promise<
 }
 
 export async function tryListStateViaDaemon(mesh?: string): Promise<StateEntry[] | null> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  if (!(await daemonReachable())) return null;
   try {
     const res = await ipc<{ entries?: StateEntry[] }>({ path: `/v1/state${meshQuery(mesh)}`, timeoutMs: 3_000 });
     if (res.status !== 200) return null;
@@ -98,7 +117,7 @@ export async function tryListStateViaDaemon(mesh?: string): Promise<StateEntry[]
 }
 
 export async function trySetStateViaDaemon(key: string, value: unknown, mesh?: string): Promise<boolean> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return false;
+  if (!(await daemonReachable())) return false;
   try {
     const res = await ipc<{ ok?: boolean; error?: string }>({
       method: "POST",
@@ -122,7 +141,7 @@ export type MemoryEntry = {
 };
 
 export async function tryRememberViaDaemon(content: string, tags?: string[], mesh?: string): Promise<{ id: string; mesh?: string } | null> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  if (!(await daemonReachable())) return null;
   try {
     const res = await ipc<{ id?: string; mesh?: string; error?: string }>({
       method: "POST",
@@ -136,7 +155,7 @@ export async function tryRememberViaDaemon(content: string, tags?: string[], mes
 }
 
 export async function tryRecallViaDaemon(query: string, mesh?: string): Promise<MemoryEntry[] | null> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  if (!(await daemonReachable())) return null;
   try {
     const path = `/v1/memory?q=${encodeURIComponent(query)}${mesh ? `&mesh=${encodeURIComponent(mesh)}` : ""}`;
     const res = await ipc<{ matches?: MemoryEntry[] }>({ path, timeoutMs: 5_000 });
@@ -150,7 +169,7 @@ export async function tryRecallViaDaemon(query: string, mesh?: string): Promise<
 }
 
 export async function tryForgetViaDaemon(id: string, mesh?: string): Promise<boolean> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return false;
+  if (!(await daemonReachable())) return false;
   try {
     const path = `/v1/memory/${encodeURIComponent(id)}${meshQuery(mesh)}`;
     const res = await ipc<{ ok?: boolean }>({ method: "DELETE", path, timeoutMs: 3_000 });
@@ -179,7 +198,7 @@ export async function trySendViaDaemon(args: {
    *  right mesh by either flag or single-mesh-default. */
   expectedMesh?: string;
 }): Promise<DaemonSendResult | null> {
-  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  if (!(await daemonReachable())) return null;
 
   try {
     const res = await ipc<{

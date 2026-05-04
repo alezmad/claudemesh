@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.27.3 (2026-05-04) — self-healing daemon lifecycle
+
+The CLI now auto-recovers from a dead daemon on every invocation
+instead of silently mis-routing through a stale socket.
+
+### What changed
+
+- New `services/daemon/lifecycle.ts` — single helper that probes the
+  IPC socket via `/v1/version` (instead of trusting `existsSync`),
+  cleans up stale `daemon.sock` / `daemon.pid` files, and auto-spawns
+  a detached `claudemesh daemon up` under a file-lock when the daemon
+  is missing.
+- Polls for socket liveness up to a budget (3 s for ad-hoc verbs,
+  10 s for `claudemesh launch`) before falling through.
+- Recently-failed marker (`~/.claudemesh/daemon/.spawn-failure`,
+  30 s TTL) prevents thundering-herd retries when the daemon
+  crash-loops at startup.
+- Spawn-lock (`~/.claudemesh/daemon/.spawn.lock`) ensures concurrent
+  CLI invocations share one spawn attempt instead of racing.
+- Per-process result cache — a script doing 50 sends pays the spawn
+  cost at most once, not 50 times.
+- Recursion guard via `CLAUDEMESH_INTERNAL_NO_AUTOSPAWN=1` env (set
+  on the spawned daemon's env) so nested CLI calls inside the daemon
+  process don't re-trigger spawn.
+
+### User-visible behavior
+
+- `peer list`, `send`, `state get`, etc. now restart the daemon
+  automatically when invoked while the daemon is down.
+- One-line stderr info on auto-restart:
+  `[claudemesh] info daemon restarted automatically (took 615ms)`.
+- Cold-path fallback fires only when auto-spawn fails or is
+  suppressed by the recently-failed marker; in those cases a `warn`
+  line points at the daemon log.
+
+### Bug fixed
+
+`claudemesh launch`'s `ensureDaemonRunning` previously checked only
+`existsSync(SOCK_FILE)` and returned early on a stale socket left by
+a crashed daemon — silently breaking new sessions. Now delegates to
+the lifecycle helper which probes the socket and recovers.
+
+### What's not in this patch
+
+- `--strict` and `--no-daemon` flags (deferred to D in 1.28.0).
+- Lazy-loading of cold-path code (deferred to 1.28.0).
+- Per-session IPC tokens (deferred to 1.28.0 alongside D's
+  thin-client conversion).
+
 ## 1.27.2 (2026-05-04) — skill: full-flag launch templates
 
 Documentation-only ship. `skills/claudemesh/SKILL.md` gains a canonical
