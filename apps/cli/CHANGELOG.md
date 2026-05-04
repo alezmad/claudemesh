@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.26.0 (2026-05-04) — multi-mesh daemon
+
+The daemon now attaches to **all joined meshes simultaneously** by
+default. Ambient mode (raw `claude` after `claudemesh install`) finally
+delivers what v2.0.0 promised: one daemon process, one PID per user,
+all your meshes available concurrently with no manual switching.
+
+### What changed
+
+- `claudemesh daemon up` (no `--mesh` flag) attaches to every joined
+  mesh. One `DaemonBrokerClient` per mesh, all in one process. Pass
+  `--mesh <slug>` to scope to a single mesh (legacy mode).
+- `daemon_started` log line now reports `meshes: [...]` (array) instead
+  of `mesh: <slug>` (single).
+- Outbox dispatch picks the broker via the `mesh` column added in
+  1.25.0. Legacy rows (mesh=NULL) fall back to the only broker if
+  there's exactly one; otherwise mark dead with a clear error.
+
+### IPC surface
+
+- `GET /v1/peers` aggregates across all attached meshes; each peer
+  record gains a `mesh` field. `?mesh=<slug>` narrows server-side.
+- `GET /v1/skills` aggregates similarly. `GET /v1/skills/:name` walks
+  attached meshes and returns the first match (or `?mesh=<slug>` to
+  scope).
+- `POST /v1/send` requires `mesh` field when the daemon is attached
+  to multiple meshes; auto-picks the only one in single-mesh mode.
+  Returns 400 with the attached mesh list if ambiguous.
+- `POST /v1/profile` accepts optional `mesh` field — without it,
+  applies the update to every attached mesh (presence stays
+  consistent across meshes by default).
+
+### CLI integration
+
+- `claudemesh send --mesh <slug>` forwards the mesh in the daemon
+  request body. The CLI's `expectedMesh` argument was previously
+  informational; now it's authoritative for routing.
+- `claudemesh peer list` already aggregates because the IPC endpoint
+  does — no change needed in the verb.
+- Verified end-to-end: `claudemesh send --mesh A` and
+  `claudemesh send --mesh B` from the same CLI invocation both reach
+  `outbox.status=done` with broker-issued IDs, dispatched to the
+  correct broker per row.
+
+### What this unlocks
+
+Ambient mode for users with N meshes. Run `claudemesh install` once,
+then `claude` from anywhere — channel push, slash commands, and
+resources flow through the daemon for every joined mesh
+simultaneously. No more "which mesh is the daemon attached to?"
+mental overhead.
+
 ## 1.25.0 (2026-05-04) — Sprint 4 outbound routing + ambient mode
 
 ### Daemon outbound routing (Sprint 4)

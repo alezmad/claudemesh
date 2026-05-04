@@ -93,62 +93,65 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
 
   const bus = new EventBus();
 
-  // Pick the mesh. If the user joined exactly one, use it; otherwise
-  // require --mesh. Daemon CAN start with no mesh — the outbox will
-  // accept rows but `dead` them after retries because the broker is
-  // never reachable. Better to fail fast.
+  // 1.26.0 — multi-mesh by default. With --mesh <slug>, the daemon
+  // scopes to one mesh (legacy mode). Without it, attaches to every
+  // joined mesh simultaneously so ambient mode (raw `claude`) works
+  // for all meshes with one daemon process.
   const cfg = readConfig();
-  let mesh = null as null | typeof cfg.meshes[number];
+  let meshes: Array<typeof cfg.meshes[number]>;
   if (opts.mesh) {
-    mesh = cfg.meshes.find((m) => m.slug === opts.mesh) ?? null;
-    if (!mesh) {
+    const found = cfg.meshes.find((m) => m.slug === opts.mesh);
+    if (!found) {
       process.stderr.write(`mesh not found: ${opts.mesh}\n`);
       process.stderr.write(`joined meshes: ${cfg.meshes.map((m) => m.slug).join(", ") || "(none)"}\n`);
       releaseSingletonLock();
       try { outboxDb.close(); } catch { /* ignore */ }
       return 2;
     }
-  } else if (cfg.meshes.length === 1) {
-    mesh = cfg.meshes[0]!;
+    meshes = [found];
   } else if (cfg.meshes.length === 0) {
     process.stderr.write(`no mesh joined; run \`claudemesh join <invite-url>\` first\n`);
     releaseSingletonLock();
     try { outboxDb.close(); } catch { /* ignore */ }
     return 2;
   } else {
-    process.stderr.write(`multiple meshes joined; pass --mesh <slug>\n`);
-    process.stderr.write(`available: ${cfg.meshes.map((m) => m.slug).join(", ")}\n`);
-    releaseSingletonLock();
-    try { outboxDb.close(); } catch { /* ignore */ }
-    return 2;
+    meshes = cfg.meshes;
   }
 
-  // Connect to broker (non-fatal: connection failures get retried;
-  // outbox keeps queuing during outages).
-  const broker = new DaemonBrokerClient(mesh, {
-    displayName: opts.displayName,
-    onStatusChange: (s) => {
-      process.stdout.write(JSON.stringify({
-        msg: "broker_status", status: s, mesh: mesh!.slug, ts: new Date().toISOString(),
-      }) + "\n");
-      bus.publish("broker_status", { mesh: mesh!.slug, status: s });
-    },
-    onPush: (m) => {
-      const sessionKeys = broker.getSessionKeys();
-      void handleBrokerPush(m, {
-        db: inboxDb,
-        bus,
-        meshSlug: mesh!.slug,
-        recipientSecretKeyHex: mesh!.secretKey,
-        sessionSecretKeyHex: sessionKeys?.sessionSecretKey,
-      });
-    },
-  });
-  broker.connect().catch((err) => process.stderr.write(`broker connect failed: ${String(err)}\n`));
+  // Spin up one broker per mesh. Connection failures are non-fatal:
+  // the outbox keeps queuing per-mesh and reconnect logic in
+  // DaemonBrokerClient handles reattach.
+  const brokers = new Map<string, DaemonBrokerClient>();
+  const meshConfigs = new Map<string, typeof cfg.meshes[number]>();
+  for (const mesh of meshes) {
+    meshConfigs.set(mesh.slug, mesh);
+    const broker = new DaemonBrokerClient(mesh, {
+      displayName: opts.displayName,
+      onStatusChange: (s) => {
+        process.stdout.write(JSON.stringify({
+          msg: "broker_status", status: s, mesh: mesh.slug, ts: new Date().toISOString(),
+        }) + "\n");
+        bus.publish("broker_status", { mesh: mesh.slug, status: s });
+      },
+      onPush: (m) => {
+        const sessionKeys = broker.getSessionKeys();
+        void handleBrokerPush(m, {
+          db: inboxDb,
+          bus,
+          meshSlug: mesh.slug,
+          recipientSecretKeyHex: mesh.secretKey,
+          sessionSecretKeyHex: sessionKeys?.sessionSecretKey,
+        });
+      },
+    });
+    broker.connect().catch((err) => process.stderr.write(`broker connect failed for ${mesh.slug}: ${String(err)}\n`));
+    brokers.set(mesh.slug, broker);
+  }
 
-  // Start the drain worker.
+  // Start the drain worker. With multi-mesh, drain dispatches each
+  // outbox row to its mesh's broker via the `mesh` column.
   let drain: DrainHandle | null = null;
-  drain = startDrainWorker({ db: outboxDb, broker });
+  drain = startDrainWorker({ db: outboxDb, brokers });
 
   const ipc = startIpcServer({
     localToken,
@@ -157,12 +160,9 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
     outboxDb,
     inboxDb,
     bus,
-    broker,
+    brokers,
+    meshConfigs,
     onPendingInserted: () => drain?.wake(),
-    // Sprint 4: IPC accept-send needs these to resolve targets and
-    // encrypt at accept time so the drain worker is just a forwarder.
-    meshSecretKey: mesh.secretKey,
-    meshSlug: mesh.slug,
   });
 
   try {
@@ -178,7 +178,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
     pid: process.pid,
     sock: DAEMON_PATHS.SOCK_FILE,
     tcp: tcpEnabled ? `127.0.0.1:47823` : null,
-    mesh: mesh.slug,
+    meshes: meshes.map((m) => m.slug),
     ts: new Date().toISOString(),
   }) + "\n");
 
@@ -188,7 +188,9 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
     shuttingDown = true;
     process.stdout.write(JSON.stringify({ msg: "daemon_shutdown", signal: sig, ts: new Date().toISOString() }) + "\n");
     if (drain) await drain.close();
-    await broker.close();
+    for (const b of brokers.values()) {
+      try { await b.close(); } catch { /* ignore */ }
+    }
     await ipc.close();
     try { outboxDb.close(); } catch { /* ignore */ }
     try { inboxDb.close(); }  catch { /* ignore */ }

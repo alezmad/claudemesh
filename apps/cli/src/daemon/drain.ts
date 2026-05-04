@@ -36,9 +36,10 @@ interface PendingRow {
 
 export interface DrainOptions {
   db: SqliteDb;
-  broker: DaemonBrokerClient;
-  /** Stable peer-target the daemon impersonates for now. Sprint 4 routes
-   *  this from the per-row destination_kind/destination_ref. */
+  /** v1.26.0: per-mesh broker map. Drain dispatches each row to the
+   *  broker keyed by its `mesh` column. Single-mesh daemons pass a
+   *  Map of size 1; multi-mesh daemons pass one entry per joined mesh. */
+  brokers: Map<string, DaemonBrokerClient>;
   log?: (level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -100,6 +101,21 @@ async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"
     if (markInflight(opts.db, row.id, now) === 0) continue; // raced with another drainer
     const fpHex = bufferToHex(row.request_fingerprint);
 
+    // v1.26.0: pick the broker keyed by the row's mesh. Legacy rows
+    // (mesh=NULL) fall back to the only broker if there's exactly one;
+    // otherwise mark dead because we don't know where to send them.
+    let broker: DaemonBrokerClient | undefined;
+    if (row.mesh) {
+      broker = opts.brokers.get(row.mesh);
+    } else if (opts.brokers.size === 1) {
+      broker = opts.brokers.values().next().value;
+    }
+    if (!broker) {
+      log("warn", "drain_no_broker_for_mesh", { id: row.id, mesh: row.mesh ?? "(null)" });
+      markDead(opts.db, row.id, `no_broker_for_mesh:${row.mesh ?? "null"}`);
+      continue;
+    }
+
     // Sprint 4: use the row's resolved target/ciphertext if present.
     // Legacy v0.9.0 rows (NULL on these columns) fall back to the
     // broadcast smoke-test shape so existing in-flight rows still drain.
@@ -121,7 +137,7 @@ async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"
 
     let res;
     try {
-      res = await opts.broker.send({
+      res = await broker.send({
         targetSpec,
         priority,
         nonce,

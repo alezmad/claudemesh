@@ -90,6 +90,11 @@ export async function trySendViaDaemon(args: {
         message: args.message,
         priority: args.priority,
         ...(args.idempotencyKey ? { client_message_id: args.idempotencyKey } : {}),
+        // v1.26.0 multi-mesh: forward the caller's chosen mesh so the
+        // daemon picks the right broker. Omitting it on a single-mesh
+        // daemon still works (auto-pick); omitting it on a multi-mesh
+        // daemon returns 400 with the attached list.
+        ...(args.expectedMesh ? { mesh: args.expectedMesh } : {}),
       },
     });
 

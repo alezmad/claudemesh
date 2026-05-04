@@ -38,14 +38,12 @@ export interface IpcServerOptions {
   inboxDb?: SqliteDb;
   /** Event bus backing /v1/events SSE stream. */
   bus?: EventBus;
-  /** Broker client (for peers/profile passthrough). */
-  broker?: DaemonBrokerClient;
+  /** v1.26.0: per-mesh broker map for peers/skills/profile passthrough. */
+  brokers?: Map<string, DaemonBrokerClient>;
+  /** v1.26.0: per-mesh JoinedMesh entries (carry pubkey + secretKey for crypto). */
+  meshConfigs?: Map<string, { slug: string; pubkey: string; secretKey: string }>;
   /** Notify when a new outbox row was inserted (drains can wake). */
   onPendingInserted?: () => void;
-  /** Mesh secret key (hex) used to encrypt outbound DMs at accept time. */
-  meshSecretKey?: string;
-  /** Mesh slug attached to this daemon — stamped on outbox rows for the drain. */
-  meshSlug?: string;
 }
 
 export interface IpcServerHandle {
@@ -66,10 +64,9 @@ export function startIpcServer(opts: IpcServerOptions): IpcServerHandle {
     outboxDb: opts.outboxDb,
     inboxDb: opts.inboxDb,
     bus: opts.bus,
-    broker: opts.broker,
+    brokers: opts.brokers,
+    meshConfigs: opts.meshConfigs,
     onPendingInserted: opts.onPendingInserted,
-    meshSecretKey: opts.meshSecretKey,
-    meshSlug: opts.meshSlug,
   });
 
   // --- UDS listener -------------------------------------------------------
@@ -127,10 +124,9 @@ function makeHandler(opts: {
   outboxDb?: SqliteDb;
   inboxDb?: SqliteDb;
   bus?: EventBus;
-  broker?: DaemonBrokerClient;
+  brokers?: Map<string, DaemonBrokerClient>;
+  meshConfigs?: Map<string, { slug: string; pubkey: string; secretKey: string }>;
   onPendingInserted?: () => void;
-  meshSecretKey?: string;
-  meshSlug?: string;
 }) {
   const tokenBytes = Buffer.from(opts.localToken, "utf8");
 
@@ -202,10 +198,26 @@ function makeHandler(opts: {
     }
 
     if (req.method === "GET" && url.pathname === "/v1/peers") {
-      if (!opts.broker) { respond(res, 503, { error: "broker not initialised" }); return; }
+      if (!opts.brokers || opts.brokers.size === 0) {
+        respond(res, 503, { error: "broker not initialised" });
+        return;
+      }
+      const filterMesh = url.searchParams.get("mesh") ?? undefined;
       try {
-        const peers = await opts.broker.listPeers();
-        respond(res, 200, { peers });
+        // Aggregate across all attached meshes; each peer record gets a
+        // `mesh` field so the caller can scope client-side. A single
+        // ?mesh=<slug> filter narrows the set server-side.
+        const all: Array<Record<string, unknown> & { mesh: string }> = [];
+        for (const [slug, b] of opts.brokers.entries()) {
+          if (filterMesh && filterMesh !== slug) continue;
+          try {
+            const peers = await b.listPeers();
+            for (const p of peers) all.push({ ...(p as Record<string, unknown>), mesh: slug });
+          } catch (e) {
+            opts.log("warn", "ipc_peers_broker_failed", { mesh: slug, err: String(e) });
+          }
+        }
+        respond(res, 200, { peers: all });
       } catch (e) {
         respond(res, 502, { error: "broker_unreachable", detail: String(e) });
       }
@@ -213,11 +225,24 @@ function makeHandler(opts: {
     }
 
     if (req.method === "GET" && url.pathname === "/v1/skills") {
-      if (!opts.broker) { respond(res, 503, { error: "broker not initialised" }); return; }
+      if (!opts.brokers || opts.brokers.size === 0) {
+        respond(res, 503, { error: "broker not initialised" });
+        return;
+      }
       const query = url.searchParams.get("query") ?? undefined;
+      const filterMesh = url.searchParams.get("mesh") ?? undefined;
       try {
-        const skills = await opts.broker.listSkills(query);
-        respond(res, 200, { skills });
+        const all: Array<Record<string, unknown> & { mesh: string }> = [];
+        for (const [slug, b] of opts.brokers.entries()) {
+          if (filterMesh && filterMesh !== slug) continue;
+          try {
+            const skills = await b.listSkills(query);
+            for (const s of skills) all.push({ ...(s as Record<string, unknown>), mesh: slug });
+          } catch (e) {
+            opts.log("warn", "ipc_skills_broker_failed", { mesh: slug, err: String(e) });
+          }
+        }
+        respond(res, 200, { skills: all });
       } catch (e) {
         respond(res, 502, { error: "broker_unreachable", detail: String(e) });
       }
@@ -225,13 +250,22 @@ function makeHandler(opts: {
     }
 
     if (req.method === "GET" && url.pathname.startsWith("/v1/skills/")) {
-      if (!opts.broker) { respond(res, 503, { error: "broker not initialised" }); return; }
+      if (!opts.brokers || opts.brokers.size === 0) {
+        respond(res, 503, { error: "broker not initialised" });
+        return;
+      }
       const name = decodeURIComponent(url.pathname.slice("/v1/skills/".length));
       if (!name) { respond(res, 400, { error: "missing skill name" }); return; }
+      const filterMesh = url.searchParams.get("mesh") ?? undefined;
       try {
-        const skill = await opts.broker.getSkill(name);
-        if (!skill) { respond(res, 404, { error: "skill_not_found", name }); return; }
-        respond(res, 200, { skill });
+        // First mesh that has the skill wins. With ?mesh=<slug>, only that
+        // mesh is queried.
+        for (const [slug, b] of opts.brokers.entries()) {
+          if (filterMesh && filterMesh !== slug) continue;
+          const skill = await b.getSkill(name).catch(() => null);
+          if (skill) { respond(res, 200, { skill: { ...skill, mesh: slug } }); return; }
+        }
+        respond(res, 404, { error: "skill_not_found", name });
       } catch (e) {
         respond(res, 502, { error: "broker_unreachable", detail: String(e) });
       }
@@ -239,22 +273,36 @@ function makeHandler(opts: {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/profile") {
-      if (!opts.broker) { respond(res, 503, { error: "broker not initialised" }); return; }
+      if (!opts.brokers || opts.brokers.size === 0) {
+        respond(res, 503, { error: "broker not initialised" });
+        return;
+      }
       try {
         const body = await readJsonBody(req, 16 * 1024) as Record<string, unknown> | null;
         if (!body) { respond(res, 400, { error: "expected JSON object" }); return; }
+        // v1.26.0: profile updates apply to a specific mesh if `mesh` is
+        // present in the body or query, otherwise broadcast to all attached
+        // meshes (presence is per-mesh, but most users want consistent
+        // presence across all of theirs).
+        const requested = (typeof body.mesh === "string" ? body.mesh : url.searchParams.get("mesh")) || null;
+        const targets = requested
+          ? [opts.brokers.get(requested)].filter(Boolean) as DaemonBrokerClient[]
+          : [...opts.brokers.values()];
+        if (targets.length === 0) { respond(res, 404, { error: "mesh_not_attached", mesh: requested }); return; }
         const updates: Record<string, unknown> = {};
-        if (typeof body.summary === "string") opts.broker.setSummary(body.summary);
-        if (body.status === "idle" || body.status === "working" || body.status === "dnd") opts.broker.setStatus(body.status);
-        if (typeof body.visible === "boolean") opts.broker.setVisible(body.visible);
-        const profile: { avatar?: string; title?: string; bio?: string; capabilities?: string[] } = {};
-        if (typeof body.avatar === "string") profile.avatar = body.avatar;
-        if (typeof body.title === "string") profile.title = body.title;
-        if (typeof body.bio === "string") profile.bio = body.bio;
-        if (Array.isArray(body.capabilities)) profile.capabilities = body.capabilities.filter((c) => typeof c === "string") as string[];
-        if (Object.keys(profile).length > 0) opts.broker.setProfile(profile);
+        for (const b of targets) {
+          if (typeof body.summary === "string") b.setSummary(body.summary);
+          if (body.status === "idle" || body.status === "working" || body.status === "dnd") b.setStatus(body.status);
+          if (typeof body.visible === "boolean") b.setVisible(body.visible);
+          const profile: { avatar?: string; title?: string; bio?: string; capabilities?: string[] } = {};
+          if (typeof body.avatar === "string") profile.avatar = body.avatar;
+          if (typeof body.title === "string") profile.title = body.title;
+          if (typeof body.bio === "string") profile.bio = body.bio;
+          if (Array.isArray(body.capabilities)) profile.capabilities = body.capabilities.filter((c) => typeof c === "string") as string[];
+          if (Object.keys(profile).length > 0) b.setProfile(profile);
+        }
         Object.assign(updates, body);
-        respond(res, 200, { ok: true, applied: Object.keys(updates) });
+        respond(res, 200, { ok: true, applied: Object.keys(updates), meshes: requested ? [requested] : [...opts.brokers.keys()] });
       } catch (e) {
         respond(res, 400, { error: String(e) });
       }
@@ -371,12 +419,31 @@ function makeHandler(opts: {
           respond(res, 400, { error: parsed.error });
           return;
         }
-        // Sprint 4: resolve `to` → broker-format target_spec and encrypt at
-        // accept time, then store ciphertext+nonce on the outbox row. This
-        // crystallises routing so the drain worker is just a forwarder.
-        if (opts.broker && opts.meshSecretKey) {
+        // v1.26.0: pick the mesh. Order of preference:
+        //   1. Explicit `mesh` field in body
+        //   2. Single attached mesh — auto-pick
+        //   3. Bail with 400 — caller must disambiguate
+        if (opts.brokers && opts.brokers.size > 0 && opts.meshConfigs) {
+          let chosenSlug: string | null = parsed.req.mesh ?? null;
+          if (!chosenSlug && opts.brokers.size === 1) {
+            chosenSlug = opts.brokers.keys().next().value as string;
+          }
+          if (!chosenSlug) {
+            respond(res, 400, {
+              error: "mesh_required",
+              detail: `daemon attached to ${opts.brokers.size} meshes; pass 'mesh' in request body`,
+              attached: [...opts.brokers.keys()],
+            });
+            return;
+          }
+          const broker = opts.brokers.get(chosenSlug);
+          const meshCfg = opts.meshConfigs.get(chosenSlug);
+          if (!broker || !meshCfg) {
+            respond(res, 404, { error: "mesh_not_attached", mesh: chosenSlug });
+            return;
+          }
           try {
-            const routed = await resolveAndEncrypt(parsed.req, opts.broker, opts.meshSecretKey, opts.meshSlug ?? null);
+            const routed = await resolveAndEncrypt(parsed.req, broker, meshCfg.secretKey, chosenSlug);
             parsed.req.target_spec = routed.target_spec;
             parsed.req.ciphertext  = routed.ciphertext;
             parsed.req.nonce       = routed.nonce;
@@ -490,6 +557,8 @@ function parseSendRequest(body: unknown, idempotencyHeader: string | string[] | 
 
   const reply_to_id = typeof b.reply_to_id === "string" ? b.reply_to_id : undefined;
 
+  const mesh = typeof b.mesh === "string" ? b.mesh.trim() : undefined;
+
   return {
     req: {
       to,
@@ -500,6 +569,7 @@ function parseSendRequest(body: unknown, idempotencyHeader: string | string[] | 
       client_message_id,
       destination_kind,
       destination_ref,
+      mesh,
     },
   };
 }
