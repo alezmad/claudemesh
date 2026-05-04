@@ -657,6 +657,20 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   //     register it with the daemon. The token's path is exposed to
   //     the spawned claude (and all its descendants) via env so
   //     CLI invocations from inside the session auto-attribute to it.
+  //
+  //     1.30.0: also mint an ephemeral ed25519 session keypair and a
+  //     parent-vouched attestation. The daemon uses these to open a
+  //     long-lived broker WebSocket per session (presence row keyed on
+  //     the session pubkey, member_id from the parent), so sibling
+  //     sessions in the same mesh see each other in `peer list`.
+  //
+  //     Session-id resolution: 1.29.0 referenced `claudeSessionId`
+  //     before its `const` declaration further down the file, hitting
+  //     the TDZ → ReferenceError swallowed by the surrounding catch.
+  //     The IPC registration has been silently failing every launch
+  //     since 1.29.0. Hoist the declaration up so it actually runs.
+  const isResume = args.resume !== null || args.continueSession;
+  const claudeSessionId = isResume ? undefined : randomUUID();
   let sessionTokenFilePath: string | null = null;
   let sessionTokenForCleanup: string | null = null;
   try {
@@ -664,6 +678,45 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     const minted = mintSessionToken(tmpDir);
     sessionTokenFilePath = minted.filePath;
     sessionTokenForCleanup = minted.token;
+
+    // Per-session ephemeral keypair + parent attestation (1.30.0+).
+    // Behind CLAUDEMESH_SESSION_PRESENCE: the daemon ignores the
+    // presence material when the flag is off, so sending it always is
+    // forward-compatible.
+    let presencePayload: {
+      session_pubkey: string;
+      session_secret_key: string;
+      parent_attestation: {
+        session_pubkey: string;
+        parent_member_pubkey: string;
+        expires_at: number;
+        signature: string;
+      };
+    } | undefined;
+    try {
+      const { generateKeypair } = await import("~/services/crypto/facade.js");
+      const { signParentAttestation } = await import("~/services/broker/session-hello-sig.js");
+      const sessionKp = await generateKeypair();
+      const att = await signParentAttestation({
+        parentMemberPubkey: mesh.pubkey,
+        parentSecretKey: mesh.secretKey,
+        sessionPubkey: sessionKp.publicKey,
+      });
+      presencePayload = {
+        session_pubkey: sessionKp.publicKey,
+        session_secret_key: sessionKp.secretKey,
+        parent_attestation: {
+          session_pubkey: att.sessionPubkey,
+          parent_member_pubkey: att.parentMemberPubkey,
+          expires_at: att.expiresAt,
+          signature: att.signature,
+        },
+      };
+    } catch {
+      // Keypair / attestation failure — proceed without per-session
+      // presence. The session still registers; only the broker-side
+      // presence row is skipped.
+    }
 
     // Register with the daemon. Best-effort: a daemon failure here
     // means the session falls back to user-level scope, which is fine.
@@ -682,6 +735,7 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
         cwd: process.cwd(),
         ...(role ? { role } : {}),
         ...(parsedGroups.length > 0 ? { groups: parsedGroups.map((g) => `@${g.name}${g.role ? `:${g.role}` : ""}`) } : {}),
+        ...(presencePayload ? { presence: presencePayload } : {}),
       },
     }).catch(() => null);
 
@@ -769,10 +823,8 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   // passes -y / --yes. Without it, claudemesh tools still work because
   // `claudemesh install` pre-approves them via allowedTools in settings.json.
   // This keeps permissions tight for multi-person meshes.
-  // Session identity: --resume reuses existing session, otherwise generate new.
-  // When resuming, Claude Code reuses the session ID so the mesh peer identity persists.
-  const isResume = args.resume !== null || args.continueSession;
-  const claudeSessionId = isResume ? undefined : randomUUID();
+  // Session identity: claudeSessionId was generated above (4b) so the
+  // session-token registration could include it. Reuse here.
 
   const claudeArgs = [
     "--dangerously-load-development-channels",
