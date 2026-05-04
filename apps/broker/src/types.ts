@@ -224,6 +224,26 @@ export interface WSSetStatusMessage {
   status: PeerStatus;
 }
 
+/**
+ * Client → broker: confirm receipt of a previously pushed envelope so the
+ * broker can mark the message_queue row delivered.
+ *
+ * v2 agentic-comms (M1): pairs with the two-phase claim/lease introduced
+ * in `drainForMember`. Without this ack, the lease expires after 30s and
+ * the message is re-claimed and re-pushed (at-least-once retry).
+ *
+ * Either id is accepted; daemons that track inbox dedupe by clientMessageId
+ * should send that one. brokerMessageId is the row primary key, useful when
+ * the original send didn't carry a client_message_id (legacy traffic).
+ */
+export interface WSClientAckMessage {
+  type: "client_ack";
+  /** Original caller-supplied idempotency id from the `send` envelope. */
+  clientMessageId?: string;
+  /** Broker-side row id (the `messageId` field on the inbound `push`). */
+  brokerMessageId?: string;
+}
+
 /** Client → broker: request list of connected peers in the same mesh. */
 export interface WSListPeersMessage {
   type: "list_peers";
@@ -518,6 +538,8 @@ export interface WSPeersListMessage {
   type: "peers_list";
   peers: Array<{
     pubkey: string;
+    /** Stable member pubkey — present on M1+ broker responses. */
+    memberPubkey?: string;
     displayName: string;
     status: PeerStatus;
     summary: string | null;
@@ -525,6 +547,10 @@ export interface WSPeersListMessage {
     sessionId: string;
     connectedAt: string;
     cwd?: string;
+    /** v2 agentic-comms (M1): typed connection role. CLI uses this to
+     *  filter control-plane daemons out of user-facing peer lists.
+     *  Optional for clients talking to a pre-M1 broker. */
+    role?: "control-plane" | "session" | "service";
     hostname?: string;
     peerType?: "ai" | "human" | "connector";
     channel?: string;
@@ -1417,6 +1443,7 @@ export type WSClientMessage =
   | WSHelloMessage
   | WSSessionHelloMessage
   | WSSendMessage
+  | WSClientAckMessage
   | WSSetStatusMessage
   | WSListPeersMessage
   | WSSetSummaryMessage

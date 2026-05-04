@@ -49,6 +49,7 @@ import {
   listFiles,
   listPeersInMesh,
   listState,
+  markDelivered,
   listTasks,
   queueMessage,
   recallMemory,
@@ -546,6 +547,7 @@ async function maybePushQueuedMessages(
     conn.sessionPubkey ?? undefined,
     excludeSenderSessionPubkey,
     conn.groups.map((g) => g.name),
+    presenceId,
   );
   log.info("maybePush", {
     presence_id: presenceId,
@@ -1772,6 +1774,11 @@ async function handleHello(
     pid: hello.pid,
     cwd: hello.cwd,
     groups: initialGroups,
+    // v2 agentic-comms (M1): the regular member-keyed `hello` path is
+    // used by long-lived control-plane connections (claudemesh daemon,
+    // dashboard, automation). Per-Claude-Code sessions go through
+    // `session_hello` and get role='session'.
+    role: "control-plane",
   });
   const effectiveDisplayName = hello.displayName || member.displayName;
   connections.set(presenceId, {
@@ -1796,6 +1803,7 @@ async function handleHello(
     pubkey: hello.pubkey,
     groups: initialGroups,
     restored: !!saved,
+    role: "control-plane",
   });
   log.info("ws hello", {
     mesh_id: hello.meshId,
@@ -1993,6 +2001,9 @@ async function handleSessionHello(
     pid: hello.pid,
     cwd: hello.cwd,
     groups: initialGroups,
+    // v2 agentic-comms (M1): per-Claude-Code session WS — these are the
+    // user-facing peers shown in `claudemesh peer list`.
+    role: "session",
   });
   const effectiveDisplayName = hello.displayName || member.displayName;
   connections.set(presenceId, {
@@ -2018,6 +2029,7 @@ async function handleSessionHello(
     session_pubkey: hello.sessionPubkey,
     groups: initialGroups,
     via: "session_hello",
+    role: "session",
   });
   log.info("ws session_hello", {
     mesh_id: hello.meshId,
@@ -2567,6 +2579,39 @@ function handleConnection(ws: WebSocket): void {
         case "send":
           await handleSend(conn, msg);
           break;
+        case "client_ack": {
+          // v2 agentic-comms (M1): close out a previously pushed message.
+          // Lookup is scoped to (mesh_id, recipient pubkey) so a peer can
+          // only ack messages addressed to itself.
+          const ack = msg as Extract<WSClientMessage, { type: "client_ack" }>;
+          if (!ack.clientMessageId && !ack.brokerMessageId) {
+            // Nothing to do; don't error — the daemon may speculatively
+            // ack and we'd rather be lenient than break a CLI release.
+            break;
+          }
+          try {
+            const n = await markDelivered({
+              meshId: conn.meshId,
+              recipientMemberId: conn.memberId,
+              recipientMemberPubkey: conn.memberPubkey,
+              recipientSessionPubkey: conn.sessionPubkey ?? null,
+              clientMessageId: ack.clientMessageId ?? null,
+              brokerMessageId: ack.brokerMessageId ?? null,
+            });
+            log.debug("ws client_ack", {
+              presence_id: presenceId,
+              client_message_id: ack.clientMessageId,
+              broker_message_id: ack.brokerMessageId,
+              marked: n,
+            });
+          } catch (e) {
+            log.warn("ws client_ack failed", {
+              presence_id: presenceId,
+              error: e instanceof Error ? e.message : String(e),
+            });
+          }
+          break;
+        }
         case "set_status":
           await writeStatus(presenceId, msg.status, "manual", new Date());
           log.info("ws set_status", {
@@ -2604,6 +2649,10 @@ function handleConnection(ws: WebSocket): void {
                 sessionId: p.sessionId,
                 connectedAt: p.connectedAt.toISOString(),
                 cwd: pc?.cwd ?? p.cwd,
+                // v2 agentic-comms (M1): typed connection role. CLI uses
+                // this to hide control-plane daemons from user-facing
+                // peer lists (filter swap from peerType happens CLI-side).
+                role: p.role,
                 ...(pc?.hostname ? { hostname: pc.hostname } : {}),
                 ...(pc?.peerType ? { peerType: pc.peerType } : {}),
                 ...(pc?.channel ? { channel: pc.channel } : {}),
