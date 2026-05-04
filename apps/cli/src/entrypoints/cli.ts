@@ -93,6 +93,10 @@ Peer (resource form, recommended)
 
 Message  (resource form)
   claudemesh message send <to> <m> send a message            (alias: send)
+                                   flags: [--priority now|next|low] [--mesh <slug>]
+                                          [--self] (allow targeting your own member/session pubkey;
+                                          fans out to every sibling session of your member)
+                                          [--json] (machine-readable result)
   claudemesh message inbox         drain pending              (alias: inbox)
   claudemesh message status <id>   delivery status            (alias: msg-status)
 
@@ -388,7 +392,7 @@ async function main(): Promise<void> {
     case "bans": { const { runBans } = await import("~/commands/ban.js"); process.exit(await runBans({ mesh: flags.mesh as string, json: !!flags.json })); break; }
 
     // Messaging
-    case "peers": { const { runPeers } = await import("~/commands/peers.js"); await runPeers({ mesh: flags.mesh as string, json: flags.json as boolean | string | undefined }); break; }
+    case "peers": { const { runPeers } = await import("~/commands/peers.js"); await runPeers({ mesh: flags.mesh as string, json: flags.json as boolean | string | undefined, all: !!flags.all }); break; }
     case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self }, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
     case "inbox": { const { runInbox } = await import("~/commands/inbox.js"); await runInbox({ json: !!flags.json }); break; }
     case "state": {
@@ -510,7 +514,7 @@ async function main(): Promise<void> {
 
     case "peer": {
       const sub = positionals[0];
-      const f = { mesh: flags.mesh as string, json: flags.json as boolean | string | undefined };
+      const f = { mesh: flags.mesh as string, json: flags.json as boolean | string | undefined, all: !!flags.all };
       const id = positionals[1] ?? "";
       if (sub === "list") { const { runPeers } = await import("~/commands/peers.js"); await runPeers(f); }
       else if (sub === "kick") { const { runKick } = await import("~/commands/kick.js"); process.exit(await runKick(id, { mesh: flags.mesh as string, stale: flags.stale as string, all: !!flags.all })); }
@@ -525,7 +529,7 @@ async function main(): Promise<void> {
 
     case "message": {
       const sub = positionals[0];
-      if (sub === "send") { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json }, positionals[1] ?? "", positionals.slice(2).join(" ")); }
+      if (sub === "send") { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self }, positionals[1] ?? "", positionals.slice(2).join(" ")); }
       else if (sub === "inbox") { const { runInbox } = await import("~/commands/inbox.js"); await runInbox({ json: !!flags.json }); }
       else if (sub === "status") { const { runMsgStatus } = await import("~/commands/broker-actions.js"); process.exit(await runMsgStatus(positionals[1], { mesh: flags.mesh as string, json: !!flags.json })); }
       else { console.error("Usage: claudemesh message <send|inbox|status>"); process.exit(EXIT.INVALID_ARGS); }

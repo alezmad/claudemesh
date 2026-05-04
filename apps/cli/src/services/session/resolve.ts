@@ -28,6 +28,14 @@ export interface ResolvedSession {
   cwd?: string;
   role?: string;
   groups?: string[];
+  /** 1.32.0+: per-launch presence material lifted from the daemon's
+   * registry so callers (peer list, whoami) can identify themselves
+   * in the broker's peer list without re-handshaking a fresh WS. */
+  presence?: {
+    sessionPubkey: string;
+    sessionSecretKey: string;
+    parentAttestation?: unknown;
+  };
 }
 
 let cached: ResolvedSession | null | undefined = undefined;

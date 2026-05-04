@@ -1,5 +1,75 @@
 # Changelog
 
+## 1.32.0 (2026-05-04) — multi-session UX bundle
+
+Nine UX bugs surfaced from a real two-session interconnect smoke test
+shipped together as a single release.
+
+### Self-identity is now visible
+
+- **`peer list` includes the calling session as a row**, marked
+  `(this session)`, sorted to the top. The daemon path now resolves the
+  caller's session pubkey via `/v1/sessions/me` so `isThisSession`
+  is set correctly even when running warm. (Previously the row was
+  present but indistinguishable, and the daemon path always set
+  `isThisSession=false`.)
+- **`whoami` shows in-session identity** when run inside a launched
+  session: session pubkey (truncated + full), session id, mesh, role,
+  groups, cwd, pid. Previously whoami only reported web sign-in state.
+
+### Sibling-session disambiguation
+
+- **`peer list` rows now carry a `sid:<short>` tag** so two
+  visually-identical rows (same name, same cwd) can be told apart at
+  a glance.
+- **JSON output already had `sessionId`**; the human renderer
+  surfaces a short prefix.
+
+### Daemon presence hidden by default
+
+- `claudemesh-daemon` rows used to clutter `peer list` and confused
+  users into thinking the daemon counted as a peer. They're now hidden
+  in the human renderer; `--all` opts back in for debugging. The header
+  line shows `(N peers, M daemon hidden — use --all)` when applicable.
+  JSON output is unchanged.
+
+### `--self` flag works end-to-end
+
+- **Argv parser bug fixed.** `--self` was being parsed greedily — every
+  `--flag` consumed the next non-`-` arg as its value, so
+  `claudemesh send --self <pubkey> "msg"` ate the pubkey as the value
+  of `--self` and left zero positionals. A `BOOLEAN_FLAGS` set in
+  `cli/argv.ts` now lists known no-value switches (`self`, `json`,
+  `all`, `quiet`, `yes`, `strict`, `force`, `dry-run`, etc.).
+  `--flag=value` form also recognized for explicit overrides.
+- **`message send` subcommand now passes `self`** through to `runSend`
+  (only the legacy `send` form had been wired).
+- **Help text updated** to list `--self` (and `--priority`, `--mesh`,
+  `--json`) under `claudemesh message send`.
+
+### Member-pubkey fan-out
+
+- **Sending to your own member pubkey with `--self` now fans out** to
+  every connected sibling session of your member. Previously the broker
+  drain query at `apps/broker/src/broker.ts:2408` matched
+  `target_spec` only against full session pubkeys, so member-pubkey
+  sends queued successfully but no recipient drain ever fetched. The
+  CLI now resolves the member pubkey to all sibling session pubkeys
+  via the peer list and sends one message per recipient. Output reports
+  `fanned out to N sibling sessions` with per-recipient ack/error.
+
+### Broker welcome at launch
+
+- After the launch banner, a single line confirms WS connectivity:
+
+  ```
+  ● broker connected · 6 peers online · 0 unread
+  ```
+
+  Hits `/v1/health` for broker WS state, `peer list` (daemon-cached)
+  for peer count, and `/v1/inbox` for unread. All best-effort — falls
+  back gracefully if any call fails so launch never blocks on it.
+
 ## 1.31.6 (2026-05-04) — hex-prefix sends actually deliver now
 
 `claudemesh send <16-hex-prefix> "..."` would acknowledge with `sent

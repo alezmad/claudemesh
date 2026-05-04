@@ -21,6 +21,12 @@ export interface PeersFlags {
   mesh?: string;
   /** `true`/`undefined` = full record; comma-separated string = field projection. */
   json?: boolean | string;
+  /** When false (default), hide claudemesh-daemon presence rows from the
+   * human renderer — they're infrastructure, not interactive peers, and
+   * confused users into thinking the daemon counted as a "peer". The
+   * JSON output still includes them so scripts that need a full inventory
+   * can opt in via --all (or just consume JSON). */
+  all?: boolean;
 }
 
 interface PeerRecord {
@@ -29,6 +35,10 @@ interface PeerRecord {
    * this with a peer, they're talking to the same person across all
    * their open sessions. */
   memberPubkey?: string;
+  /** Per-launch session identifier (uuid). Used by the renderer to
+   * disambiguate sibling sessions of the same member that otherwise
+   * look identical (same name, same cwd). */
+  sessionId?: string;
   displayName: string;
   status?: string;
   summary?: string;
@@ -82,6 +92,20 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
   const joined = config.meshes.find((m) => m.slug === slug);
   const selfMemberPubkey = joined?.pubkey ?? null;
 
+  // Resolve our own session pubkey via the daemon's /v1/sessions/me when
+  // we're inside a launched session. Without this, isThisSession can't
+  // be set on the daemon path (only on the cold path where a fresh WS
+  // creates the keypair), and the renderer can't tell the user which
+  // row in `peer list` is them.
+  let selfSessionPubkey: string | null = null;
+  try {
+    const { getSessionInfo } = await import("~/services/session/resolve.js");
+    const sess = await getSessionInfo();
+    if (sess && sess.mesh === slug && sess.presence?.sessionPubkey) {
+      selfSessionPubkey = sess.presence.sessionPubkey;
+    }
+  } catch { /* not in a launched session; isThisSession stays false */ }
+
   // Daemon path — preferred when running. Same routing pattern as send.ts:
   // ~1 ms IPC round-trip; broker WS already warm in the daemon. The
   // lifecycle helper inside tryListPeersViaDaemon auto-spawns the
@@ -91,7 +115,7 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
     const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
     const dr = await tryListPeersViaDaemon();
     if (dr !== null) {
-      return dr.map((p) => annotateSelf(p as PeerRecord, selfMemberPubkey, null));
+      return dr.map((p) => annotateSelf(p as PeerRecord, selfMemberPubkey, selfSessionPubkey));
     }
   } catch { /* daemon route helper not available; fall through */ }
 
@@ -184,14 +208,36 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
         continue;
       }
 
-      render.section(`peers on ${slug} (${peers.length})`);
+      // Hide claudemesh-daemon rows by default — they're infrastructure
+      // (the daemon's own member-keyed presence), not interactive peers,
+      // and they confused users into thinking the daemon counted as a
+      // separate peer. --all opts back in for debugging.
+      const visible = flags.all
+        ? peers
+        : peers.filter((p) => p.channel !== "claudemesh-daemon");
 
-      if (peers.length === 0) {
+      // Sort: this-session first, then your-other-sessions, then real
+      // peers. Within each group, idle/working ahead of dnd. Inside the
+      // groups, leave broker order. The point is: when you run peer
+      // list, the row that's YOU is row 1.
+      const sorted = visible.slice().sort((a, b) => {
+        const score = (p: PeerRecord) =>
+          p.isThisSession ? 0 : p.isSelf ? 1 : 2;
+        return score(a) - score(b);
+      });
+
+      const hiddenDaemons = peers.length - visible.length;
+      const header = hiddenDaemons > 0
+        ? `peers on ${slug} (${sorted.length}, ${hiddenDaemons} daemon hidden — use --all)`
+        : `peers on ${slug} (${sorted.length})`;
+      render.section(header);
+
+      if (sorted.length === 0) {
         render.info(dim("  (no peers connected)"));
         continue;
       }
 
-      for (const p of peers) {
+      for (const p of sorted) {
         const statusDot = p.status === "working" ? yellow("●") : green("●");
         const name = bold(p.displayName);
         const meta: string[] = [];
@@ -201,6 +247,12 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
         const metaStr = meta.length ? dim(` (${meta.join(", ")})`) : "";
         const summary = p.summary ? dim(`  — ${p.summary}`) : "";
         const pubkeyTag = dim(` · ${p.pubkey.slice(0, 16)}…`);
+        // Short sessionId tag — appears for sibling sessions of the same
+        // member that would otherwise be visually identical (same name,
+        // same cwd, only the truncated pubkey on the right differs).
+        const sidTag = p.sessionId
+          ? dim(` · sid:${p.sessionId.slice(0, 8)}`)
+          : "";
         const selfTag = p.isThisSession
           ? dim(" ") + yellow("(this session)")
           : p.isSelf
@@ -224,7 +276,7 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
         const tagsStr = inlineTags.length ? " [" + inlineTags.join(", ") + "]" : "";
 
         render.info(
-          `${statusDot} ${name}${selfTag}${tagsStr}${metaStr}${pubkeyTag}${summary}`,
+          `${statusDot} ${name}${selfTag}${tagsStr}${metaStr}${pubkeyTag}${sidTag}${summary}`,
         );
 
         // Second line: cwd + an explicit role/groups footer when both

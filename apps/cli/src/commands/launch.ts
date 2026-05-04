@@ -349,6 +349,64 @@ async function runLaunchWizard(opts: {
   return { mesh, role, groups, messageMode, skipPermissions };
 }
 
+/**
+ * 1.32.0 — broker welcome line printed right after the launch banner.
+ * Polls the daemon's /v1/health (per-mesh broker WS state) and tries
+ * to fetch the inbox + peer count via daemon-route helpers. Best-effort:
+ * if any call fails the welcome simply prints what it knows and moves
+ * on — never blocks the launch path.
+ */
+async function printBrokerWelcome(meshSlug: string): Promise<void> {
+  const useColor = !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
+  const dim = (s: string): string => (useColor ? `\x1b[2m${s}\x1b[22m` : s);
+  const green = (s: string): string => (useColor ? `\x1b[32m${s}\x1b[22m` : s);
+  const yellow = (s: string): string => (useColor ? `\x1b[33m${s}\x1b[22m` : s);
+
+  // Probe daemon health for broker WS state.
+  let brokerState = "unknown";
+  try {
+    const { ipc } = await import("~/daemon/ipc/client.js");
+    const res = await ipc<{ ok?: boolean; brokers?: Record<string, string> }>({
+      path: "/v1/health",
+      timeoutMs: 1_500,
+    });
+    if (res.status === 200 && res.body?.brokers) {
+      brokerState = res.body.brokers[meshSlug] ?? "unknown";
+    }
+  } catch { /* daemon unreachable — not fatal */ }
+
+  // Peer count (best-effort).
+  let peerCount = -1;
+  try {
+    const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
+    const peers = (await tryListPeersViaDaemon()) ?? [];
+    peerCount = peers.filter((p) =>
+      (p as { channel?: string }).channel !== "claudemesh-daemon",
+    ).length;
+  } catch { /* skip peer count */ }
+
+  // Unread inbox count (best-effort).
+  let unread = -1;
+  try {
+    const { ipc } = await import("~/daemon/ipc/client.js");
+    const res = await ipc<{ messages?: unknown[] }>({
+      path: "/v1/inbox",
+      timeoutMs: 1_500,
+    });
+    if (res.status === 200 && Array.isArray(res.body?.messages)) {
+      unread = res.body.messages.length;
+    }
+  } catch { /* skip unread */ }
+
+  const dot = brokerState === "open" ? green("●") : yellow("●");
+  const parts: string[] = [];
+  parts.push(`broker ${brokerState === "open" ? "connected" : brokerState}`);
+  if (peerCount >= 0) parts.push(`${peerCount} peer${peerCount === 1 ? "" : "s"} online`);
+  if (unread >= 0) parts.push(`${unread} unread`);
+  console.log(`${dot} ${parts.join(dim(" · "))}`);
+  console.log("");
+}
+
 function printBanner(name: string, meshSlug: string, role: string | null, groups: GroupEntry[], messageMode: "push" | "inbox" | "off"): void {
   const useColor =
     !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
@@ -752,6 +810,10 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   // 5. Print summary banner (wizard already handled all interactive config).
   if (!args.quiet) {
     printBanner(displayName, mesh.slug, role, parsedGroups, messageMode);
+    // 1.32.0+: broker welcome — confirm the per-session WS is actually
+    // attached and surface peer count + unread inbox so the user lands
+    // in claude code with a clear state instead of silent assumptions.
+    await printBrokerWelcome(mesh.slug);
   }
 
   // --- Install native MCP entries for deployed mesh services ---

@@ -101,12 +101,17 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
   }
 
   // Self-DM safety check: if target is a 64-char hex that matches the
-  // caller's own member pubkey (or any of the caller's session/member
-  // entries), refuse without --self. Catches the common pasted-from-
-  // peer-list-not-realizing-it-was-mine footgun.
-  if (!flags.self && meshSlug) {
+  // caller's own member pubkey, refuse without --self. Catches the
+  // common pasted-from-peer-list-not-realizing-it-was-mine footgun.
+  // With --self, member-pubkey targeting fans out to every connected
+  // sibling session of your member (the broker's drain only matches
+  // exact session pubkeys, so we resolve here in the CLI).
+  if (meshSlug) {
     const joined = config.meshes.find((m) => m.slug === meshSlug);
-    if (joined && /^[0-9a-f]{64}$/i.test(to) && to.toLowerCase() === joined.pubkey.toLowerCase()) {
+    const isOwnMemberKey =
+      joined && /^[0-9a-f]{64}$/i.test(to) && to.toLowerCase() === joined.pubkey.toLowerCase();
+
+    if (isOwnMemberKey && !flags.self) {
       render.err(
         `Target "${to.slice(0, 16)}…" is your own member pubkey on mesh "${meshSlug}".`,
       );
@@ -114,6 +119,68 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
         "Pass --self to message a sibling session of your own member, or pick a different peer's pubkey.",
       );
       process.exit(1);
+    }
+
+    if (isOwnMemberKey && flags.self) {
+      // Member-pubkey fan-out: resolve to every connected sibling
+      // session pubkey and send one message per recipient. Required
+      // because the broker's drain query at apps/broker/src/broker.ts
+      // matches target_spec only against full session pubkeys —
+      // sending to a member pubkey would queue successfully but no
+      // drain would fetch.
+      try {
+        const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
+        const { getSessionInfo } = await import("~/services/session/resolve.js");
+        const peers = (await tryListPeersViaDaemon()) ?? [];
+        const session = await getSessionInfo();
+        const ownSessionPk = session?.presence?.sessionPubkey?.toLowerCase();
+        const siblings = peers.filter((p) => {
+          const r = p as { memberPubkey?: string; pubkey?: string; channel?: string };
+          if (!r.pubkey) return false;
+          if (ownSessionPk && r.pubkey.toLowerCase() === ownSessionPk) return false;
+          if (r.channel === "claudemesh-daemon") return false;
+          return r.memberPubkey?.toLowerCase() === to.toLowerCase();
+        });
+        if (siblings.length === 0) {
+          render.err(`--self fan-out: no other sibling sessions of your member online.`);
+          process.exit(1);
+        }
+        const results: Array<{ pubkey: string; ok: boolean; messageId?: string; error?: string }> = [];
+        for (const peer of siblings) {
+          const pk = (peer as { pubkey: string }).pubkey;
+          const dr = await trySendViaDaemon({ to: pk, message, priority, expectedMesh: meshSlug ?? undefined });
+          if (dr === null) {
+            results.push({ pubkey: pk, ok: false, error: "daemon path unavailable" });
+            continue;
+          }
+          if (dr.ok) {
+            results.push({
+              pubkey: pk,
+              ok: true,
+              ...(dr.messageId ? { messageId: dr.messageId } : {}),
+            });
+          } else {
+            results.push({ pubkey: pk, ok: false, error: dr.error });
+          }
+        }
+        const okCount = results.filter((r) => r.ok).length;
+        if (flags.json) {
+          console.log(JSON.stringify({ ok: okCount > 0, fanout: results, via: "daemon" }));
+        } else if (okCount === results.length) {
+          render.ok(`fanned out to ${okCount} sibling session${okCount === 1 ? "" : "s"} (daemon)`);
+          for (const r of results) render.info(dim(`  → ${r.pubkey.slice(0, 16)}… ${r.messageId ? dim(r.messageId.slice(0, 8)) : ""}`));
+        } else {
+          render.warn(`fanned out: ${okCount}/${results.length} delivered`);
+          for (const r of results) {
+            const tag = r.ok ? "✔" : "✘";
+            render.info(`  ${tag} ${r.pubkey.slice(0, 16)}… ${r.error ? dim(`— ${r.error}`) : ""}`);
+          }
+        }
+        return;
+      } catch (e) {
+        render.err(`--self fan-out failed: ${e instanceof Error ? e.message : String(e)}`);
+        process.exit(1);
+      }
     }
   }
 
