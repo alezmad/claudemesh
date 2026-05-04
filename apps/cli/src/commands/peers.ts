@@ -37,6 +37,18 @@ interface PeerRecord {
   channel?: string;
   model?: string;
   cwd?: string;
+  /** Peer-level profile metadata (set via `claudemesh profile`). The
+   * broker passes this through verbatim; the most common field is
+   * `role` ("lead", "reviewer", "human", etc.) but capabilities, bio,
+   * avatar, and title also live here when set. */
+  profile?: {
+    role?: string;
+    title?: string;
+    bio?: string;
+    avatar?: string;
+    capabilities?: string[];
+    [k: string]: unknown;
+  };
   /** True when this peer is one of the caller's own member's sessions.
    * Set in the cli (not the broker) by comparing memberPubkey against
    * the caller's stable JoinedMesh.pubkey. */
@@ -168,13 +180,6 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
       }
 
       for (const p of peers) {
-        const groups = p.groups.length
-          ? " [" +
-            p.groups
-              .map((g) => `@${g.name}${g.role ? `:${g.role}` : ""}`)
-              .join(", ") +
-            "]"
-          : "";
         const statusDot = p.status === "working" ? yellow("●") : green("●");
         const name = bold(p.displayName);
         const meta: string[] = [];
@@ -189,10 +194,35 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
           : p.isSelf
             ? dim(" ") + yellow("(your other session)")
             : "";
+
+        // Inline tags ("role:lead [@flexicar:reviewer, @oncall]") so the
+        // first thing the user sees beside the name is the access /
+        // affiliation context. Empty role + empty groups → omit the
+        // bracket entirely (the dim summary line below carries the
+        // explicit "(no role / no groups)" so JSON output is unaffected
+        // and screen readers don't get spammed with literal "no").
+        const inlineTags: string[] = [];
+        const peerRole = p.profile?.role?.trim();
+        if (peerRole) inlineTags.push(`role:${peerRole}`);
+        if (p.groups.length) {
+          inlineTags.push(
+            ...p.groups.map((g) => `@${g.name}${g.role ? `:${g.role}` : ""}`),
+          );
+        }
+        const tagsStr = inlineTags.length ? " [" + inlineTags.join(", ") + "]" : "";
+
         render.info(
-          `${statusDot} ${name}${selfTag}${groups}${metaStr}${pubkeyTag}${summary}`,
+          `${statusDot} ${name}${selfTag}${tagsStr}${metaStr}${pubkeyTag}${summary}`,
         );
+
+        // Second line: cwd + an explicit role/groups footer when both
+        // are absent. Surfacing the absence is important — the previous
+        // renderer hid it, so users couldn't tell "no role set" from
+        // "the cli isn't showing roles".
         if (p.cwd) render.info(dim(`   cwd: ${p.cwd}`));
+        if (!peerRole && p.groups.length === 0) {
+          render.info(dim("   role: (none)  groups: (none)"));
+        }
       }
     } catch (e) {
       render.err(`${slug}: ${e instanceof Error ? e.message : String(e)}`);

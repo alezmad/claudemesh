@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.31.4 (2026-05-04) — peer list shows roles and groups
+
+`claudemesh peer list` now surfaces each peer's profile-level role
+(`claudemesh profile`) and any joined groups inline next to the
+display name, e.g.
+
+```
+● mou [role:lead, @flexicar:reviewer, @oncall] (ai, claude-code) · 0d215762…
+   cwd: /Users/agutierrez/Desktop/claudemesh
+```
+
+When both role and groups are empty, an explicit footer is added so
+absence is unambiguous instead of looking like the CLI is hiding the
+field:
+
+```
+● peer [...]
+   role: (none)  groups: (none)
+```
+
+JSON output is unchanged (the broker has surfaced these fields all
+along) — only the human renderer was missing them.
+
 ## 1.31.3 (2026-05-04) — clean rebuild of 1.31.2
 
 1.31.2 published with the right code change but a stale baked-in
