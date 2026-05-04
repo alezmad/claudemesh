@@ -20,6 +20,12 @@ export interface OutboxRow {
   aborted_at: number | null;
   aborted_by: string | null;
   superseded_by: string | null;
+  /** Sprint 4 routing: NULL on v0.9.0 rows, drained via broadcast fallback. */
+  mesh: string | null;
+  target_spec: string | null;
+  nonce: string | null;
+  ciphertext: string | null;
+  priority: string | null;
 }
 
 export function migrateOutbox(db: SqliteDb): void {
@@ -46,13 +52,35 @@ export function migrateOutbox(db: SqliteDb): void {
     CREATE INDEX IF NOT EXISTS outbox_aborted
       ON outbox(status, aborted_at) WHERE status = 'aborted';
   `);
+
+  // v1.25.0 / Sprint 4: real outbound routing. Adds the broker-format
+  // target spec, mesh slug, and the already-encrypted ciphertext+nonce so
+  // the drain worker can dispatch each row without re-resolving names or
+  // re-running crypto. Existing rows from v0.9.0 land with NULLs and get
+  // drained via the legacy broadcast fallback (preserves no-regression).
+  const hasMesh        = columnExists(db, "outbox", "mesh");
+  const hasTargetSpec  = columnExists(db, "outbox", "target_spec");
+  const hasNonce       = columnExists(db, "outbox", "nonce");
+  const hasCiphertext  = columnExists(db, "outbox", "ciphertext");
+  const hasPriority    = columnExists(db, "outbox", "priority");
+  if (!hasMesh)        db.exec(`ALTER TABLE outbox ADD COLUMN mesh TEXT`);
+  if (!hasTargetSpec)  db.exec(`ALTER TABLE outbox ADD COLUMN target_spec TEXT`);
+  if (!hasNonce)       db.exec(`ALTER TABLE outbox ADD COLUMN nonce TEXT`);
+  if (!hasCiphertext)  db.exec(`ALTER TABLE outbox ADD COLUMN ciphertext TEXT`);
+  if (!hasPriority)    db.exec(`ALTER TABLE outbox ADD COLUMN priority TEXT`);
+}
+
+function columnExists(db: SqliteDb, table: string, column: string): boolean {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+  return rows.some((r) => r.name === column);
 }
 
 export function findByClientId(db: SqliteDb, clientMessageId: string): OutboxRow | null {
   const row = db.prepare(`
     SELECT id, client_message_id, request_fingerprint, payload, enqueued_at,
            attempts, next_attempt_at, status, last_error, delivered_at,
-           broker_message_id, aborted_at, aborted_by, superseded_by
+           broker_message_id, aborted_at, aborted_by, superseded_by,
+           mesh, target_spec, nonce, ciphertext, priority
       FROM outbox WHERE client_message_id = ?
   `).get<OutboxRow>(clientMessageId);
   return row ?? null;
@@ -64,14 +92,21 @@ export interface InsertPendingInput {
   request_fingerprint: Uint8Array;
   payload: Uint8Array;
   now: number;
+  /** Sprint 4: routing fields. Optional only for legacy/v0.9.0 callers. */
+  mesh?: string;
+  target_spec?: string;
+  nonce?: string;
+  ciphertext?: string;
+  priority?: string;
 }
 
 export function insertPending(db: SqliteDb, input: InsertPendingInput): void {
   db.prepare(`
     INSERT INTO outbox (
       id, client_message_id, request_fingerprint, payload,
-      enqueued_at, attempts, next_attempt_at, status
-    ) VALUES (?, ?, ?, ?, ?, 0, ?, 'pending')
+      enqueued_at, attempts, next_attempt_at, status,
+      mesh, target_spec, nonce, ciphertext, priority
+    ) VALUES (?, ?, ?, ?, ?, 0, ?, 'pending', ?, ?, ?, ?, ?)
   `).run(
     input.id,
     input.client_message_id,
@@ -79,6 +114,11 @@ export function insertPending(db: SqliteDb, input: InsertPendingInput): void {
     input.payload,
     input.now,
     input.now,
+    input.mesh         ?? null,
+    input.target_spec  ?? null,
+    input.nonce        ?? null,
+    input.ciphertext   ?? null,
+    input.priority     ?? null,
   );
 }
 
@@ -108,7 +148,8 @@ export function listOutbox(db: SqliteDb, p: ListOutboxParams = {}): OutboxRow[] 
   const sql = `
     SELECT id, client_message_id, request_fingerprint, payload, enqueued_at,
            attempts, next_attempt_at, status, last_error, delivered_at,
-           broker_message_id, aborted_at, aborted_by, superseded_by
+           broker_message_id, aborted_at, aborted_by, superseded_by,
+           mesh, target_spec, nonce, ciphertext, priority
       FROM outbox
      ${where.length ? "WHERE " + where.join(" AND ") : ""}
      ORDER BY enqueued_at DESC
@@ -122,7 +163,8 @@ export function findById(db: SqliteDb, id: string): OutboxRow | null {
   return db.prepare(`
     SELECT id, client_message_id, request_fingerprint, payload, enqueued_at,
            attempts, next_attempt_at, status, last_error, delivered_at,
-           broker_message_id, aborted_at, aborted_by, superseded_by
+           broker_message_id, aborted_at, aborted_by, superseded_by,
+           mesh, target_spec, nonce, ciphertext, priority
       FROM outbox WHERE id = ?
   `).get<OutboxRow>(id) ?? null;
 }

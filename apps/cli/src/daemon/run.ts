@@ -159,6 +159,10 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
     bus,
     broker,
     onPendingInserted: () => drain?.wake(),
+    // Sprint 4: IPC accept-send needs these to resolve targets and
+    // encrypt at accept time so the drain worker is just a forwarder.
+    meshSecretKey: mesh.secretKey,
+    meshSlug: mesh.slug,
   });
 
   try {

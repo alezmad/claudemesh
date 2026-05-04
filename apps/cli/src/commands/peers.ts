@@ -67,7 +67,17 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
   const joined = config.meshes.find((m) => m.slug === slug);
   const selfMemberPubkey = joined?.pubkey ?? null;
 
-  // Try warm path first.
+  // Daemon path — preferred when running. Same routing pattern as send.ts:
+  // ~1 ms IPC round-trip; broker WS already warm in the daemon.
+  try {
+    const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
+    const dr = await tryListPeersViaDaemon();
+    if (dr !== null) {
+      return dr.map((p) => annotateSelf(p as PeerRecord, selfMemberPubkey, null));
+    }
+  } catch { /* daemon route helper not available; fall through */ }
+
+  // Try warm bridge path next.
   const bridged = await tryBridge(slug, "peers");
   if (bridged && bridged.ok) {
     const peers = bridged.result as PeerRecord[];

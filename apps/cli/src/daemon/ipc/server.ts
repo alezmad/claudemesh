@@ -42,6 +42,10 @@ export interface IpcServerOptions {
   broker?: DaemonBrokerClient;
   /** Notify when a new outbox row was inserted (drains can wake). */
   onPendingInserted?: () => void;
+  /** Mesh secret key (hex) used to encrypt outbound DMs at accept time. */
+  meshSecretKey?: string;
+  /** Mesh slug attached to this daemon — stamped on outbox rows for the drain. */
+  meshSlug?: string;
 }
 
 export interface IpcServerHandle {
@@ -64,6 +68,8 @@ export function startIpcServer(opts: IpcServerOptions): IpcServerHandle {
     bus: opts.bus,
     broker: opts.broker,
     onPendingInserted: opts.onPendingInserted,
+    meshSecretKey: opts.meshSecretKey,
+    meshSlug: opts.meshSlug,
   });
 
   // --- UDS listener -------------------------------------------------------
@@ -123,6 +129,8 @@ function makeHandler(opts: {
   bus?: EventBus;
   broker?: DaemonBrokerClient;
   onPendingInserted?: () => void;
+  meshSecretKey?: string;
+  meshSlug?: string;
 }) {
   const tokenBytes = Buffer.from(opts.localToken, "utf8");
 
@@ -363,6 +371,21 @@ function makeHandler(opts: {
           respond(res, 400, { error: parsed.error });
           return;
         }
+        // Sprint 4: resolve `to` → broker-format target_spec and encrypt at
+        // accept time, then store ciphertext+nonce on the outbox row. This
+        // crystallises routing so the drain worker is just a forwarder.
+        if (opts.broker && opts.meshSecretKey) {
+          try {
+            const routed = await resolveAndEncrypt(parsed.req, opts.broker, opts.meshSecretKey, opts.meshSlug ?? null);
+            parsed.req.target_spec = routed.target_spec;
+            parsed.req.ciphertext  = routed.ciphertext;
+            parsed.req.nonce       = routed.nonce;
+            parsed.req.mesh        = routed.mesh;
+          } catch (e) {
+            respond(res, 502, { error: "route_failed", detail: String(e) });
+            return;
+          }
+        }
         const outcome = acceptSend(parsed.req, { db: opts.outboxDb });
         switch (outcome.kind) {
           case "accepted_pending":
@@ -479,6 +502,79 @@ function parseSendRequest(body: unknown, idempotencyHeader: string | string[] | 
       destination_ref,
     },
   };
+}
+
+/**
+ * Sprint 4: resolve a user-friendly `to` (peer name, pubkey hex, @group, *,
+ * topic name, "#topicId") into a broker-format target_spec, and encrypt
+ * the plaintext payload appropriately for the destination kind.
+ *
+ * - DM by 64-char hex pubkey: target_spec = pubkey hex, ciphertext via
+ *   crypto_box (recipient pubkey + sender session secret).
+ * - DM by display name: resolve via broker.listPeers, then same as above.
+ * - Group / broadcast / topic: target_spec = `@<group>` / `*` / `#<topicId>`,
+ *   ciphertext = base64(plaintext) [matches the cold path's pre-encryption
+ *   convention until topic crypto lands].
+ */
+async function resolveAndEncrypt(
+  req: SendRequest,
+  broker: DaemonBrokerClient,
+  meshSecretKey: string,
+  meshSlug: string | null,
+): Promise<{ target_spec: string; ciphertext: string; nonce: string; mesh: string }> {
+  const { encryptDirect } = await import("~/services/crypto/box.js");
+  const { randomBytes } = await import("node:crypto");
+  const to = req.to.trim();
+
+  // Topic by id ("#<topicId>") — hex-like 20+ chars.
+  if (to.startsWith("#") && /^#[0-9a-z_-]{20,}$/i.test(to)) {
+    const ciphertext = Buffer.from(req.message, "utf8").toString("base64");
+    const nonce = randomBytes(24).toString("base64");
+    return { target_spec: to, ciphertext, nonce, mesh: meshSlug ?? "" };
+  }
+
+  // Group, broadcast — pass through. (Topic-by-name resolution happens
+  // when the daemon hooks topic_list later; not required for v1.25.0.)
+  if (to.startsWith("@") || to === "*") {
+    const ciphertext = Buffer.from(req.message, "utf8").toString("base64");
+    const nonce = randomBytes(24).toString("base64");
+    return { target_spec: to, ciphertext, nonce, mesh: meshSlug ?? "" };
+  }
+
+  // 64-char hex pubkey → DM directly.
+  if (/^[0-9a-f]{64}$/i.test(to)) {
+    const sessionKeys = broker.getSessionKeys();
+    const senderSecret = sessionKeys?.sessionSecretKey ?? meshSecretKey;
+    const env = await encryptDirect(req.message, to, senderSecret);
+    return { target_spec: to, ciphertext: env.ciphertext, nonce: env.nonce, mesh: meshSlug ?? "" };
+  }
+
+  // Hex prefix (16+ chars but <64) → resolve via peer list prefix match.
+  // Matches the ergonomics of `claudemesh peer list` which shows 16-char
+  // prefixes, so users naturally paste prefixes back.
+  const peers = await broker.listPeers().catch(() => []);
+  if (/^[0-9a-f]{16,63}$/i.test(to)) {
+    const matches = peers.filter((p) =>
+      p.pubkey.toLowerCase().startsWith(to.toLowerCase()) ||
+      (p.memberPubkey ?? "").toLowerCase().startsWith(to.toLowerCase()),
+    );
+    if (matches.length === 0) throw new Error(`no peer matching prefix "${to}"`);
+    if (matches.length > 1) throw new Error(`prefix "${to}" is ambiguous (${matches.length} matches)`);
+    const recipient = matches[0]!.pubkey;
+    const sessionKeys = broker.getSessionKeys();
+    const senderSecret = sessionKeys?.sessionSecretKey ?? meshSecretKey;
+    const env = await encryptDirect(req.message, recipient, senderSecret);
+    return { target_spec: recipient, ciphertext: env.ciphertext, nonce: env.nonce, mesh: meshSlug ?? "" };
+  }
+
+  // Otherwise — display name.
+  const match = peers.find((p) => p.displayName.toLowerCase() === to.toLowerCase());
+  if (!match) throw new Error(`peer "${to}" not found`);
+  const recipient = match.pubkey;
+  const sessionKeys = broker.getSessionKeys();
+  const senderSecret = sessionKeys?.sessionSecretKey ?? meshSecretKey;
+  const env = await encryptDirect(req.message, recipient, senderSecret);
+  return { target_spec: recipient, ciphertext: env.ciphertext, nonce: env.nonce, mesh: meshSlug ?? "" };
 }
 
 function respond(res: ServerResponse, status: number, body: unknown) {

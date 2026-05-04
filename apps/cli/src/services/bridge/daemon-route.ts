@@ -7,6 +7,50 @@ import { existsSync } from "node:fs";
 import { ipc } from "~/daemon/ipc/client.js";
 import { DAEMON_PATHS } from "~/daemon/paths.js";
 
+/** Try fetching the peer list through the daemon (~1ms warm IPC).
+ *  Returns null when the daemon socket isn't present so the caller can
+ *  fall back to bridge / cold paths. */
+export async function tryListPeersViaDaemon(): Promise<unknown[] | null> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  try {
+    const res = await ipc<{ peers?: unknown[] }>({ path: "/v1/peers", timeoutMs: 3_000 });
+    if (res.status !== 200) return null;
+    return Array.isArray(res.body.peers) ? res.body.peers : [];
+  } catch (err) {
+    const msg = String(err);
+    if (/ENOENT|ECONNREFUSED|ipc_timeout/.test(msg)) return null;
+    return null;
+  }
+}
+
+/** Try fetching mesh-published skills through the daemon. */
+export async function tryListSkillsViaDaemon(): Promise<unknown[] | null> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  try {
+    const res = await ipc<{ skills?: unknown[] }>({ path: "/v1/skills", timeoutMs: 3_000 });
+    if (res.status !== 200) return null;
+    return Array.isArray(res.body.skills) ? res.body.skills : [];
+  } catch (err) {
+    const msg = String(err);
+    if (/ENOENT|ECONNREFUSED|ipc_timeout/.test(msg)) return null;
+    return null;
+  }
+}
+
+/** Try fetching one skill body through the daemon. */
+export async function tryGetSkillViaDaemon(name: string): Promise<unknown | null> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  try {
+    const res = await ipc<{ skill?: unknown }>({
+      path: `/v1/skills/${encodeURIComponent(name)}`,
+      timeoutMs: 3_000,
+    });
+    if (res.status === 404) return null;
+    if (res.status !== 200) return null;
+    return res.body.skill ?? null;
+  } catch { return null; }
+}
+
 export type DaemonSendOk = {
   ok: true;
   messageId: string;

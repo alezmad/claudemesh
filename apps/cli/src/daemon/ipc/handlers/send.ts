@@ -31,6 +31,14 @@ export interface SendRequest {
   /** Destination kind + ref must be supplied by the IPC layer after parsing `to`. */
   destination_kind: DestKind;
   destination_ref: string;
+  /** Sprint 4: pre-resolved broker-format target (pubkey hex, "#topicId", @group, *). */
+  target_spec?: string;
+  /** Sprint 4: pre-encrypted ciphertext (base64). For DMs: crypto_box. For broadcast/topic: base64-of-plaintext. */
+  ciphertext?: string;
+  /** Sprint 4: nonce that pairs with ciphertext (base64). */
+  nonce?: string;
+  /** Sprint 4: which mesh this send is for (single-mesh daemon today; multi-mesh later). */
+  mesh?: string;
 }
 
 export type AcceptOutcome =
@@ -80,6 +88,11 @@ export function acceptSend(req: SendRequest, deps: AcceptDeps): AcceptOutcome {
         request_fingerprint: fingerprint,
         payload: body,
         now,
+        mesh: req.mesh,
+        target_spec: req.target_spec,
+        nonce: req.nonce,
+        ciphertext: req.ciphertext,
+        priority: req.priority,
       });
       return { kind: "accepted_pending", status: 202, client_message_id: clientId };
     }

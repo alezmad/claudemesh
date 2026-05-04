@@ -26,6 +26,12 @@ interface PendingRow {
   request_fingerprint: Uint8Array;
   payload: Uint8Array;
   attempts: number;
+  /** Sprint 4 routing fields. NULL on legacy v0.9.0 rows → broadcast fallback. */
+  target_spec: string | null;
+  nonce: string | null;
+  ciphertext: string | null;
+  priority: string | null;
+  mesh: string | null;
 }
 
 export interface DrainOptions {
@@ -80,7 +86,8 @@ export function startDrainWorker(opts: DrainOptions): DrainHandle {
 async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"]>): Promise<void> {
   const now = Date.now();
   const rows = opts.db.prepare(`
-    SELECT id, client_message_id, request_fingerprint, payload, attempts
+    SELECT id, client_message_id, request_fingerprint, payload, attempts,
+           target_spec, nonce, ciphertext, priority, mesh
       FROM outbox
      WHERE status = 'pending' AND next_attempt_at <= ?
      ORDER BY enqueued_at
@@ -93,21 +100,30 @@ async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"
     if (markInflight(opts.db, row.id, now) === 0) continue; // raced with another drainer
     const fpHex = bufferToHex(row.request_fingerprint);
 
-    // For v0.9.0-against-legacy-broker the daemon doesn't yet route by
-    // destination_kind/ref — we send the raw payload as a *self*-target so
-    // the broker accepts it for round-tripping. Sprint 4 reads the actual
-    // destination from the outbox row and encrypts/routes properly. The
-    // important thing here is that the row transitions correctly.
-    const sessionKeys = opts.broker.getSessionKeys();
-    const targetSpec  = "*"; // broadcast — leaves shape valid pre-routing
-    const nonce       = await randomNonce();
-    const ciphertext  = Buffer.from(row.payload).toString("base64");
+    // Sprint 4: use the row's resolved target/ciphertext if present.
+    // Legacy v0.9.0 rows (NULL on these columns) fall back to the
+    // broadcast smoke-test shape so existing in-flight rows still drain.
+    let targetSpec: string;
+    let nonce:      string;
+    let ciphertext: string;
+    let priority:   "now" | "next" | "low";
+    if (row.target_spec && row.nonce && row.ciphertext) {
+      targetSpec = row.target_spec;
+      nonce      = row.nonce;
+      ciphertext = row.ciphertext;
+      priority   = (row.priority === "now" || row.priority === "low") ? row.priority : "next";
+    } else {
+      targetSpec = "*";
+      nonce      = await randomNonce();
+      ciphertext = Buffer.from(row.payload).toString("base64");
+      priority   = "next";
+    }
 
     let res;
     try {
       res = await opts.broker.send({
         targetSpec,
-        priority: "next",
+        priority,
         nonce,
         ciphertext,
         client_message_id: row.client_message_id,
@@ -118,7 +134,6 @@ async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"
       backoffPending(opts.db, row.id, row.attempts + 1, "exception", String(e));
       continue;
     }
-    void sessionKeys;  // silence unused for now
 
     if (res.ok) {
       markDone(opts.db, row.id, res.messageId, Date.now());

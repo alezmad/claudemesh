@@ -45,7 +45,7 @@ claudemesh send "<from_name>" "..." --mesh "<mesh_slug>"
 
 If the parent Claude session was launched via `claudemesh launch`, an MCP push-pipe is running and holds the per-mesh WS connection. CLI invocations dial `~/.claudemesh/sockets/<mesh-slug>.sock` and reuse that warm connection (~200ms total round-trip including Node.js startup). If no push-pipe is running (cron, scripts, hooks fired outside a session), the CLI opens its own WS, which takes ~500-700ms cold. **You don't manage this** — every verb auto-detects and falls through.
 
-### Daemon path (v0.9.0, opt-in, fastest)
+### Daemon path (v1.24.0+, REQUIRED for in-Claude-Code use)
 
 `claudemesh daemon up [--mesh <slug>]` starts a persistent per-user runtime that holds the broker WS, a durable SQLite outbox/inbox, and listens on `~/.claudemesh/daemon/daemon.sock` (UDS) plus an optional loopback TCP. When the daemon socket is present, every verb routes through it first (~1ms IPC) before falling back to bridge / cold paths. The send envelope carries a caller-stable `client_message_id`, so a `claudemesh send` that started before a daemon crash survives the restart via the on-disk outbox.
 
@@ -60,11 +60,15 @@ claudemesh daemon outbox requeue <id>                  # re-enqueue an aborted/d
 claudemesh daemon down                                 # SIGTERM + wait
 ```
 
-`claudemesh install` (MCP + hooks registration) and the daemon are independent — install does not start the daemon, and the daemon does not require install. Run both for the warmest path: install gives you the in-session push-pipe, daemon gives you cross-invocation persistence and a survivable outbox.
+As of 1.24.0 `claudemesh install` registers the MCP entry **and** installs/starts the daemon service for the user's primary mesh. The MCP shim hard-requires the daemon to be running — it bails at boot with actionable instructions if the socket isn't present. There is no fallback. CLI verbs (`send`, `peer list`, `inbox`, `skill list/get`, etc.) keep working without a daemon via bridge or cold paths, but for any in-Claude-Code use the daemon must be up.
+
+### Ambient mode (1.25.0+)
+
+Once `claudemesh install` has run (registers MCP entry + starts daemon service), **raw `claude` Just Works** for the daemon's attached mesh. No `claudemesh launch` ceremony, no manual flags, no per-session keypair. Channel push, slash commands, and resources all flow through the daemon-backed MCP shim. Use `claudemesh launch` only when you need to override defaults (different mesh, custom display name, system-prompt injection, headless modes).
 
 ## Spawning new sessions (no wizard)
 
-`claudemesh launch` is the canonical way to start a new Claude Code session connected to claudemesh. Pass every required flag up front so no interactive prompt fires — that's what makes the verb scriptable from tmux send-keys, AppleScript/iTerm spawn helpers, hooks, cron, and the `claudemesh launch` you call from inside another session. **Always use this verb, never `claude` directly with hand-rolled flags** — it sets up the per-session ed25519 keypair, exports `CLAUDEMESH_DISPLAY_NAME`, isolates the mesh config in a tmpdir, and passes the `--dangerously-load-development-channels server:claudemesh` plumbing that the MCP push-pipe needs.
+`claudemesh launch` remains useful for non-default cases: explicit mesh selection, fresh display name, headless `--quiet` runs, system-prompt injection, multi-mesh users with one daemon attached to mesh A who want to spawn into mesh B. For the common case (single joined mesh, daemon installed), prefer raw `claude`. Pass every required flag up front so no interactive prompt fires — that's what makes the verb scriptable from tmux send-keys, AppleScript/iTerm spawn helpers, hooks, cron, and the `claudemesh launch` you call from inside another session.
 
 ### Full flag surface
 

@@ -273,6 +273,24 @@ export async function runSqlSchema(opts: Flags): Promise<number> {
 // ════════════════════════════════════════════════════════════════════════
 
 export async function runSkillList(opts: Flags & { query?: string }): Promise<number> {
+  // Daemon path — preferred when running. Mirror trySendViaDaemon shape.
+  try {
+    const { tryListSkillsViaDaemon } = await import("~/services/bridge/daemon-route.js");
+    const dr = await tryListSkillsViaDaemon();
+    if (dr !== null) {
+      const skills = dr as Array<{ name: string; description: string; author: string; tags: string[] }>;
+      if (opts.json) { emitJson(skills); return EXIT.SUCCESS; }
+      if (skills.length === 0) { render.info(dim("(no skills)")); return EXIT.SUCCESS; }
+      render.section(`mesh skills (${skills.length})`);
+      for (const s of skills) {
+        process.stdout.write(`  ${bold(s.name)} ${dim("· by " + s.author)}\n`);
+        process.stdout.write(`    ${s.description}\n`);
+        if (s.tags?.length) process.stdout.write(`    ${dim("tags: " + s.tags.join(", "))}\n`);
+      }
+      return EXIT.SUCCESS;
+    }
+  } catch { /* fall through to cold path */ }
+
   return await withMesh({ meshSlug: opts.mesh ?? null }, async (client) => {
     const skills = await client.listSkills(opts.query);
     if (opts.json) { emitJson(skills); return EXIT.SUCCESS; }
@@ -289,6 +307,27 @@ export async function runSkillList(opts: Flags & { query?: string }): Promise<nu
 
 export async function runSkillGet(name: string, opts: Flags): Promise<number> {
   if (!name) { render.err("Usage: claudemesh skill get <name>"); return EXIT.INVALID_ARGS; }
+  // Daemon path first.
+  try {
+    const { tryGetSkillViaDaemon } = await import("~/services/bridge/daemon-route.js");
+    const dr = await tryGetSkillViaDaemon(name);
+    if (dr !== null) {
+      const skill = dr as { name: string; description: string; instructions: string; tags: string[]; author: string; createdAt: string };
+      if (opts.json) { emitJson(skill); return EXIT.SUCCESS; }
+      render.section(skill.name);
+      render.kv([
+        ["author", skill.author],
+        ["created", skill.createdAt],
+        ["tags", skill.tags?.join(", ") || dim("(none)")],
+      ]);
+      render.blank();
+      render.info(skill.description);
+      render.blank();
+      process.stdout.write(skill.instructions + "\n");
+      return EXIT.SUCCESS;
+    }
+  } catch { /* fall through */ }
+
   return await withMesh({ meshSlug: opts.mesh ?? null }, async (client) => {
     const skill = await client.getSkill(name);
     if (!skill) { render.err(`skill "${name}" not found`); return EXIT.NOT_FOUND; }

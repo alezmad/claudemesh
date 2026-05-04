@@ -209,12 +209,40 @@ Locked spec: `.artifacts/shipped/2026-05-03-daemon-spec-v0.9.0.md`.
 
 ---
 
+## v0.9.x — *daemon promotion: required + thin MCP* — *shipped*
+
+The v0.9.0 foundation got promoted in three quick releases:
+
+- **1.24.0** — daemon required for in-Claude-Code use. MCP server
+  shrinks from 979 to ~200 LoC of push-pipe (rest is the unrelated
+  mesh-service proxy mode). `claudemesh install` auto-installs and
+  starts the daemon service. `claudemesh launch` ensures daemon is
+  running before spawning Claude.
+- **1.25.0** — Sprint 4 outbound routing fix. Daemon was sending
+  every outbox row as broadcast (`*`); now resolves and encrypts at
+  IPC accept time, drain is a forwarder. Adds `mesh`, `target_spec`,
+  `nonce`, `ciphertext`, `priority` columns to the outbox.
+- **1.25.0** — CLI thin-client routing for `peer list`,
+  `skill list`, `skill get`. Same daemon-first / bridge / cold-path
+  fallback shape as `trySendViaDaemon`.
+- **1.25.0** — ambient mode: raw `claude` Just Works after
+  `claudemesh install`. No more `claudemesh launch` ceremony for the
+  common case.
+
+What this leaves on the v2.0.0 redesign roadmap is documented at
+`.artifacts/specs/2026-05-04-v2-roadmap-completion.md`: daemon
+multi-mesh, full CLI-to-thin-client conversion, mesh→workspace
+rename, HKDF identity.
+
+---
+
 ## v2.0.0 — *the daemon redesign*
 
 The single largest architectural shift. Promotes the persistent
 thing (the user's account + identity) to a persistent process (the
 daemon), demotes the ephemeral thing (the Claude session) to a thin
-client.
+client. **Half-shipped via 1.24.0 + 1.25.0; remainder spec'd at
+`.artifacts/specs/2026-05-04-v2-roadmap-completion.md`.**
 
 - **`claudemesh-daemon`** — long-lived per-user launchd / systemd
   unit. One WebSocket per workspace, persistent across reboots and

@@ -1,5 +1,65 @@
 # Changelog
 
+## 1.25.0 (2026-05-04) — Sprint 4 outbound routing + ambient mode
+
+### Daemon outbound routing (Sprint 4)
+
+The v0.9.0 daemon shipped outbox infrastructure but its drain worker
+was a placeholder — every queued send went out as a broadcast (`*`).
+That's now fixed. Outbound resolution and `crypto_box` encryption
+happen at IPC accept time, then the drain worker just forwards the
+already-encrypted ciphertext to the broker.
+
+- Outbox schema additions (additive, NULL allowed for legacy rows):
+  `mesh`, `target_spec`, `nonce`, `ciphertext`, `priority`. Existing
+  v0.9.0 rows keep draining via the broadcast fallback.
+- IPC `/v1/send` resolves the user-friendly `to` (display name, hex
+  prefix, full pubkey, `@group`, `*`, `#topicId`) into a broker-format
+  `target_spec` and encrypts the plaintext using `crypto_box` for DMs
+  (against recipient pubkey + sender session secret) or base64 for
+  broadcast / topic / group targets.
+- Drain worker reads `target_spec`, `nonce`, `ciphertext`, `priority`
+  from the row and dispatches as-is. No per-row resolution at drain
+  time means peer-presence flicker doesn't affect in-flight sends.
+- Pubkey prefix matching: 16+ char hex prefix matches against
+  `peer.pubkey` and `peer.memberPubkey` of connected peers. Ambiguous
+  prefixes return 502 with a clear error.
+
+Smoke test verified end-to-end: `claudemesh send --self <prefix> "..."`
+through daemon resolves, encrypts, and delivers. Outbox reaches
+`status=done` with broker-issued `broker_message_id`.
+
+### CLI thin-client routing extensions
+
+`claudemesh peer list` and `claudemesh skill list/get` now route
+through the daemon when its socket is present, mirroring the
+`trySendViaDaemon` pattern from `send.ts`. Same fall-back chain:
+daemon → bridge → cold path.
+
+New helpers in `services/bridge/daemon-route.ts`:
+- `tryListPeersViaDaemon()`
+- `tryListSkillsViaDaemon()`
+- `tryGetSkillViaDaemon(name)`
+
+### Ambient mode
+
+After `claudemesh install` (which now installs and starts the daemon
+service), **raw `claude` Just Works** for the daemon's attached mesh.
+No `claudemesh launch` ceremony needed for the common case. Channel
+push, slash commands, and resources flow through the daemon-backed
+MCP shim.
+
+`claudemesh launch` remains the override path: explicit mesh
+selection, fresh display name, headless modes, system-prompt injection,
+or multi-mesh users who want to spawn into a non-default mesh.
+
+### Roadmap spec
+
+`.artifacts/specs/2026-05-04-v2-roadmap-completion.md` documents
+exactly what's done vs. what remains for the full v2.0.0 endpoint:
+multi-mesh daemon (1.26.0), full CLI-to-thin-client conversion
+(1.27.0), mesh→workspace rename (1.28.0), HKDF identity (2.0.0).
+
 ## 1.24.0 (2026-05-03) — daemon required + thin MCP shim
 
 The architectural convergence v0.9.0 was building toward.
