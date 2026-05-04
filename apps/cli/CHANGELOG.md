@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.30.1 (2026-05-04) — daemon install upgrade-safe + node-pinned
+
+Two install-path fixes that bit on first user upgrade:
+
+- **Pin `node` by absolute path in the launchd plist / systemd unit.**
+  The bin script's `#!/usr/bin/env node` shebang resolves against the
+  service environment's PATH, which on macOS launchd defaults to
+  `/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin`.
+  That picks up whatever Node is installed system-wide instead of the
+  Node that ran `claudemesh install` — and Node 22.x doesn't expose
+  `node:sqlite` without the experimental flag, so the daemon crashed
+  with `db open failed: ERR_UNKNOWN_BUILTIN_MODULE`. Now we write
+  `process.execPath` as the first ProgramArgument so the daemon
+  always runs under the same Node that installed it.
+- **Tear down the old daemon before re-bootstrapping.** `claudemesh
+  install` on a machine that already has a running daemon was hitting
+  `Bootstrap failed: 5: Input/output error` because launchctl refuses
+  to bootstrap a unit that's already loaded, and the old daemon
+  process held the singleton lock. The install path now runs
+  `launchctl bootout` (or `systemctl --user stop`) first, plus a
+  `SIGTERM` to any orphaned daemon pid in `~/.claudemesh/daemon/
+  daemon.pid`, so subsequent installs replace cleanly.
+
 ## 1.30.0 (2026-05-04) — per-session broker presence
 
 Sprint A Phase 3. Two `claudemesh launch` sessions in the same cwd now

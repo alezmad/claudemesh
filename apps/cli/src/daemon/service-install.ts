@@ -87,7 +87,14 @@ function installDarwin(args: InstallArgs): InstallResult {
   const plist = darwinPlistPath();
   mkdirSync(dirname(plist), { recursive: true });
   const log = DAEMON_PATHS.LOG_FILE;
+  // Resolve `node` explicitly. The bin script in node_modules/.bin starts
+  // with `#!/usr/bin/env node`; under launchd's restricted PATH that would
+  // resolve `node` to a system Node (often the wrong major) instead of the
+  // one that installed claudemesh-cli. Pinning process.execPath here means
+  // the daemon always runs under the same Node that ran `claudemesh install`.
+  const nodeBin = process.execPath;
   const meshArgs = [
+    `<string>${escapeXml(args.binaryPath)}</string>`,
     "<string>daemon</string>",
     "<string>up</string>",
     "<string>--mesh</string>",
@@ -103,7 +110,7 @@ function installDarwin(args: InstallArgs): InstallResult {
   <string>${SERVICE_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${escapeXml(args.binaryPath)}</string>
+    <string>${escapeXml(nodeBin)}</string>
     ${meshArgs}
   </array>
   <key>RunAtLoad</key>
@@ -128,6 +135,26 @@ function installDarwin(args: InstallArgs): InstallResult {
 `;
   writeFileSync(plist, xml, { mode: 0o644 });
 
+  // Stop any prior incarnation BEFORE bootstrapping so an upgrade run
+  // doesn't hit "service already loaded" → bootstrap exit-5 IO_ERROR.
+  // Both calls are best-effort: launchctl prints to stderr if the unit
+  // isn't loaded, and we don't want to fail install for that.
+  try {
+    execSync(`launchctl bootout gui/$(id -u)/${SERVICE_LABEL}`, { stdio: "ignore" });
+  } catch { /* unit not loaded — fine */ }
+  // Also kill any orphaned daemon process (started manually or by an
+  // older script) so the new launchd-managed one can claim the singleton
+  // lock on first start.
+  try {
+    const pidPath = DAEMON_PATHS.PID_FILE;
+    if (existsSync(pidPath)) {
+      const pid = parseInt(readFileSync(pidPath, "utf8").trim(), 10);
+      if (Number.isFinite(pid) && pid > 0) {
+        try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+      }
+    }
+  } catch { /* pid file missing — fine */ }
+
   return {
     platform: "darwin",
     unitPath: plist,
@@ -144,6 +171,9 @@ function linuxUnitPath(): string {
 function installLinux(args: InstallArgs): InstallResult {
   const unit = linuxUnitPath();
   mkdirSync(dirname(unit), { recursive: true });
+  // Same node-pinning rationale as macOS — systemd's User= environment is
+  // similarly minimal; resolve node by absolute path.
+  const nodeBin = process.execPath;
   const execArgs = [
     "daemon", "up",
     "--mesh", args.meshSlug,
@@ -157,7 +187,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${shellQuote(args.binaryPath)} ${execArgs}
+ExecStart=${shellQuote(nodeBin)} ${shellQuote(args.binaryPath)} ${execArgs}
 Restart=always
 RestartSec=3
 StandardOutput=append:${DAEMON_PATHS.LOG_FILE}
@@ -168,6 +198,22 @@ Environment=PATH=/usr/local/bin:/usr/bin:/bin
 WantedBy=default.target
 `;
   writeFileSync(unit, content, { mode: 0o644 });
+
+  // Mirror the darwin path: stop the previous unit (if any) so an
+  // upgrade run replaces it cleanly, plus kill any orphaned manual
+  // daemon process holding the singleton lock.
+  try {
+    execSync(`systemctl --user stop ${SYSTEMD_UNIT}`, { stdio: "ignore" });
+  } catch { /* not loaded — fine */ }
+  try {
+    const pidPath = DAEMON_PATHS.PID_FILE;
+    if (existsSync(pidPath)) {
+      const pid = parseInt(readFileSync(pidPath, "utf8").trim(), 10);
+      if (Number.isFinite(pid) && pid > 0) {
+        try { process.kill(pid, "SIGTERM"); } catch { /* already dead */ }
+      }
+    }
+  } catch { /* pid file missing — fine */ }
 
   return {
     platform: "linux",
