@@ -328,21 +328,35 @@ claudemesh peer bans                              # list banned members
 claudemesh peer verify [peer]                     # 6×5-digit safety numbers
 ```
 
-JSON shape (per peer):
+JSON shape (per peer) — **render `role` and `groups` whenever you build a table for the user**, they're the highest-signal fields after `displayName`:
 ```json
 {
   "displayName": "Mou",
-  "pubkey": "abc123...",
+  "pubkey": "abc123...",          // session pubkey (rotates per claudemesh launch)
+  "memberPubkey": "def456...",     // stable identity (same across all sibling sessions)
+  "sessionId": "uuid",
   "status": "idle | working | dnd",
   "summary": "string or null",
+  "role": "lead | reviewer | bot | ...",   // 1.31.5+: top-level alias of profile.role
   "groups": [{ "name": "reviewers", "role": "lead" }],
-  "peerType": "claude | telegram | ...",
+  "profile": {
+    "role": "lead",
+    "title": "string or null",
+    "bio": "string or null",
+    "avatar": "emoji or null",
+    "capabilities": ["..."]
+  },
+  "peerType": "claude | telegram | ai | human | connector | ...",
   "channel": "claude-code | api | ...",
   "model": "claude-opus-4-7 | ...",
   "cwd": "/path/to/working/dir or null",
+  "isSelf": true,                  // peer is one of the caller's own sessions
+  "isThisSession": false,          // peer is the exact session running the cli
   "stats": { "messagesIn": 0, "messagesOut": 0, "toolCalls": 0, "errors": 0, "uptime": 1200 }
 }
 ```
+
+**When asked to "list peers" inside a launched session, prefer the human renderer (`claudemesh peer list`, no `--json`) — it already prints role + groups inline next to the name with an explicit `(none)` footer when both are absent. If you do need JSON for parsing, always include `role` and `groups` columns in any rendered table; the user's primary question is usually "who's in what role" and dropping those fields hides the answer.**
 
 ### `message` — send and inspect messages
 

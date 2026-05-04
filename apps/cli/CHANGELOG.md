@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.31.5 (2026-05-04) — JSON peer list lifts profile.role to top-level + skill guides LLMs to render it
+
+Two follow-ups after 1.31.4 made the human renderer show role/groups
+but a launched-session LLM still dropped them when it called
+`peer list --json` and built its own table.
+
+- **Top-level `role` field on every peer record.** The broker has
+  always returned role nested under `profile.role`, but downstream
+  consumers (LLMs in launched sessions, jq pipelines, dashboards) kept
+  missing it. The CLI now lifts `profile.role` to a top-level `role`
+  field at parse time, so it's the second thing visible in JSON after
+  `displayName`. The original `profile.role` is preserved for
+  backward compatibility.
+- **Updated SKILL.md peer-list section** with the full JSON shape
+  (including `memberPubkey`, `sessionId`, `role`, `profile`, `isSelf`,
+  `isThisSession`) and explicit guidance: when listing peers inside a
+  launched session, prefer the human renderer; if you do need JSON,
+  always include `role` and `groups` columns. The previous version of
+  the skill documented six fields and skipped role + identity entirely.
+
 ## 1.31.4 (2026-05-04) — peer list shows roles and groups
 
 `claudemesh peer list` now surfaces each peer's profile-level role

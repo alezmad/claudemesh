@@ -33,6 +33,10 @@ interface PeerRecord {
   status?: string;
   summary?: string;
   groups: Array<{ name: string; role?: string }>;
+  /** Top-level convenience alias for `profile.role`. Lifted by the
+   * CLI so JSON consumers see role at the shape's top level instead
+   * of nested under profile. Same value either way. */
+  role?: string;
   peerType?: string;
   channel?: string;
   model?: string;
@@ -110,6 +114,13 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
  * tell sender's own sessions from real peers. The broker has always
  * surfaced a sender's siblings as separate rows because they're separate
  * presence rows; the cli just hadn't been making that visible.
+ *
+ * Also lifts `profile.role` to a top-level `role` field. The broker has
+ * always returned role nested under `profile.role`, but downstream JSON
+ * consumers (LLMs in launched sessions, jq pipelines, dashboards) kept
+ * missing it because nothing pointed at the nesting. A dedicated
+ * top-level alias makes the intent unmissable without breaking the
+ * `profile` object's shape for callers that already drill into it.
  */
 function annotateSelf(
   peer: PeerRecord,
@@ -126,7 +137,8 @@ function annotateSelf(
     selfSessionPubkey &&
     peer.pubkey === selfSessionPubkey
   );
-  return { ...peer, isSelf, isThisSession };
+  const role = peer.profile?.role?.trim() || undefined;
+  return { ...peer, ...(role ? { role } : {}), isSelf, isThisSession };
 }
 
 export async function runPeers(flags: PeersFlags): Promise<void> {
