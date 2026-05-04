@@ -30,7 +30,7 @@ afterEach(() => {
 });
 
 describe("session reaper", () => {
-  test("drops entry when pid is dead", () => {
+  test("drops entry when pid is dead", async () => {
     const onDeregister = vi.fn();
     setRegistryHooks({ onDeregister });
 
@@ -47,7 +47,7 @@ describe("session reaper", () => {
     });
     expect(listSessions()).toHaveLength(1);
 
-    _runReaperOnce();
+    await _runReaperOnce();
 
     expect(listSessions()).toHaveLength(0);
     expect(onDeregister).toHaveBeenCalledTimes(1);
@@ -55,15 +55,14 @@ describe("session reaper", () => {
     expect(arg.sessionId).toBe("sess-dead");
   });
 
-  test("keeps entry when pid is alive and start-time matches", () => {
+  test("keeps entry when pid is alive and start-time matches", async () => {
     const onDeregister = vi.fn();
     setRegistryHooks({ onDeregister });
 
     // Use the test runner's own pid (process.pid is always alive here)
     // and capture its real start-time so the start-time guard sees a
-    // match. Without pre-seeding startTime, registerSession would
-    // probe ps and we'd race with that — explicit value keeps the
-    // test deterministic.
+    // match. Pre-seed startTime so registerSession's async ps probe
+    // doesn't race the test.
     const { execFileSync } = require("node:child_process");
     const realStart = execFileSync("ps", ["-o", "lstart=", "-p", String(process.pid)], {
       encoding: "utf8",
@@ -78,13 +77,13 @@ describe("session reaper", () => {
       startTime: realStart,
     });
 
-    _runReaperOnce();
+    await _runReaperOnce();
 
     expect(listSessions()).toHaveLength(1);
     expect(onDeregister).not.toHaveBeenCalled();
   });
 
-  test("drops entry when pid is alive but start-time mismatched (PID reuse)", () => {
+  test("drops entry when pid is alive but start-time mismatched (PID reuse)", async () => {
     const onDeregister = vi.fn();
     setRegistryHooks({ onDeregister });
 
@@ -99,27 +98,30 @@ describe("session reaper", () => {
       startTime: "Sat Jan  1 00:00:00 1980",
     });
 
-    _runReaperOnce();
+    await _runReaperOnce();
 
     expect(listSessions()).toHaveLength(0);
     expect(onDeregister).toHaveBeenCalledTimes(1);
   });
 
-  test("keeps entry when start-time wasn't captured (best-effort fallback)", () => {
+  test("keeps entry when start-time wasn't captured (best-effort fallback)", async () => {
     const onDeregister = vi.fn();
     setRegistryHooks({ onDeregister });
 
     // Register without startTime → reaper falls back to bare liveness.
-    // process.pid is alive, so the entry must survive.
+    // process.pid is alive, so the entry must survive. (The fire-and-
+    // forget capture inside registerSession will eventually populate
+    // startTime, but it does so after a real fork — for this test we
+    // rely on the synchronous reaper pass not seeing it yet.)
     registerSession({
       token: "d".repeat(64),
-      sessionId: "sess-no-start",
+      sessionId: "sess-no-start-" + Math.random().toString(36).slice(2),
       mesh: "m",
       displayName: "x",
       pid: process.pid,
     });
 
-    _runReaperOnce();
+    await _runReaperOnce();
 
     expect(listSessions()).toHaveLength(1);
     expect(onDeregister).not.toHaveBeenCalled();

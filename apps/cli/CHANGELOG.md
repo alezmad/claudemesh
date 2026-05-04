@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.31.1 (2026-05-04) — hotfix: reaper stops blocking the daemon event loop
+
+1.31.0 shipped a session reaper that called `execFileSync("ps")`
+synchronously, once per registered session, every 5 seconds. With ten
+or more sessions registered the daemon's event loop stalled for
+hundreds of milliseconds at a time — long enough that incoming
+`/v1/version` probes from the CLI failed to return within the 2.5 s
+budget and the new "service-managed daemon not responding within
+8000ms" warning fired against a perfectly healthy daemon.
+
+Fix:
+
+- `getProcessStartTime` is now async (`execFile` + promisify), never
+  blocks the event loop.
+- New `getProcessStartTimes(pids)` issues a single batched `ps -p
+  <p1>,<p2>,...` for every survivor in one fork — sweep cost is fixed
+  regardless of session count.
+- `registerSession` stays synchronous: the start-time capture runs
+  fire-and-forget so the IPC route returns instantly. The reaper falls
+  back to bare liveness for the brief window before the start-time
+  lands.
+- `reapDead` is now async; the setInterval wrapper voids it so a
+  rejected sweep can never crash the daemon.
+
+Behavior is otherwise unchanged from 1.31.0 — same 5 s cadence, same
+PID-reuse guard semantics, same broker-WS teardown via the registry
+hook.
+
 ## 1.31.0 (2026-05-04) — session autoclean, install-time broker verification, no more spurious cold-path warnings under service management
 
 **Three operability changes targeting users who installed the daemon as a launchd / systemd service.**
