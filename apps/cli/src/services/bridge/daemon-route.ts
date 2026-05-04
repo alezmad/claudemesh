@@ -1,6 +1,6 @@
-// Try forwarding a send through the local daemon's IPC. Returns null if
-// the daemon isn't running or the daemon's mesh doesn't match the target
-// mesh — the caller falls back to the bridge or cold path.
+// Daemon-routed CLI helpers. Returns null when the daemon is unreachable
+// AND auto-spawn could not bring it up — caller is expected to fall back
+// to its cold-path WS or to error out under `--strict`.
 //
 // Auto-recovery: when the daemon socket is missing or stale, every
 // helper here calls into the lifecycle module which probes, spawns
@@ -8,9 +8,13 @@
 // fires if auto-spawn failed. The lifecycle module caches its
 // per-process result, so a script doing 50 sends pays the spawn cost
 // at most once.
+//
+// 1.28.0: the orphaned bridge tier between daemon and cold paths was
+// removed. Two paths only: daemon (with auto-spawn) → cold.
 
 import { ipc } from "~/daemon/ipc/client.js";
 import { ensureDaemonReady } from "~/services/daemon/lifecycle.js";
+import { getDaemonPolicy } from "~/services/daemon/policy.js";
 import { warnDaemonState } from "~/ui/warnings.ts";
 
 function meshQuery(mesh?: string): string {
@@ -19,13 +23,15 @@ function meshQuery(mesh?: string): string {
 
 /** Common entry: ensure the daemon is reachable, emitting a one-shot
  *  stderr warning describing what we did. Returns true when the daemon
- *  is now reachable, false when the caller should fall back. */
+ *  is now reachable, false when the caller should fall back.
+ *
+ *  --no-daemon short-circuits to false; --strict's enforcement lives at
+ *  the cold-path entry point (`withMesh` in commands/connect.ts) so a
+ *  single chokepoint covers every verb. */
 async function daemonReachable(): Promise<boolean> {
-  const res = await ensureDaemonReady();
-  // Suppress the warning under JSON / quiet at the call site —
-  // helpers here can't see those flags. JSON callers should switch
-  // to lifecycle directly. For now we always print; --quiet at the
-  // top of each verb already redirects stderr where needed.
+  const policy = getDaemonPolicy();
+  if (policy.mode === "no-daemon") return false;
+  const res = await ensureDaemonReady({ noAutoSpawn: false });
   warnDaemonState(res, {});
   return res.state === "up" || res.state === "started";
 }

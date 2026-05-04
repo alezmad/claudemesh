@@ -10,6 +10,7 @@ import { createInterface } from "node:readline";
 import { BrokerClient } from "~/services/broker/facade.js";
 import { readConfig } from "~/services/config/facade.js";
 import type { JoinedMesh } from "~/services/config/facade.js";
+import { getDaemonPolicy } from "~/services/daemon/policy.js";
 
 export interface ConnectOpts {
   /** Mesh slug to connect to. Auto-selects if only one mesh joined. */
@@ -46,6 +47,18 @@ export async function withMesh<T>(
   opts: ConnectOpts,
   fn: (client: BrokerClient, mesh: JoinedMesh) => Promise<T>,
 ): Promise<T> {
+  // --strict gate: every cold-path verb funnels through here, so a single
+  // policy check covers the whole CLI surface. The daemon-routing helpers
+  // already returned null (auto-spawn failed); under --strict we refuse
+  // the cold-path fallback and exit loudly instead.
+  if (getDaemonPolicy().mode === "strict") {
+    console.error(
+      "\n  ✘ daemon not reachable — --strict refuses cold-path fallback.\n" +
+      "    run `claudemesh daemon up` (or `claudemesh doctor`) and retry.\n",
+    );
+    process.exit(1);
+  }
+
   const config = readConfig();
   if (config.meshes.length === 0) {
     console.error("No meshes joined. Run `claudemesh join <url>` first.");

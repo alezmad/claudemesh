@@ -9,12 +9,18 @@ import { renderVersion } from "~/cli/output/version.js";
 import { isInviteUrl, normaliseInviteUrl } from "~/utils/url.js";
 import { classifyInvocation } from "~/cli/policy-classify.js";
 import { gate, type ApprovalMode } from "~/services/policy/index.js";
+import { setDaemonPolicy, policyFromFlags } from "~/services/daemon/policy.js";
 import { bold, clay, cyan, dim, orange } from "~/ui/styles.js";
 
 installSignalHandlers();
 installErrorHandlers();
 
 const { command, positionals, flags } = parseArgv(process.argv);
+
+// Resolve daemon policy once at boot — daemon-routing helpers read this
+// instead of inspecting flags themselves. --no-daemon and --strict are
+// mutually exclusive (--no-daemon wins if both are passed).
+setDaemonPolicy(policyFromFlags(flags));
 
 /**
  * Resolve the coarse approval mode from CLI flags + env.
@@ -210,6 +216,8 @@ Flags
   --policy <path>                  override policy file
   -y, --yes                        skip confirmations (= --approval-mode yolo)
   -q, --quiet                      suppress non-essential output
+  --strict                         require daemon for broker-touching verbs (no cold-path fallback)
+  --no-daemon                      skip daemon entirely; open broker WS directly (CI / sandboxed scripts)
 `;
 
 /**

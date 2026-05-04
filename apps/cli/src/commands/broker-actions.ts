@@ -15,8 +15,6 @@
  */
 
 import { withMesh } from "./connect.js";
-import { readConfig } from "~/services/config/facade.js";
-import { tryBridge } from "~/services/bridge/client.js";
 import { tryForgetViaDaemon } from "~/services/bridge/daemon-route.js";
 import { render } from "~/ui/render.js";
 import { bold, clay, dim } from "~/ui/styles.js";
@@ -25,14 +23,6 @@ import { validateMessageId, renderValidationError } from "~/cli/validators.js";
 
 type StateFlags = { mesh?: string; json?: boolean };
 type PeerStatus = "idle" | "working" | "dnd";
-
-/** Resolve unambiguous mesh slug for warm-path bridging. Returns null if
- * the user has multiple joined meshes and didn't pick one. */
-function unambiguousMesh(opts: StateFlags): string | null {
-  if (opts.mesh) return opts.mesh;
-  const config = readConfig();
-  return config.meshes.length === 1 ? config.meshes[0]!.slug : null;
-}
 
 // --- status ---
 
@@ -43,21 +33,9 @@ export async function runStatusSet(state: string, opts: StateFlags): Promise<num
     return EXIT.INVALID_ARGS;
   }
 
-  // Warm path
-  const meshSlug = unambiguousMesh(opts);
-  if (meshSlug) {
-    const bridged = await tryBridge(meshSlug, "status_set", { status: state });
-    if (bridged !== null) {
-      if (bridged.ok) {
-        if (opts.json) console.log(JSON.stringify({ status: state }));
-        else render.ok(`status set to ${bold(state)}`);
-        return EXIT.SUCCESS;
-      }
-      render.err(bridged.error);
-      return EXIT.INTERNAL_ERROR;
-    }
-  }
-
+  // Bridge tier deleted in 1.28.0 (dead code; the orphaned warm-path
+  // socket was never opened by anyone). Daemon route would belong here;
+  // adding it for status/summary/visible is queued for 1.29.0.
   await withMesh({ meshSlug: opts.mesh ?? null }, async (client) => {
     await client.setStatus(state as PeerStatus);
   });
@@ -72,21 +50,6 @@ export async function runSummary(text: string, opts: StateFlags): Promise<number
   if (!text) {
     render.err("Usage: claudemesh summary <text>");
     return EXIT.INVALID_ARGS;
-  }
-
-  // Warm path
-  const meshSlug = unambiguousMesh(opts);
-  if (meshSlug) {
-    const bridged = await tryBridge(meshSlug, "summary", { summary: text });
-    if (bridged !== null) {
-      if (bridged.ok) {
-        if (opts.json) console.log(JSON.stringify({ summary: text }));
-        else render.ok("summary set", dim(text));
-        return EXIT.SUCCESS;
-      }
-      render.err(bridged.error);
-      return EXIT.INTERNAL_ERROR;
-    }
   }
 
   await withMesh({ meshSlug: opts.mesh ?? null }, async (client) => {
@@ -106,21 +69,6 @@ export async function runVisible(value: string | undefined, opts: StateFlags): P
   else {
     render.err("Usage: claudemesh visible <true|false>");
     return EXIT.INVALID_ARGS;
-  }
-
-  // Warm path
-  const meshSlug = unambiguousMesh(opts);
-  if (meshSlug) {
-    const bridged = await tryBridge(meshSlug, "visible", { visible });
-    if (bridged !== null) {
-      if (bridged.ok) {
-        if (opts.json) console.log(JSON.stringify({ visible }));
-        else render.ok(visible ? "you are now visible to peers" : "you are now hidden", visible ? undefined : "direct messages still reach you");
-        return EXIT.SUCCESS;
-      }
-      render.err(bridged.error);
-      return EXIT.INTERNAL_ERROR;
-    }
   }
 
   await withMesh({ meshSlug: opts.mesh ?? null }, async (client) => {

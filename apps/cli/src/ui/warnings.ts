@@ -7,6 +7,7 @@
  */
 
 import type { EnsureDaemonResult } from "~/services/daemon/lifecycle.js";
+import { getDaemonPolicy } from "~/services/daemon/policy.js";
 import { dim } from "./styles.js";
 
 let alreadyWarned = false;
@@ -26,6 +27,11 @@ export function warnDaemonState(
   if (alreadyWarned) return false;
   if (opts.quiet || opts.json) return false;
   if (res.state === "up") return false;
+
+  // Under --strict, the cold-path gate at `withMesh` will print its own
+  // refusal message — suppress the misleading "using cold path" hint
+  // here so the user sees a single, accurate error.
+  if (getDaemonPolicy().mode === "strict" && res.state !== "started") return false;
 
   alreadyWarned = true;
   const tag = (label: string) => `[claudemesh] ${label}`;

@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.28.0 (2026-05-04) — bridge tier deletion + daemon-policy flags
+
+First Sprint A drop on the way to v2 thin-client. Two structural changes:
+
+### Bridge tier deletion
+
+- `services/bridge/{client,server,protocol}.ts` removed (~600 LoC).
+  These were the per-mesh push-pipe sockets that the legacy MCP shim
+  used to hold open; the 1.24.0 shim rewrite stopped opening them but
+  the orphaned client kept being called as a "warm path" tier between
+  daemon and cold. `tryBridge()` always returned `null` in production
+  for the last seven releases — pure dead code.
+- Each verb now has two paths only: **daemon (with auto-spawn)** →
+  **cold WS**. Same pattern shipped in 1.27.3, simpler to follow.
+- `commands/{peers,send,broker-actions}.ts` — bridge-tier blocks
+  removed; orphaned `unambiguousMesh` helper removed from
+  broker-actions.
+
+### `--no-daemon` and `--strict` flags
+
+New per-process daemon policy:
+
+| Flag | Behavior |
+|---|---|
+| (default) | probe → auto-spawn → retry → cold fallback |
+| `--strict` | probe → auto-spawn → retry → **error** if all fail. No cold fallback. |
+| `--no-daemon` | skip daemon entirely → straight to cold path. For sandboxed CI / scripts that don't want a daemon. |
+
+Env equivalents: `CLAUDEMESH_STRICT_DAEMON=1`, `CLAUDEMESH_NO_DAEMON=1`.
+Flag wins over env. `--no-daemon` and `--strict` are mutually
+exclusive (`--no-daemon` wins if both passed).
+
+Strict-mode enforcement lives at `withMesh` (the cold-path entry
+point) so a single chokepoint covers every verb. Under `--strict`,
+the lifecycle's misleading "using cold path" warning is suppressed
+so the user sees one clean error instead of a confusing two-step.
+
+### What's not in this release (planned for the rest of Sprint A)
+
+- 1.29.0: per-session IPC tokens + auto-scoping
+- 1.30.0: launch wizard refactor
+- 1.31.0: setup wizard refactor
+- 1.32.0: full mesh→workspace public-surface rename
+- 2.0.0 (separate sprint): HKDF cross-machine identity (security-reviewed)
+
 ## 1.27.3 (2026-05-04) — self-healing daemon lifecycle
 
 The CLI now auto-recovers from a dead daemon on every invocation

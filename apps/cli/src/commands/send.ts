@@ -13,7 +13,6 @@
 
 import { withMesh } from "./connect.js";
 import { readConfig } from "~/services/config/facade.js";
-import { tryBridge } from "~/services/bridge/client.js";
 import { trySendViaDaemon } from "~/services/bridge/daemon-route.js";
 import type { Priority } from "~/services/broker/facade.js";
 import { render } from "~/ui/render.js";
@@ -82,34 +81,12 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
       else render.err(`send failed (daemon): ${dr.error}`);
       process.exit(1);
     }
-    // dr === null → daemon not running; fall through to bridge.
+    // dr === null → daemon not running and lifecycle couldn't auto-
+    // spawn it; fall through to cold path. The orphaned bridge tier
+    // was removed in 1.28.0.
   }
 
-  // Warm path — only when mesh is unambiguous.
-  if (meshSlug) {
-    const bridged = await tryBridge(meshSlug, "send", { to, message, priority });
-    if (bridged !== null) {
-      if (bridged.ok) {
-        const r = bridged.result as { messageId?: string };
-        if (flags.json) {
-          console.log(JSON.stringify({ ok: true, messageId: r.messageId, target: to }));
-        } else {
-          render.ok(`sent to ${to}`, r.messageId ? dim(r.messageId.slice(0, 8)) : undefined);
-        }
-        return;
-      }
-      // Bridge reachable but op failed — surface error, don't fall through.
-      if (flags.json) {
-        console.log(JSON.stringify({ ok: false, error: bridged.error }));
-      } else {
-        render.err(`send failed: ${bridged.error}`);
-      }
-      process.exit(1);
-    }
-    // bridged === null → bridge unreachable, fall through to cold path
-  }
-
-  // Cold path
+  // Cold path — open our own WS, encrypt locally, fire envelope.
   await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
     let targetSpec = to;
     if (to.startsWith("#") && !/^#[0-9a-z_-]{20,}$/i.test(to)) {

@@ -14,7 +14,6 @@
 
 import { withMesh } from "./connect.js";
 import { readConfig } from "~/services/config/facade.js";
-import { tryBridge } from "~/services/bridge/client.js";
 import { render } from "~/ui/render.js";
 import { bold, dim, green, yellow } from "~/ui/styles.js";
 
@@ -68,7 +67,10 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
   const selfMemberPubkey = joined?.pubkey ?? null;
 
   // Daemon path — preferred when running. Same routing pattern as send.ts:
-  // ~1 ms IPC round-trip; broker WS already warm in the daemon.
+  // ~1 ms IPC round-trip; broker WS already warm in the daemon. The
+  // lifecycle helper inside tryListPeersViaDaemon auto-spawns the
+  // daemon if it's down and probes it for liveness — no separate bridge
+  // tier is needed any more (1.28.0).
   try {
     const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
     const dr = await tryListPeersViaDaemon();
@@ -77,13 +79,8 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
     }
   } catch { /* daemon route helper not available; fall through */ }
 
-  // Try warm bridge path next.
-  const bridged = await tryBridge(slug, "peers");
-  if (bridged && bridged.ok) {
-    const peers = bridged.result as PeerRecord[];
-    return peers.map((p) => annotateSelf(p, selfMemberPubkey, null));
-  }
-  // Cold path — open our own WS.
+  // Cold path — open our own WS. Reached only when the lifecycle helper
+  // could not bring the daemon up.
   let result: PeerRecord[] = [];
   await withMesh({ meshSlug: slug }, async (client) => {
     const all = (await client.listPeers()) as unknown as PeerRecord[];
