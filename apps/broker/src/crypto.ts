@@ -138,6 +138,128 @@ export async function sealRootKeyToRecipient(params: {
 
 export const HELLO_SKEW_MS = 60_000;
 
+/** Maximum lifetime of a parent attestation (24h). */
+export const SESSION_ATTESTATION_MAX_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Canonical bytes for a parent-vouches-session attestation.
+ *
+ * The parent member signs this with their stable ed25519 secret key when
+ * minting an attestation in `claudemesh launch`. The broker recomputes
+ * the same string at session_hello time and verifies the signature
+ * against `parent_member_pubkey`.
+ *
+ * Format: `claudemesh-session-attest|<parent_pubkey>|<session_pubkey>|<expires_at_ms>`
+ */
+export function canonicalSessionAttestation(
+  parentMemberPubkey: string,
+  sessionPubkey: string,
+  expiresAt: number,
+): string {
+  return `claudemesh-session-attest|${parentMemberPubkey}|${sessionPubkey}|${expiresAt}`;
+}
+
+/**
+ * Canonical bytes for the session_hello signature.
+ *
+ * The session keypair (held by the daemon for the lifetime of the
+ * registration) signs this fresh on every WS connect, proving liveness +
+ * possession of the session secret key. Without this stage, an attacker
+ * who captured an attestation could replay it from any machine.
+ *
+ * Format: `claudemesh-session-hello|<mesh_id>|<parent_pubkey>|<session_pubkey>|<timestamp_ms>`
+ */
+export function canonicalSessionHello(
+  meshId: string,
+  parentMemberPubkey: string,
+  sessionPubkey: string,
+  timestamp: number,
+): string {
+  return `claudemesh-session-hello|${meshId}|${parentMemberPubkey}|${sessionPubkey}|${timestamp}`;
+}
+
+/**
+ * Validate a parent-vouches-session attestation: lifetime bound + signature.
+ * Returns `{ ok: true }` on success or `{ ok: false, reason }` on failure.
+ *
+ * The TTL ceiling (24h) bounds replay damage if an attestation leaks; the
+ * lower bound (already in the past) blocks reuse of expired ones.
+ */
+export async function verifySessionAttestation(args: {
+  parentMemberPubkey: string;
+  sessionPubkey: string;
+  expiresAt: number;
+  signature: string;
+  now?: number;
+}): Promise<
+  | { ok: true }
+  | { ok: false; reason: "expired" | "ttl_too_long" | "bad_signature" | "malformed" }
+> {
+  const now = args.now ?? Date.now();
+  if (!Number.isFinite(args.expiresAt)) {
+    return { ok: false, reason: "malformed" };
+  }
+  if (args.expiresAt <= now) {
+    return { ok: false, reason: "expired" };
+  }
+  if (args.expiresAt > now + SESSION_ATTESTATION_MAX_TTL_MS) {
+    return { ok: false, reason: "ttl_too_long" };
+  }
+  if (
+    !/^[0-9a-f]{64}$/i.test(args.parentMemberPubkey) ||
+    !/^[0-9a-f]{64}$/i.test(args.sessionPubkey) ||
+    !/^[0-9a-f]{128}$/i.test(args.signature)
+  ) {
+    return { ok: false, reason: "malformed" };
+  }
+  const canonical = canonicalSessionAttestation(
+    args.parentMemberPubkey,
+    args.sessionPubkey,
+    args.expiresAt,
+  );
+  const ok = await verifyEd25519(canonical, args.signature, args.parentMemberPubkey);
+  return ok ? { ok: true } : { ok: false, reason: "bad_signature" };
+}
+
+/**
+ * Validate the session-side hello signature: timestamp skew + signature
+ * by the session keypair over canonical session-hello bytes.
+ */
+export async function verifySessionHelloSignature(args: {
+  meshId: string;
+  parentMemberPubkey: string;
+  sessionPubkey: string;
+  timestamp: number;
+  signature: string;
+  now?: number;
+}): Promise<
+  | { ok: true }
+  | { ok: false; reason: "timestamp_skew" | "bad_signature" | "malformed" }
+> {
+  const now = args.now ?? Date.now();
+  if (
+    !Number.isFinite(args.timestamp) ||
+    Math.abs(now - args.timestamp) > HELLO_SKEW_MS
+  ) {
+    return { ok: false, reason: "timestamp_skew" };
+  }
+  if (
+    !/^[0-9a-f]{64}$/i.test(args.parentMemberPubkey) ||
+    !/^[0-9a-f]{64}$/i.test(args.sessionPubkey) ||
+    !/^[0-9a-f]{128}$/i.test(args.signature)
+  ) {
+    return { ok: false, reason: "malformed" };
+  }
+  const canonical = canonicalSessionHello(
+    args.meshId,
+    args.parentMemberPubkey,
+    args.sessionPubkey,
+    args.timestamp,
+  );
+  const ok = await verifyEd25519(canonical, args.signature, args.sessionPubkey);
+  return ok ? { ok: true } : { ok: false, reason: "bad_signature" };
+}
+
 /**
  * Verify a hello's ed25519 signature + timestamp skew.
  * Returns { ok: true } on success, or { ok: false, reason } describing
