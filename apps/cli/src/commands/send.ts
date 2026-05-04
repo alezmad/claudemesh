@@ -47,6 +47,59 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
     flags.mesh ??
     (config.meshes.length === 1 ? config.meshes[0]!.slug : null);
 
+  // 1.31.6: hex-prefix resolution. If `to` looks like hex but isn't a
+  // full 64-char pubkey, resolve it against the peer list and replace
+  // it with the matching full pubkey. The broker stores `targetSpec`
+  // verbatim and the drain query at apps/broker/src/broker.ts:2408
+  // matches only on full pubkeys, so a 16-hex prefix would queue
+  // successfully but never fetch — sender saw "sent", recipient saw
+  // nothing. Resolving here makes the CLI's prefix UX work end-to-end
+  // and surfaces ambiguous / unmatched prefixes with a clear error
+  // instead of a silent drop.
+  if (
+    !to.startsWith("@") &&
+    !to.startsWith("#") &&
+    to !== "*" &&
+    /^[0-9a-f]{4,63}$/i.test(to)
+  ) {
+    try {
+      const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
+      const peers = (await tryListPeersViaDaemon()) ?? [];
+      const lower = to.toLowerCase();
+      const matches = peers.filter((p) => {
+        const pk = (p as { pubkey?: string }).pubkey ?? "";
+        const mpk = (p as { memberPubkey?: string }).memberPubkey ?? "";
+        return pk.toLowerCase().startsWith(lower) || mpk.toLowerCase().startsWith(lower);
+      });
+      if (matches.length === 0) {
+        render.err(`No peer matches hex prefix "${to}".`);
+        const names = peers
+          .map((p) => (p as { displayName?: string }).displayName)
+          .filter(Boolean)
+          .join(", ");
+        if (names) render.hint(`online: ${names}`);
+        process.exit(1);
+      }
+      if (matches.length > 1) {
+        const candidates = matches
+          .map((p) => {
+            const pk = (p as { pubkey?: string }).pubkey ?? "";
+            const dn = (p as { displayName?: string }).displayName ?? "?";
+            return `${dn} ${pk.slice(0, 16)}…`;
+          })
+          .join(", ");
+        render.err(`Ambiguous hex prefix "${to}" — matches ${matches.length} peers.`);
+        render.hint(`candidates: ${candidates}`);
+        render.hint("Use a longer prefix or paste the full 64-char pubkey.");
+        process.exit(1);
+      }
+      to = (matches[0] as { pubkey?: string }).pubkey ?? to;
+    } catch {
+      // Daemon unreachable — fall through; cold path will try a name
+      // lookup and surface its own error if that also fails.
+    }
+  }
+
   // Self-DM safety check: if target is a 64-char hex that matches the
   // caller's own member pubkey (or any of the caller's session/member
   // entries), refuse without --self. Catches the common pasted-from-

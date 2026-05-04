@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.31.6 (2026-05-04) — hex-prefix sends actually deliver now
+
+`claudemesh send <16-hex-prefix> "..."` would acknowledge with `sent
+to <prefix> (daemon)` but the recipient never received the message.
+The broker's pre-flight matched `peer.pubkey === targetSpec` and the
+drain query matched `target_spec = <full-pubkey>` — both exact-equal
+checks, so a 16-hex prefix queued successfully but no recipient drain
+ever fetched the row. Sender saw "sent", recipient saw nothing.
+
+Fix: the CLI now resolves any hex prefix (4-63 chars, not full 64) to
+the full pubkey via the daemon's peer list before submitting to the
+broker. Three outcomes:
+
+- **Unique match:** prefix is canonicalized to the full 64-char
+  pubkey; the rest of the send pipeline is unchanged.
+- **No match:** clear error `No peer matches hex prefix "X"` with the
+  list of online peers' display names.
+- **Multiple matches:** clear error listing the candidates and a hint
+  to lengthen the prefix.
+
+The 16-hex prefix shown in `peer list` rows is now safe to copy-paste
+into `claudemesh send` — what worked in the docs finally works in the
+CLI.
+
 ## 1.31.5 (2026-05-04) — JSON peer list lifts profile.role to top-level + skill guides LLMs to render it
 
 Two follow-ups after 1.31.4 made the human renderer show role/groups
