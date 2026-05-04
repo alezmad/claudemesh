@@ -170,6 +170,10 @@ export interface WSSendMessage {
    *  Server validates same-topic membership; FK is set null if parent
    *  later disappears. Ignored for non-topic targets. */
   replyToId?: string;
+  /** Optional ciphertext-format version. 1 = v1 plaintext base64;
+   *  2 = v0.3.0 phase 3 per-topic encrypted body. Server passes this
+   *  through verbatim into topic_message.body_version. */
+  bodyVersion?: number;
 }
 
 /** Broker → client: an envelope addressed to this peer. */
@@ -1390,6 +1394,16 @@ export interface WSVaultGetMessage { type: "vault_get"; keys: string[]; _reqId?:
 export interface WSWatchMessage { type: "watch"; url: string; mode?: "hash" | "json" | "status"; extract?: string; interval?: number; notify_on?: string; headers?: Record<string, string>; label?: string; _reqId?: string; }
 /** Client → broker: stop watching. */
 export interface WSUnwatchMessage { type: "unwatch"; watchId: string; _reqId?: string; }
+/** Client → broker: soft-disconnect a peer (1000; CLI auto-reconnects). */
+export interface WSDisconnectMessage { type: "disconnect"; target?: string; stale?: number; all?: boolean; _reqId?: string; }
+/** Client → broker: hard-kick a peer (4001; CLI exits). */
+export interface WSKickMessage { type: "kick"; target?: string; stale?: number; all?: boolean; _reqId?: string; }
+/** Client → broker: ban a member by pubkey or display name. */
+export interface WSBanMessage { type: "ban"; target: string; reason?: string; _reqId?: string; }
+/** Client → broker: lift a ban. */
+export interface WSUnbanMessage { type: "unban"; target: string; _reqId?: string; }
+/** Client → broker: list active bans on the caller's mesh. */
+export interface WSListBansMessage { type: "list_bans"; _reqId?: string; }
 /** Client → broker: list active watches. */
 export interface WSWatchListMessage { type: "watch_list"; _reqId?: string; }
 /** Broker → client: watch created acknowledgement. */
@@ -1494,7 +1508,12 @@ export type WSClientMessage =
   | WSVaultGetMessage
   | WSWatchMessage
   | WSUnwatchMessage
-  | WSWatchListMessage;
+  | WSWatchListMessage
+  | WSDisconnectMessage
+  | WSKickMessage
+  | WSBanMessage
+  | WSUnbanMessage
+  | WSListBansMessage;
 
 // --- Skill messages ---
 
@@ -1546,6 +1565,8 @@ export interface WSSkillDataMessage {
     instructions: string;
     tags: string[];
     author: string;
+    /** Optional opaque metadata stored alongside the skill body. */
+    manifest?: unknown;
     createdAt: string;
   } | null;
   _reqId?: string;

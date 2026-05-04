@@ -22,7 +22,7 @@ import { invite as inviteTable, mesh, meshMember, messageQueue, presence, schedu
 import { user } from "@turbostarter/db/schema/auth";
 import { handleCliSync, type CliSyncRequest } from "./cli-sync";
 import { generateId } from "@turbostarter/shared/utils";
-import { updateMemberProfile, listMeshMembers, updateMeshSettings } from "./member-api";
+import { updateMemberProfile, listMeshMembers, updateMeshSettings, type MemberUpdateRequest, type SelfEditablePolicy } from "./member-api";
 import {
   claimTask,
   completeTask,
@@ -831,7 +831,12 @@ function handleHttpRequest(req: IncomingMessage, res: ServerResponse): void {
     req.on("data", (c: Buffer) => chunks.push(c));
     req.on("end", () => {
       try {
-        const body = JSON.parse(Buffer.concat(chunks).toString());
+        const body = JSON.parse(Buffer.concat(chunks).toString()) as {
+          meshId?: string;
+          memberId?: string;
+          pubkey?: string;
+          secretKey?: string;
+        };
         const { meshId: tgMeshId, memberId: tgMemberId, pubkey: tgPubkey, secretKey: tgSecretKey } = body;
         if (!tgMeshId || !tgMemberId || !tgPubkey || !tgSecretKey) {
           writeJson(res, 400, { error: "meshId, memberId, pubkey, secretKey required" });
@@ -1099,7 +1104,7 @@ function handleInviteClaimV2Post(
       const raw = Buffer.concat(chunks).toString();
       let payload: { recipient_x25519_pubkey?: string; display_name?: string };
       try {
-        payload = JSON.parse(raw);
+        payload = JSON.parse(raw) as { recipient_x25519_pubkey?: string; display_name?: string };
       } catch {
         writeJson(res, 400, { error: "malformed" });
         return;
@@ -1197,7 +1202,7 @@ async function handleUploadPost(
   let tags: string[] = [];
   if (tagsRaw) {
     try {
-      tags = JSON.parse(tagsRaw);
+      tags = JSON.parse(tagsRaw) as string[];
     } catch {
       tags = [];
     }
@@ -1259,7 +1264,7 @@ async function handleUploadPost(
       let fileKeys: Array<{ peerPubkey: string; sealedKey: string }> = [];
       if (encrypted && fileKeysRaw) {
         try {
-          fileKeys = JSON.parse(fileKeysRaw);
+          fileKeys = JSON.parse(fileKeysRaw) as Array<{ peerPubkey: string; sealedKey: string }>;
         } catch { /* ignore */ }
       }
 
@@ -1364,7 +1369,7 @@ function handleMemberPatchPost(req: IncomingMessage, res: ServerResponse, meshId
   req.on("end", async () => {
     if (aborted) return;
     try {
-      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as MemberUpdateRequest;
       // Auth: callerMemberId from X-Member-Id header (dashboard or CLI provides this)
       const callerMemberId = req.headers["x-member-id"] as string | undefined;
       if (!callerMemberId) { writeJson(res, 401, { ok: false, error: "X-Member-Id header required" }); return; }
@@ -1407,7 +1412,7 @@ function handleMeshSettingsPatch(req: IncomingMessage, res: ServerResponse, mesh
   req.on("end", async () => {
     if (aborted) return;
     try {
-      const body = JSON.parse(Buffer.concat(chunks).toString());
+      const body = JSON.parse(Buffer.concat(chunks).toString()) as { selfEditable?: SelfEditablePolicy };
       const callerMemberId = req.headers["x-member-id"] as string | undefined;
       if (!callerMemberId) { writeJson(res, 401, { ok: false, error: "X-Member-Id header required" }); return; }
       const result = await updateMeshSettings(meshId, callerMemberId, body);
@@ -3753,7 +3758,7 @@ function handleConnection(ws: WebSocket): void {
             const gqRecords = gqResult.records.map((r) => {
               const obj: Record<string, unknown> = {};
               for (const key of r.keys) {
-                obj[key] = r.get(key);
+                obj[String(key)] = r.get(key);
               }
               return obj;
             });
@@ -3788,7 +3793,7 @@ function handleConnection(ws: WebSocket): void {
             const geRecords = geResult.records.map((r) => {
               const obj: Record<string, unknown> = {};
               for (const key of r.keys) {
-                obj[key] = r.get(key);
+                obj[String(key)] = r.get(key);
               }
               return obj;
             });
@@ -3877,10 +3882,10 @@ function handleConnection(ws: WebSocket): void {
           const [peers, stateEntries, memCount, fileCount, taskCounts, streams, tables] = await Promise.all([
             listPeersInMesh(conn.meshId),
             listState(conn.meshId),
-            db.execute(sql`SELECT COUNT(*) as n FROM mesh.memory WHERE mesh_id = ${conn.meshId} AND forgotten_at IS NULL`).then(r => Number(((r.rows ?? r) as any[])[0]?.n ?? 0)),
-            db.execute(sql`SELECT COUNT(*) as n FROM mesh.file WHERE mesh_id = ${conn.meshId} AND deleted_at IS NULL`).then(r => Number(((r.rows ?? r) as any[])[0]?.n ?? 0)),
+            db.execute(sql`SELECT COUNT(*) as n FROM mesh.memory WHERE mesh_id = ${conn.meshId} AND forgotten_at IS NULL`).then(r => Number((((r as unknown as { rows?: unknown[] }).rows ?? (r as unknown as unknown[])) as any[])[0]?.n ?? 0)),
+            db.execute(sql`SELECT COUNT(*) as n FROM mesh.file WHERE mesh_id = ${conn.meshId} AND deleted_at IS NULL`).then(r => Number((((r as unknown as { rows?: unknown[] }).rows ?? (r as unknown as unknown[])) as any[])[0]?.n ?? 0)),
             db.execute(sql`SELECT status, COUNT(*) as n FROM mesh.task WHERE mesh_id = ${conn.meshId} GROUP BY status`).then(r => {
-              const rows = (r.rows ?? r) as Array<{ status: string; n: string }>;
+              const rows = (((r as unknown as { rows?: unknown[] }).rows ?? (r as unknown as unknown[]))) as Array<{ status: string; n: string }>;
               const counts = { open: 0, claimed: 0, done: 0 };
               for (const row of rows) counts[row.status as keyof typeof counts] = Number(row.n);
               return counts;

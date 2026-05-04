@@ -31,7 +31,7 @@ export interface MemberPermissionUpdate {
 
 export type MemberUpdateRequest = MemberProfileUpdate & MemberPermissionUpdate;
 
-interface SelfEditablePolicy {
+export interface SelfEditablePolicy {
   displayName: boolean;
   roleTag: boolean;
   groups: boolean;

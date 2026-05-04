@@ -102,11 +102,11 @@ export function validateTelegramConnectToken(
     if (!timingSafeEqual(a, b)) return null;
 
     // Verify header algorithm
-    const header = JSON.parse(base64urlDecode(headerB64));
+    const header = JSON.parse(base64urlDecode(headerB64)) as { alg?: string };
     if (header.alg !== "HS256") return null;
 
     // Decode and validate claims
-    const claims: JwtClaims = JSON.parse(base64urlDecode(payloadB64));
+    const claims = JSON.parse(base64urlDecode(payloadB64)) as JwtClaims;
 
     // Check subject
     if (claims.sub !== "telegram-connect") return null;

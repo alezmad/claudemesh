@@ -13,6 +13,7 @@ import { Bot, InputFile } from "grammy";
 import WebSocket from "ws";
 import sodium from "libsodium-wrappers";
 import { validateTelegramConnectToken } from "./telegram-token";
+import { log } from "./logger";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -22,11 +23,12 @@ export interface BridgeRow {
   chatId: number;
   meshId: string;
   meshSlug?: string;
-  memberId: string;
+  /** memberId can be null until the bridge claims a mesh.member row. */
+  memberId: string | null;
   pubkey: string;
   secretKey: string;
-  displayName: string;
-  chatType: string;
+  displayName: string | null;
+  chatType: string | null;
   chatTitle: string | null;
 }
 
@@ -228,7 +230,7 @@ class MeshConnection {
 
       ws.on("message", async (raw) => {
         try {
-          const msg = JSON.parse(raw.toString());
+          const msg = JSON.parse(raw.toString()) as Record<string, any>;
 
           if (msg.type === "hello_ack") {
             clearTimeout(helloTimeout);
@@ -674,8 +676,8 @@ function createPushHandler(bot: Bot) {
     for (const chatId of chatIds) {
       bot.api
         .sendMessage(chatId, formatted)
-        .catch((e) => {
-          console.error(`[tg-bridge] send to chat ${chatId} failed:`, e.message);
+        .catch((e: unknown) => {
+          console.error(`[tg-bridge] send to chat ${chatId} failed:`, e instanceof Error ? e.message : String(e));
         });
     }
   };
@@ -1729,11 +1731,12 @@ async function executeAiToolCall(
         for (const meshId of meshIds) {
           const services = await listDbMeshServices(meshId);
           for (const s of services) {
+            const sx = s as Record<string, unknown>;
             allServices.push({
-              name: s.name,
-              type: s.type ?? "mcp",
-              tools: s.tool_count ?? 0,
-              status: s.status ?? "running",
+              name: String(sx.name ?? ""),
+              type: String(sx.type ?? "mcp"),
+              tools: Number(sx.tool_count ?? 0),
+              status: String(sx.status ?? "running"),
             });
           }
         }
@@ -1841,6 +1844,9 @@ export async function bootTelegramBridge(
   for (const [meshId, meshRows] of byMesh) {
     const first = meshRows[0]!;
     try {
+      // memberId/displayName come back from DB nullable; bridge only
+      // works once both are populated, so skip rows missing either.
+      if (!first.memberId || !first.displayName) continue;
       await ensureMeshConnection(
         {
           meshId,

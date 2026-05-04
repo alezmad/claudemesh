@@ -1013,7 +1013,7 @@ export async function topicHistory(args: {
     ORDER BY tm.created_at DESC, tm.id DESC
     LIMIT ${limit}
   `);
-  const rows = (result.rows ?? result) as Array<{
+  const rows = ((result as unknown as { rows?: unknown[] }).rows ?? (result as unknown as unknown[])) as Array<{
     id: string;
     sender_member_id: string;
     sender_pubkey: string;
@@ -1442,7 +1442,7 @@ export async function recallMemory(
     ORDER BY ts_rank(search_vector, plainto_tsquery('english', ${query})) DESC
     LIMIT 20
   `);
-  const rows = (result.rows ?? result) as Array<{
+  const rows = ((result as unknown as { rows?: unknown[] }).rows ?? (result as unknown as unknown[])) as Array<{
     id: string;
     content: string;
     tags: string[];
@@ -2010,7 +2010,7 @@ export async function getContext(
     ORDER BY updated_at DESC
     LIMIT 20
   `);
-  const rows = (result.rows ?? result) as Array<{
+  const rows = ((result as unknown as { rows?: unknown[] }).rows ?? (result as unknown as unknown[])) as Array<{
     peer_name: string | null;
     summary: string;
     files_read: string[] | null;
@@ -2419,7 +2419,7 @@ export async function drainForMember(
     SELECT * FROM claimed ORDER BY created_at ASC, id ASC
   `);
 
-  const rows = (result.rows ?? result) as Array<{
+  const rows = ((result as unknown as { rows?: unknown[] }).rows ?? (result as unknown as unknown[])) as Array<{
     id: string;
     priority: string;
     nonce: string;
@@ -2665,7 +2665,11 @@ export async function findMemberByPubkey(
       ),
     )
     .limit(1);
-  return row ?? null;
+  if (!row) return null;
+  return {
+    ...row,
+    defaultGroups: row.defaultGroups ?? [],
+  };
 }
 
 // --- Mesh databases (per-mesh PostgreSQL schemas) ---
@@ -2719,7 +2723,7 @@ export async function meshQuery(
       sql.raw(`SET LOCAL search_path TO "${schema}"`)
     );
     const result = await tx.execute(sql.raw(query));
-    const rows = (result.rows ?? []) as Array<Record<string, unknown>>;
+    const rows = ((result as unknown as { rows?: unknown[] }).rows ?? (result as unknown as unknown[])) as Array<Record<string, unknown>>;
     const columns = rows.length > 0 ? Object.keys(rows[0]!) : [];
     return { columns, rows, rowCount: rows.length };
   });
@@ -2762,7 +2766,7 @@ export async function meshSchema(
     WHERE table_schema = ${schema}
     ORDER BY table_name, ordinal_position
   `);
-  const rows = (result.rows ?? result) as Array<{
+  const rows = ((result as unknown as { rows?: unknown[] }).rows ?? (result as unknown as unknown[])) as Array<{
     table_name: string;
     column_name: string;
     data_type: string;

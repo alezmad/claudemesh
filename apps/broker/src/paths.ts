@@ -115,11 +115,11 @@ function lastAssistantHasToolUse(filePath: string): boolean {
       if (!line) continue;
       if (!line.includes('"assistant"')) continue;
       try {
-        const d = JSON.parse(line);
+        const d = JSON.parse(line) as { type?: string; message?: { content?: unknown } };
         if (d.type !== "assistant") continue;
         const content = d.message?.content;
         if (!Array.isArray(content)) continue;
-        return content.some((c: { type?: string }) => c.type === "tool_use");
+        return (content as Array<{ type?: string }>).some((c) => c.type === "tool_use");
       } catch {
         /* malformed line, skip */
       }

@@ -169,7 +169,7 @@ function detectEntry(
     try {
       const pkg = JSON.parse(
         readFileSync(join(sourcePath, "package.json"), "utf-8"),
-      );
+      ) as { main?: string; bin?: string | Record<string, string> };
       if (pkg.main) return { command: cmd, args: [pkg.main] };
       if (pkg.bin) {
         const bin =
@@ -372,7 +372,7 @@ function spawnService(svc: ManagedService): void {
   const rl = createInterface({ input: child.stdout! });
   rl.on("line", (line) => {
     try {
-      const msg = JSON.parse(line);
+      const msg = JSON.parse(line) as { id?: string | number; error?: { message?: string }; result?: unknown };
       if (msg.id && svc.pendingCalls.has(String(msg.id))) {
         const pending = svc.pendingCalls.get(String(msg.id))!;
         clearTimeout(pending.timer);

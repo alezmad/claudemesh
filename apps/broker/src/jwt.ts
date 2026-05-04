@@ -86,7 +86,7 @@ export async function verifySyncToken(
     }
 
     // Decode header — must be HS256
-    const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerB64)));
+    const header = JSON.parse(new TextDecoder().decode(base64UrlDecode(headerB64))) as { alg?: string };
     if (header.alg !== "HS256") {
       return { ok: false, error: `unsupported algorithm: ${header.alg}` };
     }
