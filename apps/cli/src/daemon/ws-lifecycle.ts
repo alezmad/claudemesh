@@ -139,6 +139,25 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
    * but ignores the rejection — by then the close handler has already
    * scheduled its own reconnect).
    */
+  // Liveness watchdog: same cadence (30s) as the broker's outbound
+  // ping. Two jobs per tick:
+  //   1. If we haven't heard from the broker in >75s (2.5x the ping
+  //      cadence — covers one missed ping plus some slack), terminate
+  //      the socket. Fires the close handler → backoff reconnect runs
+  //      its normal path. This is what catches NAT-dropped half-dead
+  //      connections that the kernel won't RST for ~2 hours.
+  //   2. Otherwise, send our own ping. The broker's `ws` library
+  //      auto-replies with a pong, which bumps lastActivity. This
+  //      keeps the broker's stale-pong watchdog seeing us as alive.
+  //
+  // Bare `ping` and `pong` events both bump lastActivity, as does
+  // any inbound application message — any sign of life resets the
+  // dead-man's-switch.
+  const PING_INTERVAL_MS = 30_000;
+  const STALE_THRESHOLD_MS = 75_000;
+  let lastActivity = Date.now();
+  let watchdogTimer: NodeJS.Timeout | null = null;
+
   const openOnce = (): Promise<void> => {
     if (closed) return Promise.reject(new Error("client_closed"));
     setStatus("connecting");
@@ -146,6 +165,7 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
     log("info", "ws_open_attempt", { url: opts.url });
     const sock = new WebSocket(opts.url);
     ws = sock;
+    lastActivity = Date.now();
 
     return new Promise<void>((resolve, reject) => {
       sock.on("open", () => {
@@ -170,6 +190,7 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
       });
 
       sock.on("message", (raw) => {
+        lastActivity = Date.now();
         let msg: Record<string, unknown>;
         try { msg = JSON.parse(raw.toString()) as Record<string, unknown>; }
         catch { return; }
@@ -179,6 +200,18 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
           setStatus("open");
           reconnectAttempt = 0;
           log("info", "ws_hello_acked", { url: opts.url });
+          // Start liveness watchdog only after a successful handshake.
+          if (watchdogTimer) clearInterval(watchdogTimer);
+          watchdogTimer = setInterval(() => {
+            if (sock.readyState !== sock.OPEN) return;
+            const idle = Date.now() - lastActivity;
+            if (idle > STALE_THRESHOLD_MS) {
+              log("warn", "ws_stale_terminate", { url: opts.url, idle_ms: idle });
+              try { sock.terminate(); } catch { /* socket already gone */ }
+              return;
+            }
+            try { sock.ping(); } catch { /* ignore */ }
+          }, PING_INTERVAL_MS);
           resolve();
           return;
         }
@@ -186,8 +219,12 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
         opts.onMessage(msg);
       });
 
+      sock.on("ping", () => { lastActivity = Date.now(); });
+      sock.on("pong", () => { lastActivity = Date.now(); });
+
       sock.on("close", (code, reason) => {
         if (helloTimer) { clearTimeout(helloTimer); helloTimer = null; }
+        if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
         const reasonStr = reason.toString("utf8");
         log("warn", "ws_closed", { url: opts.url, code, reason: reasonStr, status });
         opts.onBeforeReconnect?.(code, reasonStr);
@@ -227,6 +264,7 @@ export function connectWsWithBackoff(opts: WsLifecycleOptions): Promise<WsLifecy
         closed = true;
         if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         if (helloTimer) { clearTimeout(helloTimer); helloTimer = null; }
+        if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null; }
         try { ws?.close(); } catch { /* ignore */ }
         setStatus("closed");
       },

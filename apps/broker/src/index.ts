@@ -161,6 +161,11 @@ interface PeerConn {
    *  on long-lived control-plane connections (daemon, dashboard) that
    *  would just auto-reconnect. */
   peerRole: "control-plane" | "session" | "service";
+  /** Last time this connection's WS replied to a broker ping. Bumped
+   *  in the `pong` handler. Used by the staleness watchdog to detect
+   *  half-dead TCP/NAT-dropped connections that the kernel hasn't yet
+   *  RST'd (Linux default keepalive ≈ 2hrs). */
+  lastPongAt: number;
 }
 
 const connections = new Map<string, PeerConn>();
@@ -1803,6 +1808,7 @@ async function handleHello(
     visible: saved?.visible ?? true,
     profile: saved?.profile ?? {},
     peerRole: "control-plane",
+    lastPongAt: Date.now(),
   });
   incMeshCount(hello.meshId);
   void audit(hello.meshId, "peer_joined", member.id, effectiveDisplayName, {
@@ -2029,6 +2035,7 @@ async function handleSessionHello(
     visible: true,
     profile: {},
     peerRole: "session",
+    lastPongAt: Date.now(),
   });
   incMeshCount(hello.meshId);
   void audit(hello.meshId, "peer_joined", member.id, effectiveDisplayName, {
@@ -5235,7 +5242,11 @@ function handleConnection(ws: WebSocket): void {
     log.warn("ws error", { error: err.message });
   });
   ws.on("pong", () => {
-    if (presenceId) void heartbeat(presenceId);
+    if (presenceId) {
+      const conn = connections.get(presenceId);
+      if (conn) conn.lastPongAt = Date.now();
+      void heartbeat(presenceId);
+    }
   });
 }
 
@@ -5427,10 +5438,26 @@ async function main(): Promise<void> {
     });
   });
 
-  // WS heartbeat ping every 30s; clients reply with pong → bumps lastPingAt.
+  // WS heartbeat ping every 30s; clients reply with pong → bumps
+  // lastPongAt. Connections whose pong is older than 75s (2.5x the
+  // ping interval) are considered half-dead — kernel hasn't yet RST'd
+  // the socket but no application traffic is flowing. Force-terminate
+  // them to fire the close handler and free the connection slot.
+  const STALE_PONG_THRESHOLD_MS = 75_000;
   const pingInterval = setInterval(() => {
-    for (const { ws } of connections.values()) {
-      if (ws.readyState === ws.OPEN) ws.ping();
+    const now = Date.now();
+    for (const [pid, conn] of connections) {
+      const { ws } = conn;
+      if (ws.readyState !== ws.OPEN) continue;
+      if (now - conn.lastPongAt > STALE_PONG_THRESHOLD_MS) {
+        log.warn("ws stale terminate", {
+          presence_id: pid,
+          last_pong_ago_ms: now - conn.lastPongAt,
+        });
+        try { ws.terminate(); } catch { /* socket already gone */ }
+        continue;
+      }
+      ws.ping();
     }
   }, 30_000);
   pingInterval.unref();
