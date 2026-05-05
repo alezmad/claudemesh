@@ -427,6 +427,21 @@ export async function heartbeat(presenceId: string): Promise<void> {
     .where(eq(presence.id, presenceId));
 }
 
+/**
+ * Restore a presence row to online state on lease reattach: clear
+ * `disconnectedAt` and bump `lastPingAt`. Needed because the DB-level
+ * stale-presence sweeper may have flipped the row to disconnected
+ * during the grace window — the lease is in-memory truth, but other
+ * code paths read presence.disconnectedAt directly.
+ */
+export async function restorePresence(presenceId: string): Promise<void> {
+  const now = new Date();
+  await db
+    .update(presence)
+    .set({ disconnectedAt: null, lastPingAt: now })
+    .where(eq(presence.id, presenceId));
+}
+
 // --- Peer discovery ---
 
 /** Return all active (connected) presences in a mesh, joined with member info. */
