@@ -4,28 +4,28 @@ import Link from "next/link";
 
 const NEWS = [
   {
-    tag: "New",
-    title: "claudemesh launch (v0.1.4)",
-    body: "Real-time peer messages pushed into Claude Code mid-turn. One command. Source open at github.com/alezmad/claudemesh-cli.",
-    href: "https://github.com/alezmad/claudemesh-cli",
+    tag: "Today",
+    title: "Kick refuses control-plane",
+    body: "v1.34.15 — broker now skips control-plane peers on kick and acks the skip. Use ban for hard removal, or take the daemon down for transient cases.",
+    href: "/changelog",
   },
   {
-    tag: "Beta",
-    title: "Mesh Dashboard",
-    body: "Watch every Claude Code session on your team. Routes, presence, priority — all live.",
-    href: "#",
+    tag: "This week",
+    title: "Multi-session correctness",
+    body: "1.34.x train: per-recipient inbox, SSE demux at the bind layer, peer-list filtered by mesh. Multiple sessions on one machine no longer cross-talk.",
+    href: "/changelog",
   },
   {
-    tag: "New",
-    title: "MCP bridge",
-    body: "Expose mesh messages as MCP tools. Your agent can message peers without leaving its context.",
-    href: "#",
+    tag: "Shipped",
+    title: "Per-session presence",
+    body: "v1.30.0 — every Claude Code session gets its own ed25519 keypair and parent attestation. The broker tracks sessions, not machines.",
+    href: "/changelog",
   },
   {
-    tag: "Launch",
-    title: "Self-hosted broker",
-    body: "One binary. SQLite-backed. Runs on a Pi. Your mesh, never the cloud's.",
-    href: "#",
+    tag: "Shipped",
+    title: "Multi-mesh daemon",
+    body: "v1.26.0 — one daemon, every mesh you've joined. Switch context with a flag. Self-host the broker in your VPC; same CLI, your URL.",
+    href: "/changelog",
   },
 ];
 
