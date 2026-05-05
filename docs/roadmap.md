@@ -425,6 +425,62 @@ Three of the four 1.34.x triage gaps shipped in 1.34.14 + 1.34.15
 
 ---
 
+## v1.34.16 + broker — *continuous presence* — *shipped*
+
+User report on 2026-05-05: `claudemesh peer list` returned zero
+peers despite running sessions. Diagnosis: half-dead WS connections
+that NAT/CGNAT silently dropped, with no application-layer staleness
+detection on either side. Linux TCP keepalive default ≈ 2hrs idle
++ 11min probes — sessions stayed zombie for hours before the kernel
+RST'd the socket and the daemon's existing close-handler reconnect
+fired.
+
+Two layers shipped together:
+
+- **Liveness watchdogs** *(broker + CLI 1.34.16)*. Both sides now
+  detect stalled WS in 75s instead of waiting for the kernel.
+  - Broker: `PeerConn.lastPongAt` bumped on every `pong`. The 30s
+    ping loop also calls `ws.terminate()` on conns whose pong is
+    >75s stale, firing the close handler → existing peer_left
+    cleanup.
+  - Daemon: `ws-lifecycle.ts` adds an idle watchdog at 30s cadence,
+    started after hello-ack. Bumps `lastActivity` on incoming
+    message + ping + pong frames. Sends its own `sock.ping()` if
+    activity is recent, `sock.terminate()` if idle >75s. Watchdog
+    cleared on close + explicit close().
+  - 100x improvement on detection time (2hrs → 75s).
+- **Lease model** *(broker only, no protocol change)*. Peers no
+  longer see `peer_left`/`peer_joined` for transient reconnects.
+  - `PeerConn` gains `leaseState` ("online"|"offline"), `leaseUntil`,
+    `evictionTimer`. On WS close, the conn enters **offline-leased**
+    state for 90s instead of immediate cleanup.
+  - `handleHello` and `handleSessionHello` check for an offline-
+    leased entry matching the stable identity before running session-
+    id dedup. On match: clear `evictionTimer`, swap `ws`, restore
+    online state, drain queued DMs, return `silent: true`. The
+    hello dispatcher skips the peer_joined broadcast.
+  - `evictPresenceFully` extracted from the close handler — runs
+    the peer_left broadcast + cleanup (URL watches, streams, MCP
+    registry, clock auto-pause). Called by `evictionTimer` after 90s
+    grace, or directly when no lease was online (defensive).
+  - `broker.ts` exports `restorePresence(presenceId)` — clears
+    `disconnectedAt` + bumps `lastPingAt`, called on reattach to
+    undo the DB-level stale-presence sweeper if it fired during
+    grace.
+  - DMs sent during grace fall through to the existing message_queue
+    path (sendToPeer no-ops on dead WS, queue row stays with
+    deliveredAt=NULL, drained on reattach). Backward compatible
+    with old daemons.
+
+Spec at `.artifacts/specs/2026-05-05-continuous-presence.md`.
+Layer 3 (resume token to skip full attestation on reconnect) deferred
+— pure optimization, not needed for the user-visible "no
+invisibility moment" goal.
+
+*Shipped 2026-05-05.*
+
+---
+
 ## v2.0.0 — *HKDF cross-machine identity*
 
 The remaining v2 promise after Sprint A: the user's account secret
