@@ -1,5 +1,96 @@
 # Changelog
 
+## 1.34.17 (2026-05-20) — host fingerprint v2: stable across Mac reboots
+
+Fixes a long-standing class of false-positive `host_fingerprint
+mismatch` failures that put the daemon in a launchd restart loop
+after Mac reboots (one user observed the daemon's `runs` counter
+climb past 360 and `daemon.log` balloon to 24 MB before the next
+manual `claudemesh daemon accept-host`).
+
+### Root cause
+
+`apps/cli/src/daemon/identity.ts` (v1) computed `sha256(host_id ||
+mac)` where `host_id` was empty on macOS (the file commented "No
+reliable file; fall back to MAC-only fingerprint") and `mac` was
+picked by enumerating `os.networkInterfaces()`, filtering a small
+list of known-virtual interface name prefixes, then sorting the
+remainder lex and taking the first.
+
+On a Mac with Wi-Fi the lex-first survivor was usually `en0` — but
+Apple's privacy feature randomizes the Wi-Fi MAC, and the random
+value can change across reboots, network rejoins, or when the user
+toggles "Private Wi-Fi address" for a network. The stored
+fingerprint was hashed from one randomized MAC; after a reboot,
+`pickStableMac()` returned a different randomized MAC; the hashes
+diverged; the daemon refused to start and the LaunchAgent
+respawned it every second.
+
+The interface name filter was also missing several macOS virtual
+adapters (`anpi*`, `bridge*`, `ap[0-9]`) which can churn for
+similar reasons.
+
+### The fix — schema_version 2
+
+- **macOS host_id** — `IOPlatformUUID` via `ioreg -rd1 -c
+  IOPlatformExpertDevice`, parsed at daemon start (~30 ms,
+  cached for the process lifetime). Burned into EFI; stable
+  across reboots, OS reinstalls, and macOS upgrades. Falls back
+  to MAC-only if `ioreg` fails or is missing (`darwin` namespaced
+  so it can never collide with a `linux:` machine-id).
+- **MAC picker hardening** — rejects any MAC with the
+  locally-administered bit (`0x02` of the first byte) set. These
+  are randomization-prone by definition (RFC 5342). Hardware
+  MACs (universally-administered, OUI-prefixed) are preferred;
+  locally-administered MACs are kept only as a fallback when no
+  hardware NIC is enumerable.
+- **Extended interface ignore list** — `anpi`, `bridge`,
+  `ap[0-9]` join the existing `lo|docker|br-|veth|tap|tun|
+  tailscale|wg|utun|ppp|vboxnet|vmnet|awdl|llw`.
+- **Domain-separated hash** — v2 hash prefixes `"v2\0"` before
+  `host_id || \0 || mac`. Guarantees v1 and v2 outputs can never
+  collide on the same inputs, so the migration check is
+  unambiguous.
+
+### Silent migration (v1 → v2)
+
+`checkFingerprint()` now handles three cases:
+
+1. Stored file has `schema_version: 2` → direct hash compare.
+2. Stored file has `schema_version: 1` → recompute fingerprint
+   under the v1 algorithm. If it matches, the user is legitimately
+   on the same host running v2 for the first time — the file is
+   silently rewritten as v2 and the daemon proceeds. If the v1
+   recompute also fails to match, this is a genuine mismatch
+   (real host change, restored backup, accidental clone) and the
+   daemon refuses as before.
+3. Stored file has an unknown future `schema_version` → treated
+   as `unavailable` (not overwritten). Prevents a newer daemon
+   from silently wiping a file it doesn't understand.
+
+The v1 algorithm is preserved as a frozen internal helper for the
+migration path only. New code should never extend it.
+
+### Tests + test infra fixes
+
+`apps/cli/tests/unit/identity.test.ts` (18 cases) covers v2
+determinism, v2 domain separation from v1, hardware-MAC
+preference, locally-administered MAC fallback, every
+`checkFingerprint` branch, and the silent v1→v2 upgrade behavior
+of `acceptCurrentHost`.
+
+Two pre-existing CI/test-infra papercuts surfaced while validating
+this fix and were corrected alongside:
+
+- `apps/cli/tests/golden/{version,whoami}.test.ts` spawn the
+  built CLI at `dist/entrypoints/cli.js` but nothing built it
+  before `vitest run`. `turbo.json` now declares
+  `test.dependsOn = ["build"]` so the monorepo always builds
+  first, and a new vitest globalSetup
+  (`apps/cli/tests/setup/ensure-built.ts`) rebuilds on demand
+  with `~/.bun/bin` and Homebrew layered into PATH for the
+  spawned subprocess.
+
 ## 1.34.15 (2026-05-04) — `peer list --mesh` actually scopes + `kick` refuses control-plane
 
 Two follow-ups from the 1.34.x train, both backwards-compatible.

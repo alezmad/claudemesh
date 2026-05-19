@@ -481,6 +481,56 @@ invisibility moment" goal.
 
 ---
 
+## v1.34.17 — *host fingerprint v2: stable across Mac reboots* — *shipped*
+
+Field report 2026-05-19: after a routine Mac restart the daemon
+(under 1.34.16) entered a launchd respawn loop on
+`host_fingerprint mismatch` — `runs` past 360, `daemon.log` at
+24 MB, the user's `claudemesh peer list` falling to the cold
+path and showing zero peers.
+
+Root cause was in `apps/cli/src/daemon/identity.ts`. v1 of the
+algorithm hashed `host_id || mac` where (a) `host_id` was empty
+on macOS and (b) `mac` was picked by enumerating
+`os.networkInterfaces()`, ignoring a short list of known-virtual
+prefixes, and taking the lex-first of the rest — usually `en0`,
+the Wi-Fi adapter, whose MAC Apple's privacy feature randomizes
+across reboots and network rejoins. The stored hash was anchored
+to one randomized MAC; the next boot's MAC produced a different
+hash; the safety check fired correctly for the wrong reason.
+
+The fix is a hardened algorithm bumped to `schema_version: 2`:
+
+- **macOS host_id** — `IOPlatformUUID` via `ioreg`, parsed once
+  at daemon start, cached for process lifetime. Burned into
+  EFI/hardware; stable across reboots and OS reinstalls.
+- **MAC picker** — rejects any MAC with the locally-administered
+  bit (`0x02`) set; prefers true hardware MACs and only falls
+  back to locally-administered ones when no hardware NIC is
+  enumerable. Interface ignore list extended with `anpi*`,
+  `bridge*`, `ap[0-9]`.
+- **Domain-separated hash** — v2 prepends `"v2\0"` so its hash
+  can never collide with a v1 hash on the same inputs.
+- **Silent migration** — existing v1 stores that still match
+  under the v1 algorithm (legitimate same-host upgrades) are
+  transparently rewritten as v2 with no error. v1 stores that
+  fail the v1 check are reported as genuine mismatches as
+  before. Unknown future schema versions return `unavailable`
+  without overwriting.
+
+18 unit tests in `apps/cli/tests/unit/identity.test.ts` cover the
+pure helpers + every `checkFingerprint` branch + the v1→v2
+silent-upgrade path. Two pre-existing test-infra papercuts were
+fixed alongside: `turbo.json` now declares `test` depends on
+`build`, and a new vitest globalSetup
+(`apps/cli/tests/setup/ensure-built.ts`) rebuilds on demand with
+`~/.bun/bin` layered into PATH so golden tests no longer fail
+opaquely after a clean checkout.
+
+*Shipped 2026-05-20.*
+
+---
+
 ## v2.0.0 — *HKDF cross-machine identity*
 
 The remaining v2 promise after Sprint A: the user's account secret
