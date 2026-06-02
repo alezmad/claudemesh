@@ -42,6 +42,37 @@ export interface LaunchFlags {
   quiet?: boolean;
 }
 
+/**
+ * Resolve the most-recently-active Claude Code session UUID for a cwd by
+ * inspecting `~/.claude/projects/<encoded-cwd>/<uuid>.jsonl`. Claude Code
+ * encodes the project dir as the absolute path with every `/` → `-`.
+ *
+ * Used by `--continue` (which otherwise gives us no UUID to anchor on) so
+ * a continued session re-attaches to the same claudemesh peer it last
+ * represented. Returns undefined when the project dir is absent/empty —
+ * the caller then falls back to an ephemeral identity.
+ */
+function resolveLatestSessionUuid(cwd: string): string | undefined {
+  try {
+    const slug = cwd.replace(/\//g, "-");
+    const dir = join(homedir(), ".claude", "projects", slug);
+    if (!existsSync(dir)) return undefined;
+    const uuidRe = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i;
+    let newest: { id: string; mtime: number } | null = null;
+    for (const entry of readdirSync(dir)) {
+      const m = uuidRe.exec(entry);
+      if (!m) continue;
+      try {
+        const mtime = statSync(join(dir, entry)).mtimeMs;
+        if (!newest || mtime > newest.mtime) newest = { id: m[1]!, mtime };
+      } catch { /* file vanished mid-scan — skip */ }
+    }
+    return newest?.id;
+  } catch {
+    return undefined;
+  }
+}
+
 // --- Interactive mesh picker ---
 
 /**
@@ -754,8 +785,28 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   //     the TDZ → ReferenceError swallowed by the surrounding catch.
   //     The IPC registration has been silently failing every launch
   //     since 1.29.0. Hoist the declaration up so it actually runs.
+  // Session identity is anchored on Claude Code's session UUID — the
+  // stable thing `--resume` is built on — so the same logical peer keeps
+  // one identity (and one persisted keypair) across relaunches:
+  //   - fresh launch: mint a UUID and force it on claude via --session-id.
+  //   - --resume V:   register V (the returning peer), let claude resume it.
+  //   - --continue:   resolve the most-recent session UUID in this cwd so
+  //                   we re-attach to the same peer instead of minting a
+  //                   throwaway id (the bug that orphaned queued DMs and
+  //                   spawned same-name ghosts on every relaunch).
   const isResume = args.resume !== null || args.continueSession;
-  const claudeSessionId = isResume ? undefined : randomUUID();
+  let claudeSessionId: string | undefined;
+  if (args.resume) {
+    claudeSessionId = args.resume;
+  } else if (args.continueSession) {
+    claudeSessionId = resolveLatestSessionUuid(process.cwd());
+  } else {
+    claudeSessionId = randomUUID();
+  }
+  // Only fresh launches may dictate the UUID via --session-id; --resume
+  // and --continue carry their own session selection and claude rejects
+  // --session-id alongside them.
+  const passSessionIdFlag = !isResume;
   let sessionTokenFilePath: string | null = null;
   let sessionTokenForCleanup: string | null = null;
   try {
@@ -780,7 +831,13 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     try {
       const { generateKeypair } = await import("~/services/crypto/facade.js");
       const { signParentAttestation } = await import("~/services/broker/session-hello-sig.js");
-      const sessionKp = await generateKeypair();
+      // Persisted, UUID-anchored keypair so relaunch/--resume reuse the
+      // same sessionPubkey (queued DMs route AND decrypt). Falls back to
+      // an ephemeral keypair when we couldn't resolve a stable UUID
+      // (e.g. --continue with no prior session in this cwd).
+      const sessionKp = claudeSessionId
+        ? await (await import("~/services/session/keypair-store.js")).loadOrCreateSessionKeypair(mesh.slug, claudeSessionId)
+        : await generateKeypair();
       const att = await signParentAttestation({
         parentMemberPubkey: mesh.pubkey,
         parentSecretKey: mesh.secretKey,
@@ -917,7 +974,7 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   const claudeArgs = [
     "--dangerously-load-development-channels",
     "server:claudemesh",
-    ...(claudeSessionId ? ["--session-id", claudeSessionId] : []),
+    ...(passSessionIdFlag && claudeSessionId ? ["--session-id", claudeSessionId] : []),
     ...(args.resume ? ["--resume", args.resume] : []),
     ...(args.continueSession ? ["--continue"] : []),
     ...(args.skipPermConfirm ? ["--dangerously-skip-permissions"] : []),

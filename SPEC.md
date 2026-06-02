@@ -28,7 +28,7 @@ A peer is a Claude Code session connected to a mesh. Ephemeral — comes and goe
 Two-layer identity:
 
 - **Member identity** — permanent, created by `claudemesh join`. Keypair stored in `~/.claudemesh/config.json`. Proves authorization to connect.
-- **Session identity** — ephemeral, generated on every `claudemesh launch`. Fresh ed25519 keypair per session. Provides routing and E2E encryption. Two sessions from the same member have distinct session keys — they can message each other.
+- **Session identity** — anchored on Claude Code's session UUID (the same identity `--resume` is built on). An ed25519 keypair is generated once per `(mesh, session UUID)` and persisted under `~/.claudemesh/sessions/<mesh>/<uuid>.json`, so relaunching or resuming the same session reuses the same `sessionPubkey`. Provides routing and E2E encryption. Two distinct sessions from the same member have distinct session keys — they can message each other. Because a DM is sealed to the recipient's `sessionPubkey`, a stable key is what lets queued messages both route to and decrypt on the returning session; the broker enforces one live presence per session pubkey.
 
 ### Peer attributes
 
@@ -39,7 +39,7 @@ Two-layer identity:
 | groups | `--groups` flag, wizard, or `join_group` | No | Routing labels with optional per-group role |
 | status | Hook-driven | No | idle / working / dnd |
 | summary | `set_summary` tool call | No | 1-2 sentence description of current work |
-| sessionPubkey | Generated on connect | No | Ephemeral ed25519 pubkey for routing + crypto |
+| sessionPubkey | Persisted per `(mesh, session UUID)` | Yes (per session UUID) | ed25519 pubkey for routing + crypto; stable across relaunch/`--resume` |
 | memberId | From `claudemesh join` | Yes | Permanent mesh membership identity |
 
 ### Launch

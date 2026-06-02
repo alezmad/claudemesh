@@ -2191,23 +2191,38 @@ async function handleSessionHello(
   // session leave.
   for (const [pid, oldConn] of connections) {
     if (oldConn.meshId !== hello.meshId) continue;
-    if (oldConn.leaseState !== "offline") continue;
     if (oldConn.sessionPubkey !== hello.sessionPubkey) continue;
 
+    // Same sessionPubkey = same logical session. The CLI now anchors the
+    // session keypair on Claude Code's session UUID and persists it, so a
+    // matching pubkey is always the same peer relaunching/resuming — never
+    // a coincidental collision. Reattach whether the old lease is in its
+    // 90s grace window OR still nominally "online" (a duplicate/relaunch
+    // that raced ahead of the old socket's close). The new WS is
+    // authoritative: cancel any eviction timer, close the stale socket if
+    // it differs, swap in the new WS, restore online. This is the "one
+    // presence per session pubkey" invariant — it kills the same-name
+    // ghost that used to win queued-DM claim races.
+    const wasState = oldConn.leaseState;
     if (oldConn.evictionTimer) {
       clearTimeout(oldConn.evictionTimer);
       oldConn.evictionTimer = null;
+    }
+    if (oldConn.ws !== ws) {
+      try { oldConn.ws.close(1000, "session_replaced"); } catch { /* already dead */ }
     }
     oldConn.ws = ws;
     oldConn.leaseState = "online";
     oldConn.leaseUntil = 0;
     oldConn.lastPongAt = Date.now();
     // Refresh mutable fields from the new hello.
+    oldConn.sessionId = hello.sessionId;
     oldConn.cwd = hello.cwd;
     if (hello.displayName) oldConn.displayName = hello.displayName;
-    log.info("session_hello reattach (lease)", {
+    log.info("session_hello reattach", {
       presence_id: pid,
       session_pubkey: hello.sessionPubkey.slice(0, 12),
+      was: wasState,
     });
     void restorePresence(pid);
     void maybePushQueuedMessages(pid);

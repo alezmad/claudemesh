@@ -230,6 +230,20 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
         }
         prior.close().catch(() => { /* ignore */ });
       }
+      // Also drop any stale WS holding this session pubkey under a
+      // DIFFERENT token. With UUID-anchored persistent keypairs a relaunch
+      // reuses the pubkey, so without this the old SessionBrokerClient
+      // would linger connected (the broker then sees two presences for one
+      // pubkey — the same-name ghost that stole queued DMs). Dedup by
+      // pubkey closes it before the new WS opens.
+      const priorByPubkey = sessionBrokersByPubkey.get(info.presence.sessionPubkey);
+      if (priorByPubkey && priorByPubkey !== prior) {
+        for (const [tok, c] of sessionBrokers) {
+          if (c === priorByPubkey) { sessionBrokers.delete(tok); break; }
+        }
+        sessionBrokersByPubkey.delete(info.presence.sessionPubkey);
+        priorByPubkey.close().catch(() => { /* ignore */ });
+      }
       // 1.32.1 — wire push delivery. Messages targeted at the launched
       // session's pubkey land on THIS WS, not on the member-keyed one,
       // so without this forward they'd silently disappear (the bug that
