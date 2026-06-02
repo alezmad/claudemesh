@@ -40,63 +40,93 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
     : flags.priority === "low" ? "low"
     : "next";
 
-  // Resolve which mesh to use. With --mesh, target it directly.
-  // Without, use first joined mesh — same default as withMesh.
+  // Resolve which mesh to use. With --mesh, target it directly. Without,
+  // use the only joined mesh, else leave null and let target resolution
+  // below discover the right mesh from where the peer actually lives.
   const config = readConfig();
-  const meshSlug =
+  let meshSlug =
     flags.mesh ??
     (config.meshes.length === 1 ? config.meshes[0]!.slug : null);
 
-  // 1.31.6: hex-prefix resolution. If `to` looks like hex but isn't a
-  // full 64-char pubkey, resolve it against the peer list and replace
-  // it with the matching full pubkey. The broker stores `targetSpec`
-  // verbatim and the drain query at apps/broker/src/broker.ts:2408
-  // matches only on full pubkeys, so a 16-hex prefix would queue
-  // successfully but never fetch — sender saw "sent", recipient saw
-  // nothing. Resolving here makes the CLI's prefix UX work end-to-end
-  // and surfaces ambiguous / unmatched prefixes with a clear error
-  // instead of a silent drop.
-  if (
-    !to.startsWith("@") &&
-    !to.startsWith("#") &&
-    to !== "*" &&
-    /^[0-9a-f]{4,63}$/i.test(to)
-  ) {
-    try {
-      const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
-      const peers = (await tryListPeersViaDaemon()) ?? [];
-      const lower = to.toLowerCase();
-      const matches = peers.filter((p) => {
-        const pk = (p as { pubkey?: string }).pubkey ?? "";
-        const mpk = (p as { memberPubkey?: string }).memberPubkey ?? "";
-        return pk.toLowerCase().startsWith(lower) || mpk.toLowerCase().startsWith(lower);
-      });
-      if (matches.length === 0) {
-        render.err(`No peer matches hex prefix "${to}".`);
-        const names = peers
-          .map((p) => (p as { displayName?: string }).displayName)
-          .filter(Boolean)
-          .join(", ");
-        if (names) render.hint(`online: ${names}`);
-        process.exit(1);
+  // Cross-mesh target resolution (1.36.0). A direct send to a hex prefix
+  // or display name is resolved against the peer rosters so the CLI:
+  //   - expands a prefix/name to the full session pubkey (the broker's
+  //     drain matches only full pubkeys — a bare prefix would queue but
+  //     never fetch: sender saw "sent", recipient saw nothing);
+  //   - DISCOVERS which joined mesh the target is on when no --mesh was
+  //     given and several meshes are joined. Previously this returned
+  //     `mesh_required` and a live peer on a non-default mesh looked
+  //     "disconnected". We now scan every joined mesh's roster and, if
+  //     the target resolves in exactly one, auto-select that mesh.
+  // With --mesh (or a single joined mesh) the scan is scoped to that one
+  // mesh, so `send --mesh X <prefix>` resolves against X's roster — not
+  // the default mesh (the bug where only the full 64-char pubkey worked).
+  const isDirect = !to.startsWith("@") && !to.startsWith("#") && to !== "*";
+  const isFullPubkey = /^[0-9a-f]{64}$/i.test(to);
+  const isPrefix = /^[0-9a-f]{4,63}$/i.test(to);
+  const isName = isDirect && !isFullPubkey && !isPrefix;
+
+  if (isDirect && (isPrefix || isName || (isFullPubkey && !meshSlug))) {
+    const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
+    const searchSlugs = meshSlug ? [meshSlug] : config.meshes.map((m) => m.slug);
+    const lower = to.toLowerCase();
+    let daemonReachable = false;
+    type Hit = { slug: string; pubkey: string; displayName: string };
+    const matches: Hit[] = [];
+    for (const slug of searchSlugs) {
+      const peers = await tryListPeersViaDaemon(slug);
+      if (peers === null) continue; // daemon unreachable for this query
+      daemonReachable = true;
+      for (const p of peers) {
+        const pk = ((p as { pubkey?: string }).pubkey ?? "").toLowerCase();
+        const mpk = ((p as { memberPubkey?: string }).memberPubkey ?? "").toLowerCase();
+        const dn = (p as { displayName?: string }).displayName ?? "?";
+        const hit = isName
+          ? dn.toLowerCase() === lower
+          : pk.startsWith(lower) || mpk.startsWith(lower);
+        if (hit) matches.push({ slug, pubkey: (p as { pubkey?: string }).pubkey ?? "", displayName: dn });
       }
-      if (matches.length > 1) {
-        const candidates = matches
-          .map((p) => {
-            const pk = (p as { pubkey?: string }).pubkey ?? "";
-            const dn = (p as { displayName?: string }).displayName ?? "?";
-            return `${dn} ${pk.slice(0, 16)}…`;
-          })
+    }
+
+    // Only act on a reachable daemon. If it was down for every query, fall
+    // through to the cold path, which opens its own WS and resolves names.
+    if (daemonReachable) {
+      const byPubkey = new Map<string, Hit>();
+      for (const m of matches) if (!byPubkey.has(m.pubkey)) byPubkey.set(m.pubkey, m);
+      const uniq = [...byPubkey.values()];
+      const meshesHit = [...new Set(uniq.map((m) => m.slug))];
+
+      if (uniq.length === 0) {
+        // For a full pubkey we couldn't locate, keep going — the user gave
+        // a complete key and the daemon send will surface a clear error.
+        if (!isFullPubkey) {
+          render.err(`No peer matches "${to}"${flags.mesh ? ` on mesh "${flags.mesh}"` : " on any joined mesh"}.`);
+          render.hint("Check `claudemesh peer list` (add --mesh <slug> to scope).");
+          process.exit(1);
+        }
+      } else if (uniq.length > 1) {
+        if (meshesHit.length > 1 && !meshSlug) {
+          // Target lives on several meshes — disambiguate by mesh, not prefix.
+          const where = uniq
+            .map((m) => `${m.displayName} ${m.pubkey.slice(0, 12)}… @${m.slug}`)
+            .join(", ");
+          render.err(`"${to}" matches peers on ${meshesHit.length} meshes — pick one with --mesh <slug>.`);
+          render.hint(`candidates: ${where}`);
+          process.exit(1);
+        }
+        const candidates = uniq
+          .map((m) => `${m.displayName} ${m.pubkey.slice(0, 16)}…`)
           .join(", ");
-        render.err(`Ambiguous hex prefix "${to}" — matches ${matches.length} peers.`);
+        render.err(`Ambiguous ${isName ? "name" : "prefix"} "${to}" — matches ${uniq.length} peers.`);
         render.hint(`candidates: ${candidates}`);
         render.hint("Use a longer prefix or paste the full 64-char pubkey.");
         process.exit(1);
+      } else {
+        // Exactly one match — adopt its mesh (P1: kills mesh_required for
+        // peers on a non-default mesh) and its full pubkey (prefix/name).
+        meshSlug = uniq[0]!.slug;
+        if (!isFullPubkey) to = uniq[0]!.pubkey;
       }
-      to = (matches[0] as { pubkey?: string }).pubkey ?? to;
-    } catch {
-      // Daemon unreachable — fall through; cold path will try a name
-      // lookup and surface its own error if that also fails.
     }
   }
 
@@ -206,8 +236,10 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
     // was removed in 1.28.0.
   }
 
-  // Cold path — open our own WS, encrypt locally, fire envelope.
-  await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
+  // Cold path — open our own WS, encrypt locally, fire envelope. Use the
+  // resolved meshSlug (may have been discovered above) so a name/prefix
+  // that lives on a non-default mesh still targets the right one.
+  await withMesh({ meshSlug: meshSlug ?? flags.mesh ?? null }, async (client) => {
     let targetSpec = to;
     if (to.startsWith("#") && !/^#[0-9a-z_-]{20,}$/i.test(to)) {
       // Topic by name → resolve to "#<topicId>" via topicList. The broker

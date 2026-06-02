@@ -31,6 +31,11 @@ export const DAEMON_PATHS = {
   get OUTBOX_DB()   { return join(this.DAEMON_DIR, "outbox.db"); },
   get INBOX_DB()    { return join(this.DAEMON_DIR, "inbox.db"); },
   get LOG_FILE()    { return join(this.DAEMON_DIR, "daemon.log"); },
+  /** Persisted session→mesh bindings. Rehydrated on daemon restart so a
+   *  restart never orphans a live session's mesh context (the bug where
+   *  a peer looked "disconnected" after the daemon bounced). Holds no
+   *  secrets — keypairs are reloaded from the per-session keypair store. */
+  get SESSIONS_FILE() { return join(this.DAEMON_DIR, "sessions.json"); },
 } as const;
 
 export const DAEMON_TCP_HOST = "127.0.0.1";

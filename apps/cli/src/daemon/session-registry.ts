@@ -22,6 +22,10 @@
  * session have no token to begin with.
  */
 
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { randomBytes } from "node:crypto";
+
 import { getProcessStartTime, getProcessStartTimes, isPidAlive } from "./process-info.js";
 
 /**
@@ -83,6 +87,65 @@ const hooks: RegistryHooks = {};
 
 let reaperHandle: NodeJS.Timeout | null = null;
 
+/** When set, registry mutations are mirrored to this file so a daemon
+ *  restart can rehydrate live sessions. Holds NO secret material — the
+ *  session keypair is reloaded from the per-session keypair store on
+ *  rehydrate. null (default) disables persistence, which keeps unit
+ *  tests from touching disk unless they opt in. */
+let persistPath: string | null = null;
+
+/** Slim, secret-free projection persisted to disk. */
+export interface PersistedSession {
+  token: string;
+  sessionId: string;
+  mesh: string;
+  displayName: string;
+  pid: number;
+  cwd?: string;
+  role?: string;
+  groups?: string[];
+  startTime?: string;
+  registeredAt: number;
+}
+
+function toPersisted(info: SessionInfo): PersistedSession {
+  // Drop `presence` (carries the session secret key) — never to disk here.
+  const { presence: _presence, ...rest } = info;
+  return rest;
+}
+
+/** Enable on-disk persistence of session bindings (called at daemon boot
+ *  with DAEMON_PATHS.SESSIONS_FILE). Pass null to disable. */
+export function setRegistryPersistence(path: string | null): void {
+  persistPath = path;
+}
+
+function persist(): void {
+  if (!persistPath) return;
+  try {
+    mkdirSync(dirname(persistPath), { recursive: true, mode: 0o700 });
+    const rows = [...byToken.values()].map(toPersisted);
+    const tmp = `${persistPath}.${randomBytes(6).toString("hex")}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ version: 1, sessions: rows }), { mode: 0o600 });
+    renameSync(tmp, persistPath);
+  } catch {
+    // Best-effort: a persistence failure must never throttle the registry.
+  }
+}
+
+/** Read persisted session bindings from disk (pure — no registration, no
+ *  liveness check). Returns [] when the file is absent or unreadable.
+ *  The daemon's boot rehydration validates liveness and re-registers. */
+export function readPersistedSessions(path: string): PersistedSession[] {
+  try {
+    if (!existsSync(path)) return [];
+    const parsed = JSON.parse(readFileSync(path, "utf8")) as { sessions?: PersistedSession[] };
+    return Array.isArray(parsed.sessions) ? parsed.sessions : [];
+  } catch {
+    return [];
+  }
+}
+
 export function startReaper(): void {
   if (reaperHandle) return;
   // The sweep is async (batched ps) — wrap in `void` so setInterval
@@ -125,6 +188,7 @@ export function registerSession(info: Omit<SessionInfo, "registeredAt">): Sessio
   const stored: SessionInfo = { ...info, registeredAt: Date.now() };
   byToken.set(info.token, stored);
   bySessionId.set(info.sessionId, info.token);
+  persist();
   try { hooks.onRegister?.(stored); } catch { /* see above */ }
   if (stored.startTime === undefined) {
     void captureStartTimeAsync(info.token, info.pid);
@@ -138,6 +202,7 @@ async function captureStartTimeAsync(token: string, pid: number): Promise<void> 
   const entry = byToken.get(token);
   if (!entry || entry.pid !== pid) return; // entry was replaced; skip
   entry.startTime = lstart;
+  persist(); // capture start-time on disk so restart can PID-reuse-guard
 }
 
 export function deregisterByToken(token: string): boolean {
@@ -145,6 +210,7 @@ export function deregisterByToken(token: string): boolean {
   if (!entry) return false;
   byToken.delete(token);
   if (bySessionId.get(entry.sessionId) === token) bySessionId.delete(entry.sessionId);
+  persist();
   try { hooks.onDeregister?.(entry); } catch { /* see above */ }
   return true;
 }
@@ -217,4 +283,5 @@ export function _resetRegistry(): void {
   bySessionId.clear();
   hooks.onRegister = undefined;
   hooks.onDeregister = undefined;
+  persistPath = null;
 }

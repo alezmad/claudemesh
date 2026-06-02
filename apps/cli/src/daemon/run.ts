@@ -4,7 +4,7 @@ import { DAEMON_PATHS } from "./paths.js";
 import { acquireSingletonLock, releaseSingletonLock } from "./lock.js";
 import { ensureLocalToken } from "./local-token.js";
 import { startIpcServer } from "./ipc/server.js";
-import { setRegistryHooks, startReaper, type SessionInfo } from "./session-registry.js";
+import { setRegistryHooks, startReaper, registerSession, readPersistedSessions, setRegistryPersistence, type SessionInfo } from "./session-registry.js";
 import { openSqlite, type SqliteDb } from "./db/sqlite.js";
 import { migrateOutbox } from "./db/outbox.js";
 import { migrateInbox } from "./db/inbox.js";
@@ -307,6 +307,81 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
   });
 
   startReaper();
+
+  // Rehydrate persisted session bindings (1.36.0). A daemon restart used
+  // to wipe the in-memory registry, so every live session lost its mesh
+  // context and CLI commands fell back to an arbitrary default mesh — a
+  // live peer then looked "disconnected" though nothing had moved. We now
+  // reload each persisted binding, validate the pid is still alive (with
+  // a start-time PID-reuse guard), reload its keypair from the per-session
+  // store, re-sign a fresh parent attestation, and re-register it — which
+  // fires onRegister and reconnects its SessionBrokerClient on the broker.
+  try {
+    const persisted = readPersistedSessions(DAEMON_PATHS.SESSIONS_FILE);
+    if (persisted.length > 0) {
+      const { loadOrCreateSessionKeypair } = await import("~/services/session/keypair-store.js");
+      const { signParentAttestation } = await import("~/services/broker/session-hello-sig.js");
+      const { isPidAlive, getProcessStartTimes } = await import("./process-info.js");
+      const liveStartTimes = await getProcessStartTimes(persisted.map((p) => p.pid)).catch(() => new Map<number, string>());
+      let revived = 0;
+      for (const s of persisted) {
+        if (!isPidAlive(s.pid)) continue;
+        if (s.startTime !== undefined) {
+          const live = liveStartTimes.get(s.pid);
+          if (live !== undefined && live !== s.startTime) continue; // PID reused
+        }
+        const meshConfig = meshConfigs.get(s.mesh);
+        if (!meshConfig) continue; // mesh no longer joined
+        try {
+          const kp = await loadOrCreateSessionKeypair(meshConfig.slug, s.sessionId);
+          const att = await signParentAttestation({
+            parentMemberPubkey: meshConfig.pubkey,
+            parentSecretKey: meshConfig.secretKey,
+            sessionPubkey: kp.publicKey,
+          });
+          registerSession({
+            token: s.token,
+            sessionId: s.sessionId,
+            mesh: s.mesh,
+            displayName: s.displayName,
+            pid: s.pid,
+            ...(s.cwd ? { cwd: s.cwd } : {}),
+            ...(s.role ? { role: s.role } : {}),
+            ...(s.groups ? { groups: s.groups } : {}),
+            ...(s.startTime ? { startTime: s.startTime } : {}),
+            presence: {
+              sessionPubkey: kp.publicKey,
+              sessionSecretKey: kp.secretKey,
+              parentAttestation: {
+                sessionPubkey: att.sessionPubkey,
+                parentMemberPubkey: att.parentMemberPubkey,
+                expiresAt: att.expiresAt,
+                signature: att.signature,
+              },
+            },
+          });
+          revived++;
+        } catch (err) {
+          process.stderr.write(JSON.stringify({
+            level: "warn", msg: "session_rehydrate_failed",
+            token: s.token.slice(0, 8), mesh: s.mesh, err: String(err),
+            ts: new Date().toISOString(),
+          }) + "\n");
+        }
+      }
+      process.stderr.write(JSON.stringify({
+        level: "info", msg: "sessions_rehydrated",
+        revived, persisted: persisted.length, ts: new Date().toISOString(),
+      }) + "\n");
+    }
+  } catch (err) {
+    process.stderr.write(JSON.stringify({
+      level: "warn", msg: "session_rehydrate_scan_failed", err: String(err),
+      ts: new Date().toISOString(),
+    }) + "\n");
+  }
+  // Enable ongoing persistence now that rehydration has read the old file.
+  setRegistryPersistence(DAEMON_PATHS.SESSIONS_FILE);
 
   const ipc = startIpcServer({
     localToken,
