@@ -234,7 +234,7 @@ describe("checkFingerprint (file-based)", () => {
     expect(result.stored?.schema_version).toBe(1);
   });
 
-  it("v2 stored with a different fingerprint reports mismatch", async () => {
+  it("v2 stored with a different fingerprint AND different host_id reports mismatch (genuine clone)", async () => {
     const { checkFingerprint, acceptCurrentHost } = await import(
       "~/daemon/identity.js"
     );
@@ -245,6 +245,7 @@ describe("checkFingerprint (file-based)", () => {
         {
           ...real,
           fingerprint: "f".repeat(64),
+          host_id: real.host_id ? `${real.host_id}-cloned` : "linux:spoofed",
         },
         null,
         2,
@@ -254,6 +255,66 @@ describe("checkFingerprint (file-based)", () => {
     const result = checkFingerprint();
     expect(result.result).toBe("mismatch");
     expect(result.stored?.schema_version).toBe(2);
+  });
+
+  it("v2 stored with matching host_id but different stable_mac silently rotates to match (dock unplugged / Wi-Fi privacy rotation)", async () => {
+    const { checkFingerprint, acceptCurrentHost, fingerprintV2 } = await import(
+      "~/daemon/identity.js"
+    );
+    const real = acceptCurrentHost();
+    // Same host_id, different stable_mac → stale fingerprint on disk.
+    const staleMac = "00:e0:4c:99:99:99";
+    const staleFingerprint = fingerprintV2(real.host_id, staleMac);
+    expect(staleFingerprint).not.toBe(real.fingerprint);
+    writeFileSync(
+      join(testDir, "host_fingerprint.json"),
+      JSON.stringify(
+        {
+          ...real,
+          stable_mac: staleMac,
+          fingerprint: staleFingerprint,
+          written_at: "2026-01-01T00:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = checkFingerprint();
+    expect(result.result).toBe("match");
+    expect(result.stored?.schema_version).toBe(2);
+
+    // Stored record is silently rewritten with the current MAC/fingerprint.
+    const onDisk = JSON.parse(
+      readFileSync(join(testDir, "host_fingerprint.json"), "utf8"),
+    );
+    expect(onDisk.fingerprint).toBe(real.fingerprint);
+    expect(onDisk.stable_mac).toBe(real.stable_mac);
+  });
+
+  it("v2 stored with EMPTY host_id falls back to strict fingerprint compare (broken v1.34.16 record)", async () => {
+    // Records written by v1.34.16 had empty host_id on macOS — once
+    // current host_id starts populating correctly, we cannot use the
+    // host_id-wins branch (would silently rotate any clone). Strict
+    // fingerprint compare → mismatch → user runs accept-host.
+    const { checkFingerprint } = await import("~/daemon/identity.js");
+    writeFileSync(
+      join(testDir, "host_fingerprint.json"),
+      JSON.stringify(
+        {
+          schema_version: 2,
+          fingerprint: "0".repeat(64),
+          host_id: "",
+          stable_mac: "00:e0:4c:11:22:33",
+          written_at: "2026-05-19T00:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = checkFingerprint();
+    expect(result.result).toBe("mismatch");
   });
 
   it("unknown future schema is treated as 'unavailable', not overwritten", async () => {

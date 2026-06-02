@@ -83,6 +83,19 @@ export function checkFingerprint(): FingerprintCheck {
   if (stored.schema_version === 2) {
     if (stored.fingerprint === current.fingerprint)
       return { result: "match", current, stored };
+
+    // host_id wins: when stored and current both carry a non-empty
+    // host_id and they agree, the machine is the same — only the NIC
+    // topology shifted (dock unplugged, Wi-Fi privacy rotation, VPN
+    // adapter came online). host_id is hardware-rooted (IOPlatformUUID
+    // on macOS, /etc/machine-id on Linux) and is the load-bearing
+    // clone signal; stable_mac is best-effort defense-in-depth that
+    // legitimately drifts across boots. Silently rotate the stored
+    // record to the current MAC and proceed.
+    if (stored.host_id && stored.host_id === current.host_id) {
+      writeFileSync(path(), JSON.stringify(current, null, 2), { mode: 0o600 });
+      return { result: "match", current, stored };
+    }
     return { result: "mismatch", current, stored };
   }
 
