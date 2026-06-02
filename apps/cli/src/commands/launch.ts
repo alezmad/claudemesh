@@ -763,10 +763,16 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     ...(parsedGroups.length > 0 ? { groups: parsedGroups } : {}),
     messageMode,
   };
+  // mode 0600: this config embeds the mesh keypair (secret key). Written
+  // without a mode it lands at 0644 (world/group-readable) — which
+  // `claudemesh status` flags as "perms 0644 — expected 0600". The
+  // enclosing tmpDir is already 0700, but lock the file down too so the
+  // secret is never world-readable even for a moment. The file is freshly
+  // created in a new mkdtemp dir, so the mode applies on create.
   writeFileSync(
     join(tmpDir, "config.json"),
     JSON.stringify(sessionConfig, null, 2) + "\n",
-    "utf-8",
+    { encoding: "utf-8", mode: 0o600 },
   );
 
   // 4b. Mint a per-session IPC token, persist it under tmpDir, and
