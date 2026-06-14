@@ -241,14 +241,6 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
     try {
       const peers = await listPeersForMesh(slug);
 
-      if (wantsJson) {
-        const projected = fieldList
-          ? peers.map((p) => projectFields(p, fieldList))
-          : peers;
-        allJson.push({ mesh: slug, peers: projected });
-        continue;
-      }
-
       // Hide control-plane rows by default — they're infrastructure
       // (daemon-WS member-keyed presence), not interactive peers, and
       // they confused users into thinking the daemon counted as a
@@ -258,9 +250,21 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
       // 2026-05-04). annotateSelf() filled in 'session' for older
       // brokers that don't emit peerRole yet, so this filter is
       // backwards-compatible by construction — legacy rows show up.
+      //
+      // Applied to JSON too (was human-output-only): `peer list --json`
+      // leaking the daemon's control-plane row is what made the daemon
+      // look like an addressable peer and sent DMs into a black hole.
       const visible = flags.all
         ? peers
         : peers.filter((p) => p.peerRole !== "control-plane");
+
+      if (wantsJson) {
+        const projected = fieldList
+          ? visible.map((p) => projectFields(p, fieldList))
+          : visible;
+        allJson.push({ mesh: slug, peers: projected });
+        continue;
+      }
 
       // Sort: this-session first, then your-other-sessions, then real
       // peers. Within each group, idle/working ahead of dnd. Inside the

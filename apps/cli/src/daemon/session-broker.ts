@@ -43,7 +43,7 @@
 import { hostname as osHostname } from "node:os";
 
 import type { JoinedMesh } from "~/services/config/facade.js";
-import { signSessionHello } from "~/services/broker/session-hello-sig.js";
+import { signSessionHello, signParentAttestation } from "~/services/broker/session-hello-sig.js";
 import { connectWsWithBackoff, type WsLifecycle, type WsStatus } from "./ws-lifecycle.js";
 import type { BrokerSendArgs, BrokerSendResult } from "./broker.js";
 
@@ -149,13 +149,35 @@ export class SessionBrokerClient {
           sessionPubkey: this.opts.sessionPubkey,
           sessionSecretKey: this.opts.sessionSecretKey,
         });
+        // Re-mint the parent attestation fresh on every (re)connect rather
+        // than reusing the one signed at `claudemesh launch`. The minted
+        // attestation has a 12h TTL; reusing the stored instance meant any
+        // reconnect past launch+12h — a network blip, a sleep/wake, or
+        // (most commonly) a broker redeploy that drops every WS at once —
+        // was rejected by the broker with `expired`, after which the daemon
+        // reconnect-looped forever with the same dead token and the session
+        // silently fell off the mesh (its ephemeral pubkey lingering in
+        // peer rosters, undeliverable). The member secret key is in memory
+        // (`mesh.secretKey`, already used at daemon rehydration), so the
+        // daemon can self-renew: fresh-minting keeps live attestations
+        // short-lived AND makes presence self-healing across reconnects.
+        let parentAttestation = this.opts.parentAttestation;
+        try {
+          parentAttestation = await signParentAttestation({
+            parentMemberPubkey: this.opts.mesh.pubkey,
+            parentSecretKey: this.opts.mesh.secretKey,
+            sessionPubkey: this.opts.sessionPubkey,
+          });
+        } catch (e) {
+          this.log("warn", "parent attestation re-mint failed; reusing stored token (may be expired)", { err: String(e) });
+        }
         return {
           type: "session_hello",
           meshId: this.opts.mesh.meshId,
           parentMemberId: this.opts.mesh.memberId,
           parentMemberPubkey: this.opts.mesh.pubkey,
           sessionPubkey: this.opts.sessionPubkey,
-          parentAttestation: this.opts.parentAttestation,
+          parentAttestation,
           displayName: this.opts.displayName,
           sessionId: this.opts.sessionId,
           pid: this.opts.pid,

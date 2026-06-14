@@ -78,6 +78,11 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
       if (peers === null) continue; // daemon unreachable for this query
       daemonReachable = true;
       for (const p of peers) {
+        // Never resolve a name/prefix to a control-plane daemon row — it's
+        // infrastructure, not an addressable peer, and matching it sends a
+        // DM that the daemon swallows. (peerRole is the reliable marker;
+        // the daemon's own row is control-plane.)
+        if ((p as { peerRole?: string }).peerRole === "control-plane") continue;
         const pk = ((p as { pubkey?: string }).pubkey ?? "").toLowerCase();
         const mpk = ((p as { memberPubkey?: string }).memberPubkey ?? "").toLowerCase();
         const dn = (p as { displayName?: string }).displayName ?? "?";
@@ -165,10 +170,14 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
         const session = await getSessionInfo();
         const ownSessionPk = session?.presence?.sessionPubkey?.toLowerCase();
         const siblings = peers.filter((p) => {
-          const r = p as { memberPubkey?: string; pubkey?: string; channel?: string };
+          const r = p as { memberPubkey?: string; pubkey?: string; channel?: string; peerRole?: string };
           if (!r.pubkey) return false;
           if (ownSessionPk && r.pubkey.toLowerCase() === ownSessionPk) return false;
-          if (r.channel === "claudemesh-daemon") return false;
+          // Exclude the daemon's own control-plane presence row. peerRole is
+          // the reliable marker (the live daemon row is control-plane even
+          // when its channel reads "claudemesh-session"); keep the channel
+          // check too for older brokers that don't emit peerRole.
+          if (r.peerRole === "control-plane" || r.channel === "claudemesh-daemon") return false;
           return r.memberPubkey?.toLowerCase() === to.toLowerCase();
         });
         if (siblings.length === 0) {
@@ -214,6 +223,45 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
     }
   }
 
+  // --self only governs the own-member-key fan-out above, which returns
+  // early. Reaching here with --self still set means the target was NOT
+  // your own member pubkey, so the flag did nothing. Say so rather than
+  // ignoring it silently — the old behavior made `send --self <session-
+  // pubkey>` look like it controlled routing when it was inert. Messaging
+  // a specific session pubkey (including one of your own sibling sessions)
+  // needs no flag and just works.
+  if (flags.self) {
+    render.warn("--self had no effect: it only applies when the target is your own member pubkey (fan-out to your sibling sessions). Sending to this specific pubkey directly.");
+  }
+
+  // Honest-delivery pre-check (direct sends only). The daemon path below
+  // queues into the local outbox and returns `queued` optimistically; the
+  // drain then delivers async and retries failures (incl. "no connected
+  // peer") forever. So a bare "sent" line was misleading — a DM to an
+  // offline or stale-session-key target looked delivered but never was.
+  // Resolve the live roster once to learn whether `to` is addressable
+  // right now; this only shapes the confirmation wording (the send still
+  // queues regardless, preserving store-and-forward for genuinely-offline
+  // peers). null = unknown (not a direct DM, or daemon unreachable).
+  let recipientOnline: boolean | null = null;
+  let recipientName: string | undefined;
+  if (isDirect && meshSlug) {
+    const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
+    const peers = await tryListPeersViaDaemon(meshSlug);
+    if (peers !== null) {
+      const lower = to.toLowerCase();
+      const match = peers.find((p) => {
+        const r = p as { pubkey?: string; memberPubkey?: string; peerRole?: string };
+        if (r.peerRole === "control-plane") return false;
+        return r.pubkey?.toLowerCase() === lower || r.memberPubkey?.toLowerCase() === lower;
+      });
+      recipientOnline = !!match;
+      recipientName = match ? (match as { displayName?: string }).displayName : undefined;
+    }
+  }
+  const offlineHint =
+    "Session pubkeys are ephemeral — a key from an ended session never reconnects, so the message can't be delivered. Re-fetch a live target with `claudemesh peer list --json`.";
+
   // Daemon path — preferred when a long-lived daemon is local. UDS at
   // ~/.claudemesh/daemon/daemon.sock; ~1ms round-trip; persists outbox
   // across CLI invocations so a `claudemesh send` survives a daemon
@@ -222,8 +270,18 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
     const dr = await trySendViaDaemon({ to, message, priority, expectedMesh: meshSlug ?? undefined });
     if (dr !== null) {
       if (dr.ok) {
-        if (flags.json) console.log(JSON.stringify({ ok: true, messageId: dr.messageId, target: to, via: "daemon", duplicate: !!dr.duplicate }));
-        else render.ok(`sent to ${to} (daemon)`, dr.messageId ? dim(dr.messageId.slice(0, 8)) : undefined);
+        if (flags.json) {
+          console.log(JSON.stringify({ ok: true, messageId: dr.messageId, target: to, via: "daemon", duplicate: !!dr.duplicate, status: dr.status, recipientOnline }));
+        } else if (recipientOnline === false) {
+          render.warn(`queued for ${recipientName ?? to.slice(0, 16) + "…"} — no connected peer matches this key on "${meshSlug}".`);
+          render.hint(offlineHint);
+        } else {
+          const who = recipientName ? `${recipientName} (${to.slice(0, 16)}…)` : to;
+          // recipientOnline === true → peer is present, delivery imminent.
+          // null → daemon couldn't tell (e.g. roster query failed); keep
+          // the neutral "(daemon)" transport tag rather than overclaiming.
+          render.ok(`sent to ${who}${recipientOnline === true ? " (online)" : " (daemon)"}`, dr.messageId ? dim(dr.messageId.slice(0, 8)) : undefined);
+        }
         return;
       }
       // Daemon answered but rejected (409 idempotency, 400 schema). Surface; do not fall through.
@@ -269,9 +327,13 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
     const result = await client.send(targetSpec, message, priority);
     if (result.ok) {
       if (flags.json) {
-        console.log(JSON.stringify({ ok: true, messageId: result.messageId, target: to }));
+        console.log(JSON.stringify({ ok: true, messageId: result.messageId, target: to, recipientOnline }));
+      } else if (recipientOnline === false) {
+        render.warn(`queued for ${recipientName ?? to} — no connected peer matches this key on "${meshSlug ?? flags.mesh ?? "default"}".`);
+        render.hint(offlineHint);
       } else {
-        render.ok(`sent to ${to}`, result.messageId ? dim(result.messageId.slice(0, 8)) : undefined);
+        const who = recipientName ? `${recipientName} (${to.slice(0, 16)}…)` : to;
+        render.ok(`sent to ${who}${recipientOnline === true ? " (online)" : ""}`, result.messageId ? dim(result.messageId.slice(0, 8)) : undefined);
       }
     } else {
       if (flags.json) {
