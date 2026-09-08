@@ -14,6 +14,9 @@ import {
   dedupTargets,
   findZombieSockets,
   reattachLease,
+  liveLeasePresenceIds,
+  reconcileFlippedPresences,
+  STALE_PONG_THRESHOLD_MS,
   type DedupConnView,
 } from "../src/lease";
 
@@ -181,5 +184,44 @@ describe("reattachLease (RC-C ordering: swap before close)", () => {
     expect(closed).toBe(0);
     expect(conn.evictionTimer).toBeNull();
     expect(conn.leaseState).toBe("online");
+  });
+});
+
+describe("DB stale-sweep reconciliation (Addendum 5 follow-up: sweeper vs in-memory lease)", () => {
+  const OPEN = 1, CLOSED = 3;
+  const sock = (readyState: number) => ({ readyState, OPEN });
+  const now = 1_000_000;
+
+  test("liveLeasePresenceIds keeps only online + OPEN + recently-ponged leases", () => {
+    const conns: Array<[string, { ws: { readyState: number; OPEN: number }; leaseState: "online" | "offline"; lastPongAt: number }]> = [
+      ["alive",      { ws: sock(OPEN),   leaseState: "online",  lastPongAt: now - 10_000 }],
+      ["in-grace",   { ws: sock(CLOSED), leaseState: "offline", lastPongAt: now - 10_000 }],
+      ["half-dead",  { ws: sock(OPEN),   leaseState: "online",  lastPongAt: now - STALE_PONG_THRESHOLD_MS - 1 }],
+      ["closed-sock",{ ws: sock(CLOSED), leaseState: "online",  lastPongAt: now - 1_000 }],
+      ["edge",       { ws: sock(OPEN),   leaseState: "online",  lastPongAt: now - STALE_PONG_THRESHOLD_MS }],
+    ];
+    const keep = liveLeasePresenceIds(conns, now);
+    expect([...keep].sort()).toEqual(["alive", "edge"]);
+  });
+
+  test("THE GHOST: sweeper flips a row whose lease is online → reconcile returns it so the caller evicts (closes the socket)", () => {
+    // Prod 2026-09-08 22:05Z: presence rows flipped to disconnected while
+    // the daemon's socket stayed OPEN and nobody told it. list_peers hid
+    // the session; pushes still reached it; it never reconnected.
+    const conns = new Map<string, { ws: object; leaseState: "online" | "offline" }>([
+      ["ghost",   { ws: {}, leaseState: "online" }],
+      ["graced",  { ws: {}, leaseState: "offline" }],
+    ]);
+    const out = reconcileFlippedPresences(["ghost", "graced", "already-gone"], (id) => conns.get(id));
+    expect(out).toEqual(["ghost"]);
+  });
+
+  test("offline (in-grace) leases are left to their grace timer, never evicted by the sweeper", () => {
+    const conns = new Map([["g", { ws: {}, leaseState: "offline" as const }]]);
+    expect(reconcileFlippedPresences(["g"], (id) => conns.get(id))).toEqual([]);
+  });
+
+  test("nothing flipped → nothing to reconcile", () => {
+    expect(reconcileFlippedPresences([], () => undefined)).toEqual([]);
   });
 });

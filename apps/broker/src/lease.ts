@@ -177,3 +177,69 @@ export function reattachLease<WS>(
   conn.leaseUntil = 0;
   return wasState;
 }
+
+// ── DB stale-sweep reconciliation (2026-09-08, Addendum 5 follow-up) ──────
+//
+// `sweepStalePresences` (broker.ts) flips `presence.disconnected_at` purely
+// on `last_ping_at` age. That column is bumped by `heartbeat()` on every
+// pong, so a live lease normally never goes stale — but the DB write can
+// lag or fail while the in-memory lease is perfectly healthy, and the
+// reverse can happen too: the row is flipped while a socket is still OPEN
+// and its owner (the daemon) is never told. Both halves are closed here:
+//   1. `liveLeasePresenceIds` = the set the sweeper must NOT flip
+//      (online lease, OPEN socket, pong within the stale-pong window).
+//   2. `reconcileFlippedPresences` = of the ids the sweeper DID flip, the
+//      ones that still hold an online in-memory lease. The caller evicts
+//      them (which closes the socket) so the client reconnects and
+//      re-hellos instead of living on as a half-visible ghost.
+// Offline-leased entries are left to their grace timer on purpose: the
+// sweep cutoff (90 s since last ping) can land inside the grace window,
+// and evicting there would shorten the grace the lease model promises.
+
+/** Broker-side stale-pong window: 2.5x the 30 s ping cadence. */
+export const STALE_PONG_THRESHOLD_MS = 75_000;
+
+export interface LivenessConnView<WS extends { readyState: number; OPEN: number }>
+  extends LeaseConnView<WS> {
+  lastPongAt: number;
+}
+
+/**
+ * Presence ids whose lease is online, whose socket is OPEN and whose last
+ * pong is within `stalePongMs`. The DB stale sweeper must skip these — the
+ * in-memory lease is the source of truth for liveness, the DB column is a
+ * projection of it.
+ */
+export function liveLeasePresenceIds<WS extends { readyState: number; OPEN: number }>(
+  conns: Iterable<[string, LivenessConnView<WS>]>,
+  now: number,
+  stalePongMs: number = STALE_PONG_THRESHOLD_MS,
+): Set<string> {
+  const keep = new Set<string>();
+  for (const [pid, conn] of conns) {
+    if (conn.leaseState !== "online") continue;
+    if (conn.ws.readyState !== conn.ws.OPEN) continue;
+    if (now - conn.lastPongAt > stalePongMs) continue;
+    keep.add(pid);
+  }
+  return keep;
+}
+
+/**
+ * Of the presence ids the DB sweeper flipped to disconnected, return those
+ * that still have an ONLINE in-memory lease. Each one is a DB/memory
+ * split-brain: discovery (`list_peers`, DB-backed) already hides it while
+ * pushes (memory-backed) still reach it, and nothing tells the client.
+ * The caller must evict them (closing the socket) so the client reconnects.
+ */
+export function reconcileFlippedPresences<WS>(
+  flipped: Iterable<string>,
+  lookup: (presenceId: string) => LeaseConnView<WS> | undefined,
+): string[] {
+  const out: string[] = [];
+  for (const pid of flipped) {
+    const conn = lookup(pid);
+    if (conn?.leaseState === "online") out.push(pid);
+  }
+  return out;
+}

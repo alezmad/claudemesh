@@ -42,6 +42,7 @@ import {
   handleHookSetStatus,
   heartbeat,
   restorePresence,
+  setStaleSweepReconciler,
   insertFileKeys,
   joinGroup,
   joinMesh,
@@ -129,6 +130,9 @@ import {
   dedupTargets,
   findZombieSockets,
   reattachLease,
+  liveLeasePresenceIds,
+  reconcileFlippedPresences,
+  STALE_PONG_THRESHOLD_MS,
   CLOSE_CODE_PRESENCE_EVICTED,
   CLOSE_CODE_NO_PRESENCE,
 } from "./lease";
@@ -5742,7 +5746,8 @@ async function main(): Promise<void> {
   // ping interval) are considered half-dead — kernel hasn't yet RST'd
   // the socket but no application traffic is flowing. Force-terminate
   // them to fire the close handler and free the connection slot.
-  const STALE_PONG_THRESHOLD_MS = 75_000;
+  // STALE_PONG_THRESHOLD_MS (75 s) is shared with the DB stale-sweep
+  // reconciler and lives in lease.ts.
   const pingInterval = setInterval(() => {
     const now = Date.now();
 
@@ -5806,6 +5811,25 @@ async function main(): Promise<void> {
   }, 30_000);
   queueDepthTimer.unref();
 
+  // 2026-09-08 (Addendum 5 follow-up): the DB stale sweeper must not flip
+  // a presence whose lease is alive in memory, and whatever it does flip
+  // that still holds an online lease must be evicted (socket closed) so
+  // the owning daemon reconnects instead of becoming a half-visible ghost.
+  setStaleSweepReconciler({
+    keep: () => liveLeasePresenceIds(connections, Date.now(), STALE_PONG_THRESHOLD_MS),
+    onFlipped: (ids) => {
+      const ghosts = reconcileFlippedPresences(ids, (pid) => connections.get(pid));
+      for (const pid of ghosts) {
+        const conn = connections.get(pid);
+        log.warn("stale sweep flipped a presence with a live lease — evicting so the client reconnects", {
+          presence_id: pid,
+          session_pubkey: conn?.sessionPubkey?.slice(0, 12) ?? "(member-WS)",
+          last_pong_ago_ms: conn ? Date.now() - conn.lastPongAt : -1,
+        });
+        void evictPresenceFully(pid);
+      }
+    },
+  });
   startSweepers();
   startDbHealth();
   serviceManager.startHealthChecks();

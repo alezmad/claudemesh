@@ -25,6 +25,7 @@ import {
   isNotNull,
   isNull,
   lt,
+  notInArray,
   or,
   sql,
 } from "drizzle-orm";
@@ -285,18 +286,43 @@ export async function refreshQueueDepth(): Promise<void> {
 /**
  * Sweep stale presences: mark as disconnected if last_ping_at is older
  * than 90s (3 missed pings at the 30s interval = dead session).
+ *
+ * 2026-09-08 (Addendum 5 follow-up): the DB column is only a projection of
+ * the in-memory lease. `keep` = presence ids whose lease is online with an
+ * OPEN, recently-ponged socket — those are never flipped, whatever the
+ * column says (a lagging or failed heartbeat write must not hide a live
+ * session from `list_peers`). Returns the ids that WERE flipped so the
+ * caller can reconcile them against memory and close any socket that is
+ * still open (otherwise the client is never told and lives on as a ghost).
  */
-export async function sweepStalePresences(): Promise<void> {
+export async function sweepStalePresences(keep: ReadonlySet<string> = new Set()): Promise<string[]> {
   const cutoff = new Date(Date.now() - 90_000); // 3 missed pings
-  await db
+  const conds = [
+    isNull(presence.disconnectedAt),
+    lt(presence.lastPingAt, cutoff),
+  ];
+  if (keep.size > 0) conds.push(notInArray(presence.id, [...keep]));
+  const flipped = await db
     .update(presence)
     .set({ disconnectedAt: new Date() })
-    .where(
-      and(
-        isNull(presence.disconnectedAt),
-        lt(presence.lastPingAt, cutoff),
-      ),
-    );
+    .where(and(...conds))
+    .returning({ id: presence.id });
+  return flipped.map((r) => r.id);
+}
+
+/**
+ * Hook the stale sweeper into the in-memory lease map (lives in index.ts,
+ * which owns `connections`; broker.ts must not import it). `keep()` is
+ * evaluated right before each sweep; `onFlipped` receives the ids the
+ * sweep disconnected, if any.
+ */
+export interface StaleSweepReconciler {
+  keep: () => ReadonlySet<string>;
+  onFlipped: (ids: string[]) => void;
+}
+let staleSweepReconciler: StaleSweepReconciler | null = null;
+export function setStaleSweepReconciler(r: StaleSweepReconciler | null): void {
+  staleSweepReconciler = r;
 }
 
 /**
@@ -2651,9 +2677,10 @@ export function startSweepers(): void {
     );
   }, PENDING_SWEEP_INTERVAL_MS);
   staleTimer = setInterval(() => {
-    sweepStalePresences().catch((e) =>
-      console.error("[broker] stale presence sweep:", e),
-    );
+    const r = staleSweepReconciler;
+    sweepStalePresences(r ? r.keep() : undefined)
+      .then((flipped) => { if (r && flipped.length > 0) r.onFlipped(flipped); })
+      .catch((e) => console.error("[broker] stale presence sweep:", e));
   }, 30_000);
   claimSweepTimer = setInterval(() => {
     sweepExpiredClaims()
