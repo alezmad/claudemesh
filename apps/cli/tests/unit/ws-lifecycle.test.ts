@@ -200,10 +200,16 @@ describe("createWsLifecycle — close() flushes the close handshake (spec addend
     });
     const { handle } = makeClient(broker.url);
     await handle.ready;
+    const t0 = Date.now();
     await handle.close();
-    // The broker side has already seen the close frame when close() resolves.
+    // close() waited for the handshake: the client socket is fully CLOSED
+    // (not merely CLOSING) and the broker's own close event lands within a
+    // few ms — well inside CLOSE_FLUSH_MS, not after a process.exit.
+    expect(handle.ws?.readyState).toBe(3 /* CLOSED */);
+    for (let i = 0; i < 30 && serverCloses.length === 0; i++) await sleep(10);
     expect(serverCloses).toHaveLength(1);
     expect(serverCloses[0]).toBe(1005); // close() without a code → no status
+    expect(Date.now() - t0).toBeLessThan(1_000);
     expect(handle.status).toBe("closed");
   });
 });
