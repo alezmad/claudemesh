@@ -34,6 +34,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import { ipc, IpcError } from "~/daemon/ipc/client.js";
+import { readRunningPid } from "~/daemon/lock.js";
 import { DAEMON_PATHS } from "~/daemon/paths.js";
 
 export type DaemonReadyState =
@@ -105,6 +106,10 @@ async function runEnsureDaemon(opts: EnsureDaemonOpts): Promise<EnsureDaemonResu
   // Step 1 — probe.
   const probe = await probeDaemon();
   if (probe === "up") return { state: "up", durationMs: Date.now() - t0 };
+  // "busy": a live daemon owns the socket but did not answer in time. Do
+  // NOT clean up, do NOT spawn — report it as up and let the caller's own
+  // IPC timeout decide (it falls back to the cold path on its own).
+  if (probe === "busy") return { state: "up", durationMs: Date.now() - t0, reason: "daemon busy (probe timed out; files left intact)" };
 
   // Step 2 — service-managed shortcut. When launchd / systemd manages
   // the daemon and KeepAlive is set, the OS will restart a crashed
@@ -171,17 +176,34 @@ function isServiceManaged(): boolean {
   return false;
 }
 
-async function probeDaemon(): Promise<"up" | "absent" | "stale"> {
+/**
+ * 1.37.1: classify a failed probe. Exported for tests.
+ *
+ * Before this, EVERY probe failure — including a plain timeout against a
+ * daemon that was merely busy (rehydrating sessions, signing attestations,
+ * a slow broker hello) — was "stale", and `cleanupStaleFiles()` then
+ * unlinked the LIVE daemon's socket + pid file. The daemon kept running,
+ * unreachable; the next CLI call auto-spawned a second daemon; the two
+ * fought over the same sessions with `session_replaced` at a 1 s cadence
+ * (2026-09-08 drill). Only "nobody is listening" is stale: the socket
+ * path is gone or the connection is refused, or the pid on record is
+ * dead. Anything else from a live pid is "busy" — leave its files alone.
+ */
+export function classifyProbeFailure(errMessage: string, pidAlive: boolean): "stale" | "busy" {
+  if (/ENOENT|ECONNREFUSED/.test(errMessage)) return "stale";
+  return pidAlive ? "busy" : "stale";
+}
+
+async function probeDaemon(): Promise<"up" | "absent" | "stale" | "busy"> {
   if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return "absent";
   try {
     const res = await ipc<{ version?: string }>({ path: "/v1/version", timeoutMs: PROBE_TIMEOUT_MS });
     if (res.status === 200) return "up";
-    return "stale";
+    // Answered, but not 200 — a daemon IS listening. Never stale.
+    return "busy";
   } catch (err) {
-    if (err instanceof IpcError) return "stale";
-    const msg = String(err);
-    if (/ENOENT|ECONNREFUSED|ipc_timeout|EPIPE|ECONNRESET/.test(msg)) return "stale";
-    return "stale";
+    const msg = err instanceof IpcError ? `ipc_error_${err.status}` : String(err);
+    return classifyProbeFailure(msg, readRunningPid() !== null);
   }
 }
 

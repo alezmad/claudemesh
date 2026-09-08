@@ -504,6 +504,10 @@ async function main(): Promise<void> {
         // path always run with --foreground so their parents (launchd /
         // the launch helper) own lifecycle and stdio redirection.
         foreground: !!flags.foreground,
+        // 1.37.1: explicit opt-in to the in-process rotating log sink.
+        // Service units pass it; a human running `up --foreground` keeps
+        // stdio (even when piped).
+        logSink: !!flags["log-sink"],
         outboxStatus,
         newClientId: flags["new-client-id"] as string | undefined,
       }, rest);

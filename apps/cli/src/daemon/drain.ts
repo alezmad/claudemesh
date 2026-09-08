@@ -17,9 +17,25 @@ import type { SessionBrokerClient } from "./session-broker.js";
 import type { OutboxStatus } from "./db/outbox.js";
 
 const POLL_INTERVAL_MS    = 500;
-const MAX_ATTEMPTS_PER_ROW = 25;
+export const MAX_ATTEMPTS_PER_ROW = 25;
 const BACKOFF_BASE_MS     = 500;
 const BACKOFF_CAP_MS      = 30_000;
+/**
+ * 1.37.1 — outbox hygiene (spec 2026-09-08-daemon-restart-mesh-blackout §8).
+ *
+ * Before these caps, a row bound to a session WS that never came back
+ * (stale session pubkey from a previous day) was retried forever: the
+ * not-ready path neither counted attempts nor expired, and it logged
+ * `drain_session_ws_not_ready` on EVERY tick. Four such rows reached
+ * ~130k attempts each and grew daemon.log to 1 GB (disk at 95%).
+ */
+/** Any pending/inflight row older than this is dead (`expired`). */
+export const OUTBOX_TTL_MS = 24 * 60 * 60 * 1000;
+/** A session-attributed row whose session is no longer registered at all
+ *  (not merely reconnecting) is dead after this age (`session_gone`). */
+export const SESSION_GONE_TTL_MS = 10 * 60 * 1000;
+/** `drain_session_ws_not_ready` is logged on attempt 1 and every Nth after. */
+export const NOT_READY_LOG_EVERY = 60;
 
 interface PendingRow {
   id: string;
@@ -27,6 +43,7 @@ interface PendingRow {
   request_fingerprint: Uint8Array;
   payload: Uint8Array;
   attempts: number;
+  enqueued_at: number;
   /** Sprint 4 routing fields. NULL on legacy v0.9.0 rows → broadcast fallback. */
   target_spec: string | null;
   nonce: string | null;
@@ -60,6 +77,8 @@ export interface DrainOptions {
    */
   getSessionBrokerByPubkey?: (sessionPubkey: string) => SessionBrokerClient | undefined;
   log?: (level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) => void;
+  /** Clock override for tests. Defaults to Date.now. */
+  nowFn?: () => number;
 }
 
 export interface DrainHandle {
@@ -103,10 +122,21 @@ export function startDrainWorker(opts: DrainOptions): DrainHandle {
   };
 }
 
-async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"]>): Promise<void> {
-  const now = Date.now();
+/** Exported for tests: one drain pass. */
+export async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"]> = opts.log ?? defaultLog): Promise<void> {
+  const now = (opts.nowFn ?? Date.now)();
+
+  // TTL sweep: anything still undelivered after OUTBOX_TTL_MS is dead.
+  // One UPDATE per tick; cheap on the (status, next_attempt_at) index.
+  const expired = Number(opts.db.prepare(`
+    UPDATE outbox
+       SET status = 'dead', last_error = 'expired'
+     WHERE status IN ('pending', 'inflight') AND enqueued_at < ?
+  `).run(now - OUTBOX_TTL_MS).changes);
+  if (expired > 0) log("warn", "drain_expired_rows", { count: expired, ttl_ms: OUTBOX_TTL_MS });
+
   const rows = opts.db.prepare(`
-    SELECT id, client_message_id, request_fingerprint, payload, attempts,
+    SELECT id, client_message_id, request_fingerprint, payload, attempts, enqueued_at,
            target_spec, nonce, ciphertext, priority, mesh,
            sender_session_pubkey
       FROM outbox
@@ -183,10 +213,29 @@ async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"
         // Session-attributed row. Require an open session-WS — see comment
         // above on why we don't fall back to the daemon-WS.
         if (!sessionBroker || !sessionBroker.isOpen()) {
-          log("info", "drain_session_ws_not_ready", {
-            id: row.id, session_pubkey: row.sender_session_pubkey.slice(0, 12),
-          });
-          backoffPending(opts.db, row.id, row.attempts + 1, "session_ws_not_open", "session_ws_not_open");
+          const attempts = row.attempts + 1;
+          // No registered session owns this pubkey at all (not merely a
+          // reconnecting one) and the row has waited long enough: the
+          // session is gone, nothing will ever send it. Dead, not retry.
+          if (!sessionBroker && now - row.enqueued_at > SESSION_GONE_TTL_MS) {
+            log("warn", "drain_session_gone", {
+              id: row.id, session_pubkey: row.sender_session_pubkey.slice(0, 12), attempts,
+            });
+            markDead(opts.db, row.id, "session_gone");
+            continue;
+          }
+          if (attempts === 1 || attempts % NOT_READY_LOG_EVERY === 0) {
+            log("info", "drain_session_ws_not_ready", {
+              id: row.id, session_pubkey: row.sender_session_pubkey.slice(0, 12), attempts,
+              registered: !!sessionBroker,
+            });
+          }
+          if (attempts >= MAX_ATTEMPTS_PER_ROW) {
+            log("warn", "drain_max_attempts", { id: row.id, err: "session_ws_not_open" });
+            markDead(opts.db, row.id, "max_attempts: session_ws_not_open");
+            continue;
+          }
+          backoffPending(opts.db, row.id, attempts, "session_ws_not_open", "session_ws_not_open", now);
           continue;
         }
         res = await sessionBroker.send(sendArgs);
@@ -195,7 +244,7 @@ async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"
       }
     } catch (e) {
       log("warn", "drain_send_threw", { id: row.id, err: String(e) });
-      backoffPending(opts.db, row.id, row.attempts + 1, "exception", String(e));
+      backoffPending(opts.db, row.id, row.attempts + 1, "exception", String(e), now);
       continue;
     }
 
@@ -208,7 +257,7 @@ async function drainOnce(opts: DrainOptions, log: NonNullable<DrainOptions["log"
       log("warn", "drain_max_attempts", { id: row.id, err: res.error });
       markDead(opts.db, row.id, `max_attempts: ${res.error}`);
     } else {
-      backoffPending(opts.db, row.id, row.attempts + 1, "retry", res.error);
+      backoffPending(opts.db, row.id, row.attempts + 1, "retry", res.error, now);
     }
   }
 }
@@ -233,9 +282,9 @@ function markDead(db: SqliteDb, id: string, err: string) {
   db.prepare(`UPDATE outbox SET status = 'dead', last_error = ? WHERE id = ?`).run(err, id);
 }
 
-function backoffPending(db: SqliteDb, id: string, attempts: number, _kind: string, err: string) {
+function backoffPending(db: SqliteDb, id: string, attempts: number, _kind: string, err: string, now: number = Date.now()) {
   const wait = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * (2 ** Math.min(attempts, 12)));
-  const next = Date.now() + wait;
+  const next = now + wait;
   db.prepare(`
     UPDATE outbox
        SET status = 'pending', attempts = ?, next_attempt_at = ?, last_error = ?

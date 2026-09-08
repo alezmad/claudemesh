@@ -2,8 +2,14 @@
 //   - macOS: ~/Library/LaunchAgents/com.claudemesh.daemon.plist (launchctl bootstrap)
 //   - Linux: ~/.config/systemd/user/claudemesh-daemon.service (systemctl --user enable)
 //
-// Both run as the invoking user, redirect stdout/stderr to ~/.claudemesh/
-// daemon/daemon.log, restart on crash, and start at login. CI envs are
+// Both run as the invoking user, restart on crash, and start at login.
+// 1.37.1: stdout/stderr are redirected to ~/.claudemesh/daemon/
+// daemon.launchd.log — a small file that only receives writes from
+// BEFORE the daemon installs its in-process rotating sink (boot
+// crashes, node startup errors). The daemon's own log lines go to
+// daemon.log via `installRotatingLogSink` (20 MB × 5). Pre-1.37.1 units
+// pointed StandardOutPath at daemon.log directly, and launchd never
+// rotates — that is how the 2026-09-08 incident found a 1 GB log. CI envs are
 // refused unless --allow-ci-persistent is passed (spec §9 / §16.3).
 
 import { existsSync, mkdirSync, writeFileSync, unlinkSync, readFileSync } from "node:fs";
@@ -23,6 +29,12 @@ export interface InstallResult {
 
 const SERVICE_LABEL = "com.claudemesh.daemon";
 const SYSTEMD_UNIT  = "claudemesh-daemon.service";
+/** 1.37.1: minimum seconds launchd waits between respawns. The
+ *  2026-09-08 incident had two daemons (one lived 6 s) racing the broker
+ *  inside the same 90 s lease-grace window, doubling the reconnect
+ *  storm. launchd's default is already 10 s; pinning it makes the
+ *  contract explicit and lets `doctor` detect pre-1.37.1 units. */
+const LAUNCHD_THROTTLE_SECONDS = 10;
 
 export function detectPlatform(): ServicePlatform | null {
   if (process.platform === "darwin") return "darwin";
@@ -91,7 +103,7 @@ function darwinPlistPath(): string {
 function installDarwin(args: InstallArgs): InstallResult {
   const plist = darwinPlistPath();
   mkdirSync(dirname(plist), { recursive: true });
-  const log = DAEMON_PATHS.LOG_FILE;
+  const log = DAEMON_PATHS.LAUNCHD_LOG_FILE;
   // Resolve `node` explicitly. The bin script in node_modules/.bin starts
   // with `#!/usr/bin/env node`; under launchd's restricted PATH that would
   // resolve `node` to a system Node (often the wrong major) instead of the
@@ -108,6 +120,8 @@ function installDarwin(args: InstallArgs): InstallResult {
     "<string>daemon</string>",
     "<string>up</string>",
     "<string>--foreground</string>",
+    // 1.37.1: in-process rotating log sink (launchd never rotates).
+    "<string>--log-sink</string>",
     ...(args.meshSlug
       ? ["<string>--mesh</string>", `<string>${escapeXml(args.meshSlug)}</string>`]
       : []),
@@ -129,6 +143,8 @@ function installDarwin(args: InstallArgs): InstallResult {
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ThrottleInterval</key>
+  <integer>${LAUNCHD_THROTTLE_SECONDS}</integer>
   <key>StandardOutPath</key>
   <string>${escapeXml(log)}</string>
   <key>StandardErrorPath</key>
@@ -190,7 +206,7 @@ function installLinux(args: InstallArgs): InstallResult {
   // and stdio capture; we don't want the child to double-fork into a
   // detached grandchild systemd can't track.
   const execArgs = [
-    "daemon", "up", "--foreground",
+    "daemon", "up", "--foreground", "--log-sink",
     ...(args.meshSlug ? ["--mesh", args.meshSlug] : []),
     ...(args.displayName ? ["--name", args.displayName] : []),
   ].map(shellQuote).join(" ");
@@ -205,8 +221,8 @@ Type=simple
 ExecStart=${shellQuote(nodeBin)} ${shellQuote(args.binaryPath)} ${execArgs}
 Restart=always
 RestartSec=3
-StandardOutput=append:${DAEMON_PATHS.LOG_FILE}
-StandardError=append:${DAEMON_PATHS.LOG_FILE}
+StandardOutput=append:${DAEMON_PATHS.LAUNCHD_LOG_FILE}
+StandardError=append:${DAEMON_PATHS.LAUNCHD_LOG_FILE}
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
 [Install]
@@ -246,6 +262,38 @@ function escapeXml(s: string): string {
 function shellQuote(s: string): string {
   if (/^[\w@%+=:,./-]+$/.test(s)) return s;
   return "'" + s.replace(/'/g, "'\"'\"'") + "'";
+}
+
+/**
+ * 1.37.1: is the installed unit from before the rotating-log-sink change?
+ * Stale when it still redirects stdio straight into `daemon.log` (no
+ * rotation → unbounded growth) or lacks the launchd ThrottleInterval.
+ * `claudemesh doctor` surfaces this with the reinstall command.
+ */
+export function isInstalledUnitStale(): { stale: boolean; reason?: string; path?: string } {
+  const unit = readInstalledUnit();
+  if (!unit.platform || !unit.path || unit.content === null) return { stale: false };
+  const c = unit.content;
+  const legacyLog = DAEMON_PATHS.LOG_FILE;
+  if (unit.platform === "darwin") {
+    if (c.includes(`<string>${escapeXml(legacyLog)}</string>`)) {
+      return { stale: true, reason: "StandardOutPath/StandardErrorPath point at daemon.log (no rotation)", path: unit.path };
+    }
+    if (!c.includes("<key>ThrottleInterval</key>")) {
+      return { stale: true, reason: "missing ThrottleInterval", path: unit.path };
+    }
+    if (!c.includes("<string>--log-sink</string>")) {
+      return { stale: true, reason: "missing --log-sink (daemon.log would not rotate)", path: unit.path };
+    }
+    return { stale: false, path: unit.path };
+  }
+  if (c.includes(`append:${legacyLog}\n`) || c.trimEnd().endsWith(`append:${legacyLog}`)) {
+    return { stale: true, reason: "StandardOutput/StandardError append to daemon.log (no rotation)", path: unit.path };
+  }
+  if (!c.includes("--log-sink")) {
+    return { stale: true, reason: "missing --log-sink (daemon.log would not rotate)", path: unit.path };
+  }
+  return { stale: false, path: unit.path };
 }
 
 /** Diagnostic helper: dump current install status for `claudemesh daemon status --json`. */

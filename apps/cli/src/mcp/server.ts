@@ -123,32 +123,117 @@ function daemonMarkSeen(ids: string[], sessionToken?: string | null): Promise<vo
 
 interface DaemonEvent { kind: string; ts: string; data: Record<string, any> }
 
-function subscribeEvents(onEvent: (e: DaemonEvent) => void, opts: { sessionToken?: string | null } = {}): { close: () => void } {
+export interface SubscribeEventsOptions {
+  sessionToken?: string | null;
+  /**
+   * 1.37.1: idle watchdog. The daemon writes `: keepalive` every 15 s on
+   * every SSE stream; if NOTHING arrives for this long the socket is
+   * presumed half-dead (daemon killed with SIGKILL, machine slept, …)
+   * and is destroyed so the reconnect path runs. Default 45 s (3 missed
+   * keepalives). Tests lower it.
+   */
+  idleTimeoutMs?: number;
+  /** Reconnect backoff caps (ms). Default [1s, 2s, 5s, 10s]. */
+  backoffMs?: readonly number[];
+  /** Structured log sink (`mcpLog` in startMcpServer). Optional. */
+  log?: (msg: string, meta?: Record<string, unknown>) => void;
+  /** Override the daemon UDS path (tests). Default DAEMON_PATHS.SOCK_FILE. */
+  socketPath?: string;
+}
+
+const SSE_DEFAULT_IDLE_MS = 45_000;
+const SSE_DEFAULT_BACKOFF_MS: readonly number[] = [1_000, 2_000, 5_000, 10_000];
+
+/**
+ * Subscribe to the daemon's `/v1/events` SSE stream and hand every parsed
+ * event to `onEvent`. Reconnects forever (with backoff) until `close()`.
+ *
+ * 1.37.1 rewrite — the pre-1.37.1 version only resubscribed on
+ * `res 'end'` / `req 'error'`. A daemon that dies hard (SIGKILL, OOM,
+ * `process.exit` from a crash handler) never sends `end`: the response
+ * emits `aborted`/`close`/`error` instead, which were logged to stderr
+ * and otherwise ignored. After the 2026-09-08 daemon restart, `lsof`
+ * showed 0 of 10 live MCP plugins connected to the new daemon and 0
+ * `sse_event_received` for the rest of the day — mid-turn `<channel>`
+ * injection was dead until each Claude Code session was restarted.
+ *
+ * Now every termination signal (`res end/close/aborted/error`,
+ * `req close/error/timeout`) funnels into ONE `scheduleReconnect(reason)`
+ * per attempt (deduped — a socket teardown fires several of these), and
+ * an idle watchdog catches the case where nothing fires at all.
+ */
+export function subscribeEvents(
+  onEvent: (e: DaemonEvent) => void,
+  opts: SubscribeEventsOptions = {},
+): { close: () => void } {
+  const idleTimeoutMs = opts.idleTimeoutMs ?? SSE_DEFAULT_IDLE_MS;
+  const backoff = opts.backoffMs ?? SSE_DEFAULT_BACKOFF_MS;
+  const log = opts.log ?? (() => { /* silent */ });
+  const socketPath = opts.socketPath ?? DAEMON_PATHS.SOCK_FILE;
+
   let active = true;
   let req: ReturnType<typeof httpRequest> | null = null;
+  let reconnectTimer: NodeJS.Timeout | null = null;
+  let attempt = 0;          // consecutive failed/aborted attempts (resets on a live stream)
+  let generation = 0;       // bumps per connect(); stale socket callbacks are ignored
 
   const connect = (): void => {
     if (!active) return;
-    // 1.34.13: forward the session token on the SSE subscription so the
-    // daemon's `/v1/events` route can scope the stream to this session
-    // via the SseFilterOptions demux added in 1.34.10. Without this
-    // header, `session` resolves to null in the IPC handler, the filter
-    // is empty, and every MCP receives every event — manifests as
-    // session A rendering DMs that arrived on B's session-WS. The
-    // launch helper sets CLAUDEMESH_IPC_TOKEN_FILE in the child env;
-    // readSessionTokenFromEnv() picks it up at MCP boot time.
+    const gen = ++generation;
+    let scheduled = false;
+    let idleTimer: NodeJS.Timeout | null = null;
+    let sawBytes = false;
+
+    const clearIdle = () => { if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; } };
+    const armIdle = () => {
+      clearIdle();
+      if (idleTimeoutMs <= 0) return;
+      idleTimer = setTimeout(() => {
+        if (gen !== generation || !active) return;
+        log("sse_idle_timeout", { idle_ms: idleTimeoutMs });
+        process.stderr.write(`[claudemesh-mcp] sse idle for ${idleTimeoutMs}ms; reconnecting\n`);
+        try { thisReq.destroy(new Error("sse_idle_timeout")); } catch { /* ignore */ }
+        scheduleReconnect("idle_timeout");
+      }, idleTimeoutMs);
+    };
+
+    /** One reconnect per attempt, whatever fires first. */
+    const scheduleReconnect = (reason: string): void => {
+      if (gen !== generation) return;   // an older socket's late event
+      if (scheduled) return;
+      scheduled = true;
+      clearIdle();
+      if (!active) return;
+      const wait = backoff[Math.min(attempt, backoff.length - 1)] ?? 10_000;
+      attempt++;
+      log("sse_reconnect", { reason, attempt, wait_ms: wait });
+      process.stderr.write(`[claudemesh-mcp] sse ${reason}; reconnecting in ${wait}ms (attempt ${attempt})\n`);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, wait);
+    };
+
+    // 1.34.13: forward the session token so the daemon scopes the stream
+    // to this session (SseFilterOptions demux). Without it every MCP
+    // receives every event.
     const headers: Record<string, string> = { Accept: "text/event-stream" };
     if (opts.sessionToken) headers.Authorization = `ClaudeMesh-Session ${opts.sessionToken}`;
-    req = httpRequest({
-      socketPath: DAEMON_PATHS.SOCK_FILE,
-      path: "/v1/events",
-      method: "GET",
-      headers,
-    });
+    const thisReq = httpRequest({ socketPath, path: "/v1/events", method: "GET", headers });
+    req = thisReq;
     let buffer = "";
-    req.on("response", (res: IncomingMessage) => {
+
+    thisReq.on("response", (res: IncomingMessage) => {
+      if (res.statusCode && res.statusCode >= 400) {
+        log("sse_subscribe_rejected", { status: res.statusCode });
+        res.resume();
+        scheduleReconnect(`http_${res.statusCode}`);
+        return;
+      }
+      log("sse_subscribed", { attempt });
+      armIdle();
       res.setEncoding("utf8");
       res.on("data", (chunk: string) => {
+        if (!sawBytes) { sawBytes = true; attempt = 0; }  // live stream → reset backoff
+        armIdle();
         buffer += chunk;
         let idx;
         while ((idx = buffer.indexOf("\n\n")) >= 0) {
@@ -169,24 +254,25 @@ function subscribeEvents(onEvent: (e: DaemonEvent) => void, opts: { sessionToken
           } catch { /* malformed event; skip */ }
         }
       });
-      res.on("end", () => {
-        if (active) {
-          process.stderr.write("[claudemesh-mcp] sse stream ended; reconnecting in 1s\n");
-          setTimeout(connect, 1_000);
-        }
-      });
-      res.on("error", (err) => process.stderr.write(`[claudemesh-mcp] sse error: ${err.message}\n`));
+      res.on("end", () => scheduleReconnect("stream_ended"));
+      res.on("close", () => scheduleReconnect("stream_closed"));
+      res.on("aborted", () => scheduleReconnect("stream_aborted"));
+      res.on("error", (err) => scheduleReconnect(`stream_error:${err.message}`));
     });
-    req.on("error", (err) => {
-      process.stderr.write(`[claudemesh-mcp] sse connect error: ${err.message}\n`);
-      if (active) setTimeout(connect, 2_000);
-    });
-    req.end();
+    thisReq.on("error", (err) => scheduleReconnect(`connect_error:${err.message}`));
+    thisReq.on("close", () => scheduleReconnect("request_closed"));
+    thisReq.on("timeout", () => { try { thisReq.destroy(new Error("sse_connect_timeout")); } catch { /* ignore */ } });
+    thisReq.end();
   };
 
   connect();
   return {
-    close: () => { active = false; try { req?.destroy(); } catch { /* ignore */ } },
+    close: () => {
+      active = false;
+      generation++;
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      try { req?.destroy(); } catch { /* ignore */ }
+    },
   };
 }
 
@@ -445,7 +531,7 @@ export async function startMcpServer(): Promise<void> {
         });
       } catch { /* best effort */ }
     }
-  }, { sessionToken: sessionTokenForSeen });
+  }, { sessionToken: sessionTokenForSeen, log: mcpLog });
 
   // 1.34.6 — Welcome: single emit on oninitialized + 3s grace.
   //

@@ -17,7 +17,7 @@
 
 import type { JoinedMesh } from "~/services/config/facade.js";
 import { signHello } from "~/services/broker/hello-sig.js";
-import { connectWsWithBackoff, type WsLifecycle, type WsStatus } from "./ws-lifecycle.js";
+import { createWsLifecycle, type WsLifecycle, type WsStatus } from "./ws-lifecycle.js";
 
 export type ConnStatus = WsStatus;
 
@@ -99,6 +99,8 @@ export interface DaemonBrokerOptions {
   onStatusChange?: (s: ConnStatus) => void;
   onPush?: (msg: Record<string, unknown>) => void;
   log?: (level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) => void;
+  /** Lifecycle timing overrides (tests / tuning). Defaults live in ws-lifecycle.ts. */
+  lifecycle?: { helloAckTimeoutMs?: number; backoffCapsMs?: readonly number[] };
 }
 
 export class DaemonBrokerClient {
@@ -126,12 +128,22 @@ export class DaemonBrokerClient {
     (this.opts.log ?? defaultLog)(level, msg, { mesh: this.mesh.slug, ...meta });
   };
 
-  /** Open the WS, run the hello handshake, resolve once the broker accepts. */
+  /**
+   * Open the WS, run the hello handshake, resolve once the broker accepts.
+   *
+   * 1.37.1: the lifecycle handle is stored SYNCHRONOUSLY before awaiting
+   * readiness. Pre-1.37.1 `this.lifecycle = await connectWsWithBackoff(…)`
+   * left `lifecycle === null` forever when the first hello ack timed out
+   * (the helper kept reconnecting on its own and flipped `_status` to
+   * "open", but every RPC gated on `this.lifecycle` returned []). See
+   * spec 2026-09-08-daemon-restart-mesh-blackout addendum 3. Idempotent:
+   * a second call while a lifecycle exists just awaits the same `ready`.
+   */
   async connect(): Promise<void> {
     if (this.closed) throw new Error("client_closed");
-    if (this._status === "connecting" || this._status === "open") return;
+    if (this.lifecycle) return this.lifecycle.ready;
 
-    this.lifecycle = await connectWsWithBackoff({
+    this.lifecycle = createWsLifecycle({
       url: this.mesh.brokerUrl,
       buildHello: async () => {
         const { timestamp, signature } = await signHello(
@@ -172,7 +184,20 @@ export class DaemonBrokerClient {
       },
       onBeforeReconnect: (code) => this.failPendingAcks(`broker_disconnected_${code}`),
       log: (level, msg, meta) => this.log(level, `broker_${msg}`, meta),
+      ...(this.opts.lifecycle ?? {}),
     });
+    await this.lifecycle.ready;
+  }
+
+  /** Operator diagnostics — surfaced by `/v1/diagnostics` + `claudemesh doctor`. */
+  diagnostics(): { status: ConnStatus; isOpen: boolean; lastAckAt: number | null; reconnects: number; replaced: boolean } {
+    return {
+      status: this._status,
+      isOpen: this.isOpen(),
+      lastAckAt: this.lifecycle?.lastAckAt ?? null,
+      reconnects: this.lifecycle?.reconnects ?? 0,
+      replaced: this.lifecycle?.replaced ?? false,
+    };
   }
 
   private handleMessage(msg: Record<string, unknown>): void {
@@ -276,7 +301,7 @@ export class DaemonBrokerClient {
   }
 
   /** True when underlying socket is OPEN-ready for direct sends. */
-  private isOpen(): boolean {
+  isOpen(): boolean {
     const sock = this.lifecycle?.ws;
     return !!sock && sock.readyState === sock.OPEN;
   }

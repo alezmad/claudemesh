@@ -10,6 +10,9 @@ import { listOutbox, requeueDeadOrPending, type OutboxStatus } from "../db/outbo
 import { randomUUID } from "node:crypto";
 import { bindSseStream, type EventBus } from "../events.js";
 import type { DaemonBrokerClient } from "../broker.js";
+import type { SessionBrokerClient } from "../session-broker.js";
+import type { LogSinkHandle } from "../log-sink.js";
+import { statSync } from "node:fs";
 import {
   registerSession, deregisterByToken, resolveToken, listSessions, startReaper,
   type SessionInfo,
@@ -48,6 +51,14 @@ export interface IpcServerOptions {
   meshConfigs?: Map<string, { slug: string; pubkey: string; secretKey: string }>;
   /** Notify when a new outbox row was inserted (drains can wake). */
   onPendingInserted?: () => void;
+  /** 1.37.1: per-session WS clients keyed by session token (for /v1/diagnostics). */
+  sessionBrokers?: Map<string, SessionBrokerClient>;
+  /** 1.37.1: per-session WS clients keyed by hex session pubkey. */
+  sessionBrokersByPubkey?: Map<string, SessionBrokerClient>;
+  /** 1.37.1: rotating log sink handle (reports the active log size). */
+  logSink?: LogSinkHandle | null;
+  /** 1.37.1: daemon start time (ms) for uptime reporting. */
+  startedAt?: number;
 }
 
 export interface IpcServerHandle {
@@ -61,6 +72,11 @@ export interface IpcServerHandle {
 export function startIpcServer(opts: IpcServerOptions): IpcServerHandle {
   const log = opts.log ?? defaultLogger;
 
+  // 1.37.1: live SSE streams. `close()` ends each one BEFORE the servers
+  // shut down so an MCP plugin sees a clean `end` (→ resubscribe) rather
+  // than a hard socket drop when the daemon exits.
+  const sseCleanups = new Set<() => void>();
+
   const handler = makeHandler({
     localToken: opts.localToken,
     publicHealthCheck: !!opts.publicHealthCheck,
@@ -71,6 +87,11 @@ export function startIpcServer(opts: IpcServerOptions): IpcServerHandle {
     brokers: opts.brokers,
     meshConfigs: opts.meshConfigs,
     onPendingInserted: opts.onPendingInserted,
+    sessionBrokers: opts.sessionBrokers,
+    sessionBrokersByPubkey: opts.sessionBrokersByPubkey,
+    logSink: opts.logSink ?? null,
+    startedAt: opts.startedAt ?? Date.now(),
+    sseCleanups,
   });
 
   // --- UDS listener -------------------------------------------------------
@@ -106,6 +127,10 @@ export function startIpcServer(opts: IpcServerOptions): IpcServerHandle {
     tcp,
     ready: Promise.all([udsReady, tcpReady]).then(() => undefined),
     close: async () => {
+      for (const cleanup of [...sseCleanups]) {
+        try { cleanup(); } catch { /* ignore */ }
+      }
+      sseCleanups.clear();
       await Promise.allSettled([
         new Promise<void>((res) => uds.close(() => res())),
         tcp ? new Promise<void>((res) => tcp!.close(() => res())) : Promise.resolve(),
@@ -113,6 +138,31 @@ export function startIpcServer(opts: IpcServerOptions): IpcServerHandle {
       try { unlinkSync(DAEMON_PATHS.SOCK_FILE); } catch { /* ignore */ }
     },
   };
+}
+
+/**
+ * 1.37.1: normalize a broker client's self-report. Prefers the client's
+ * `diagnostics()` (added alongside the lifecycle fix) and degrades to the
+ * `status` / `isOpen()` surface when running against an older client.
+ */
+function brokerDiagnostics(
+  client: { status: string; isOpen?: () => boolean; diagnostics?: () => { status: string; isOpen: boolean; lastAckAt?: number | string | null; reconnects?: number } },
+): { status: string; isOpen: boolean; lastAckAt: string | null; reconnects: number } {
+  try {
+    if (typeof client.diagnostics === "function") {
+      const d = client.diagnostics();
+      const ack = d.lastAckAt;
+      return {
+        status: d.status,
+        isOpen: !!d.isOpen,
+        lastAckAt: typeof ack === "number" ? new Date(ack).toISOString() : (ack ?? null),
+        reconnects: d.reconnects ?? 0,
+      };
+    }
+  } catch { /* fall through */ }
+  let isOpen = false;
+  try { isOpen = typeof client.isOpen === "function" ? client.isOpen() : client.status === "open"; } catch { isOpen = false; }
+  return { status: client.status, isOpen, lastAckAt: null, reconnects: 0 };
 }
 
 function defaultLogger(level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) {
@@ -131,6 +181,11 @@ function makeHandler(opts: {
   brokers?: Map<string, DaemonBrokerClient>;
   meshConfigs?: Map<string, { slug: string; pubkey: string; secretKey: string }>;
   onPendingInserted?: () => void;
+  sessionBrokers?: Map<string, SessionBrokerClient>;
+  sessionBrokersByPubkey?: Map<string, SessionBrokerClient>;
+  logSink: LogSinkHandle | null;
+  startedAt: number;
+  sseCleanups: Set<() => void>;
 }) {
   const tokenBytes = Buffer.from(opts.localToken, "utf8");
 
@@ -197,7 +252,7 @@ function makeHandler(opts: {
       respond(res, 200, {
         daemon_version: VERSION,
         ipc_api: "v1",
-        ipc_features: ["version", "health", "send", "inbox", "events", "peers", "profile", "skills", "state", "memory", "sessions"],
+        ipc_features: ["version", "health", "send", "inbox", "events", "peers", "profile", "skills", "state", "memory", "sessions", "diagnostics"],
         schema_version: 1,
       });
       return;
@@ -215,6 +270,45 @@ function makeHandler(opts: {
         for (const [slug, client] of opts.brokers) brokers[slug] = client.status;
       }
       respond(res, 200, { ok: true, pid: process.pid, brokers });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/v1/diagnostics") {
+      // 1.37.1: the operator signal behind `claudemesh daemon status` and
+      // `claudemesh doctor`. Reports what the daemon believes about every
+      // socket it owns so a "registered + hello_acked but invisible on
+      // the mesh" state (the 2026-09-08 blackout) can be detected by
+      // cross-checking against `/v1/peers`.
+      const meshes: Record<string, { status: string; isOpen: boolean; lastAckAt: string | null; reconnects: number }> = {};
+      if (opts.brokers) {
+        for (const [slug, client] of opts.brokers) meshes[slug] = brokerDiagnostics(client);
+      }
+      const sessions = listSessions().map((s) => {
+        const pk = s.presence?.sessionPubkey ?? null;
+        const client = pk ? opts.sessionBrokersByPubkey?.get(pk) : undefined;
+        const d = client ? brokerDiagnostics(client) : null;
+        return {
+          sessionId: s.sessionId,
+          mesh: s.mesh,
+          displayName: s.displayName,
+          pid: s.pid,
+          cwd: s.cwd ?? null,
+          sessionPubkey: pk,
+          sessionPubkeyPrefix: pk ? pk.slice(0, 12) : null,
+          registeredAt: new Date(s.registeredAt).toISOString(),
+          ws: d ?? { status: "none", isOpen: false, lastAckAt: null, reconnects: 0 },
+        };
+      });
+      let logBytes = 0;
+      try { logBytes = statSync(DAEMON_PATHS.LOG_FILE).size; } catch { /* missing */ }
+      respond(res, 200, {
+        pid: process.pid,
+        version: VERSION,
+        uptime_s: Math.round((Date.now() - opts.startedAt) / 1000),
+        log: { path: DAEMON_PATHS.LOG_FILE, bytes: logBytes, rotating: !!opts.logSink },
+        meshes,
+        sessions,
+      });
       return;
     }
 
@@ -333,7 +427,9 @@ function makeHandler(opts: {
         const meshCfg = opts.meshConfigs?.get(session.mesh);
         if (meshCfg?.pubkey) filter.memberPubkey = meshCfg.pubkey;
       }
-      bindSseStream(res, opts.bus, filter);
+      const cleanup = bindSseStream(res, opts.bus, filter);
+      opts.sseCleanups.add(cleanup);
+      res.on("close", () => opts.sseCleanups.delete(cleanup));
       return;
     }
 
@@ -348,8 +444,16 @@ function makeHandler(opts: {
         // `mesh` field so the caller can scope client-side. A single
         // ?mesh=<slug> filter narrows the set server-side.
         const all: Array<Record<string, unknown> & { mesh: string }> = [];
+        // 1.37.1: report the member-WS status per iterated mesh so the
+        // CLI can tell "no peers" from "daemon not connected to the
+        // broker" (the latter used to print as a silent empty list).
+        const brokerStatus: Record<string, string> = {};
         for (const [slug, b] of opts.brokers.entries()) {
           if (filterMesh && filterMesh !== slug) continue;
+          brokerStatus[slug] = b.status;
+          if (b.status !== "open") {
+            opts.log("warn", "ipc_peers_broker_not_open", { mesh: slug, status: b.status });
+          }
           try {
             const peers = await b.listPeers();
             for (const p of peers) all.push({ ...(p as unknown as Record<string, unknown>), mesh: slug });
@@ -357,7 +461,7 @@ function makeHandler(opts: {
             opts.log("warn", "ipc_peers_broker_failed", { mesh: slug, err: String(e) });
           }
         }
-        respond(res, 200, { peers: all });
+        respond(res, 200, { peers: all, brokers: brokerStatus });
       } catch (e) {
         respond(res, 502, { error: "broker_unreachable", detail: String(e) });
       }

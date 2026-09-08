@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.37.1 (2026-09-08) — daemon restart no longer blacks out the mesh
+
+Incident: after the local daemon restarted (launchd respawn), `peer list`
+returned 0 peers on every mesh for >40 min while all sessions were alive,
+sends reported `no connected peer`, and the MCP push channel went silent.
+Spec + evidence: `.artifacts/specs/2026-09-08-daemon-restart-mesh-blackout.md`.
+
+### Root causes (daemon side; the broker side ships separately)
+
+- `DaemonBrokerClient.connect()` awaited `connectWsWithBackoff()`, which
+  REJECTED when the first hello ack timed out (5 s; the broker took 4–5 s
+  under the reconnect storm) while its internal loop kept reconnecting the
+  same socket. `lifecycle` stayed `null` forever, `_status` flipped to
+  `open`, and every RPC gated on `this.lifecycle` (`listPeers`, `send`,
+  …) short-circuited — `/v1/peers` answered `[]` in 30 ms on all 9 meshes.
+- The outbox drain retried rows bound to long-gone session pubkeys ~130 k
+  times each and logged `drain_session_ws_not_ready` on every tick;
+  `daemon.log` reached 1.0 GB with no rotation (launchd `StandardOutPath`).
+- The daemon that died left no log line (no crash/exit forensics).
+- The MCP plugin's `/v1/events` SSE subscription only resubscribed on
+  `res 'end'`; a killed daemon produces `close`/`aborted` instead, so
+  mid-turn `<channel>` injection stayed dead until Claude Code restarted.
+
+### Fixes
+
+- `ws-lifecycle.ts`: `createWsLifecycle()` returns the handle synchronously
+  with `ready` exposed separately; a hello-ack timeout is just a backoff
+  reconnect (never rejects, never orphans); `close()` works mid-connect.
+  Ack timeout 5 s → 15 s. Both broker clients store the handle before
+  awaiting `ready` and expose `diagnostics()`.
+- `drain.ts`: 24 h outbox TTL (`expired`), `session_gone` after 10 min for
+  rows whose session is no longer registered, attempt cap on the
+  not-ready path, `drain_session_ws_not_ready` logged on attempt 1 and
+  every 60th.
+- Rotating log sink (20 MB × 5, total budget enforced) takes over
+  stdout/stderr when the daemon runs under launchd/systemd; the service
+  unit now points StandardOut/Err at `daemon.launchd.log` and pins
+  `ThrottleInterval 10`. Exit forensics: `daemon_exit` /
+  `daemon_uncaught` lines on every exit path; SIGHUP is a clean shutdown.
+- MCP SSE: resubscribe on every termination event, 45 s idle watchdog
+  (daemon keepalive is 15 s), reconnects logged to `mcp-<pid>.log`; the
+  daemon ends open SSE streams before exiting.
+- Operator signal: `GET /v1/diagnostics`; `claudemesh daemon status`
+  shows per-mesh and per-session WS state; new `claudemesh daemon
+  restart`; `claudemesh doctor` adds version match, member/session WS
+  open, a ghost detector (every registered session must appear in the
+  broker peer list), log size + stale service unit. `peer list` warns
+  when the daemon is not connected to the broker for a mesh instead of
+  printing a silent empty list.
+
+After upgrading run `claudemesh daemon install-service` (new unit) and
+`claudemesh daemon restart`.
+
 ## 1.34.17 (2026-05-20) — host fingerprint v2: stable across Mac reboots
 
 Fixes a long-standing class of false-positive `host_fingerprint

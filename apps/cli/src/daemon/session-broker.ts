@@ -44,7 +44,7 @@ import { hostname as osHostname } from "node:os";
 
 import type { JoinedMesh } from "~/services/config/facade.js";
 import { signSessionHello, signParentAttestation } from "~/services/broker/session-hello-sig.js";
-import { connectWsWithBackoff, type WsLifecycle, type WsStatus } from "./ws-lifecycle.js";
+import { createWsLifecycle, type WsLifecycle, type WsStatus } from "./ws-lifecycle.js";
 import type { BrokerSendArgs, BrokerSendResult } from "./broker.js";
 
 export type SessionBrokerStatus = WsStatus;
@@ -103,6 +103,8 @@ export interface SessionBrokerOptions {
    */
   onPush?: (msg: Record<string, unknown>) => void;
   log?: (level: "info" | "warn" | "error", msg: string, meta?: Record<string, unknown>) => void;
+  /** Lifecycle timing overrides (tests / tuning). Defaults live in ws-lifecycle.ts. */
+  lifecycle?: { helloAckTimeoutMs?: number; backoffCapsMs?: readonly number[] };
 }
 
 export class SessionBrokerClient {
@@ -135,12 +137,19 @@ export class SessionBrokerClient {
     });
   };
 
-  /** Open the WS, run session_hello, resolve once the broker accepts. */
+  /**
+   * Open the WS, run session_hello, resolve once the broker accepts.
+   *
+   * 1.37.1: handle stored synchronously, then `ready` awaited — so a
+   * first-attempt hello-ack timeout (broker slow under a reconnect
+   * storm) can never orphan a live reconnecting socket, and `close()`
+   * called mid-connect always reaches the socket. Idempotent.
+   */
   async connect(): Promise<void> {
     if (this.closed) throw new Error("client_closed");
-    if (this._status === "connecting" || this._status === "open") return;
+    if (this.lifecycle) return this.lifecycle.ready;
 
-    this.lifecycle = await connectWsWithBackoff({
+    this.lifecycle = createWsLifecycle({
       url: this.opts.mesh.brokerUrl,
       buildHello: async () => {
         const { timestamp, signature } = await signSessionHello({
@@ -275,7 +284,20 @@ export class SessionBrokerClient {
         }
       },
       log: (level, msg, meta) => this.log(level, `session_broker_${msg}`, meta),
+      ...(this.opts.lifecycle ?? {}),
     });
+    await this.lifecycle.ready;
+  }
+
+  /** Operator diagnostics — surfaced by `/v1/diagnostics` + `claudemesh doctor`. */
+  diagnostics(): { status: SessionBrokerStatus; isOpen: boolean; lastAckAt: number | null; reconnects: number; replaced: boolean } {
+    return {
+      status: this._status,
+      isOpen: this.isOpen(),
+      lastAckAt: this.lifecycle?.lastAckAt ?? null,
+      reconnects: this.lifecycle?.reconnects ?? 0,
+      replaced: this.lifecycle?.replaced ?? false,
+    };
   }
 
   /** v2 agentic-comms (M1): send `client_ack` back to the broker after

@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { readConfig, getConfigPath } from "~/services/config/facade.js";
 import { VERSION, URLS } from "~/constants/urls.js";
+import { DAEMON_PATHS } from "~/daemon/paths.js";
+import { isInstalledUnitStale } from "~/daemon/service-install.js";
 
 interface Check {
   name: string;
@@ -239,6 +241,227 @@ async function checkNpmLatest(): Promise<Check> {
   }
 }
 
+
+// ── 1.37.1 daemon / mesh liveness checks ───────────────────────────────
+//
+// Added after the 2026-09-08 blackout: 8 sessions registered with the
+// daemon, every WS "hello_acked", and yet `peer list` returned 0 on all
+// meshes for 40 minutes. Nothing told the user. These checks cross-check
+// what the daemon believes (its own WS state) against what the broker
+// reports (the peer list), and always name the one-command fix.
+
+const RESTART_FIX = "claudemesh daemon restart";
+const REINSTALL_FIX = "claudemesh daemon install-service && launchctl kickstart -k gui/$(id -u)/com.claudemesh.daemon";
+const LOG_SIZE_LIMIT = 200 * 1024 * 1024;
+
+interface DiagMesh { status: string; isOpen: boolean; lastAckAt: string | null; reconnects: number }
+interface DiagSession {
+  sessionId: string; mesh: string; displayName: string; pid: number;
+  sessionPubkey: string | null; sessionPubkeyPrefix: string | null;
+  ws: { status: string; isOpen: boolean };
+}
+interface Diagnostics {
+  pid: number; version: string; uptime_s: number;
+  log: { path: string; bytes: number; rotating: boolean };
+  meshes: Record<string, DiagMesh>;
+  sessions: DiagSession[];
+}
+
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.round(n / 1024)} KB`;
+}
+
+/**
+ * Fetch the daemon's self-report. Returns `{ state: "down" }` when no
+ * daemon runs, `{ state: "old" }` when it predates `/v1/diagnostics`.
+ */
+async function fetchDiagnostics(): Promise<
+  | { state: "ok"; diag: Diagnostics }
+  | { state: "down" }
+  | { state: "old"; version: string | null }
+  | { state: "error"; detail: string }
+> {
+  const { readRunningPid } = await import("~/daemon/lock.js");
+  if (!readRunningPid()) return { state: "down" };
+  try {
+    const { ipc } = await import("~/daemon/ipc/client.js");
+    const res = await ipc<Diagnostics | { error?: string }>({ path: "/v1/diagnostics", timeoutMs: 3_000 });
+    if (res.status === 200 && res.body && "meshes" in res.body) return { state: "ok", diag: res.body as Diagnostics };
+    let version: string | null = null;
+    try {
+      const v = await ipc<{ daemon_version?: string }>({ path: "/v1/version", timeoutMs: 2_000 });
+      version = v.body?.daemon_version ?? null;
+    } catch { /* ignore */ }
+    return { state: "old", version };
+  } catch (e) {
+    return { state: "error", detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+async function daemonChecks(): Promise<Check[]> {
+  const skipped = (name: string, detail: string): Check => ({ name, pass: true, detail });
+  const r = await fetchDiagnostics();
+  const names = {
+    version: "Daemon running on the installed CLI version",
+    meshWs: "Daemon connected to the broker on every mesh",
+    sessionWs: "Every registered session has an open broker WS",
+    ghosts: "Every registered session is visible in the broker peer list",
+    log: "daemon.log bounded + service unit current",
+  };
+
+  if (r.state === "down") {
+    return [
+      { name: names.version, pass: false, detail: "daemon not running", fix: "claudemesh daemon up  (or: claudemesh daemon install-service)" },
+      skipped(names.meshWs, "daemon not running — skipped"),
+      skipped(names.sessionWs, "daemon not running — skipped"),
+      skipped(names.ghosts, "daemon not running — skipped"),
+      logAndUnitCheck(null),
+    ];
+  }
+  if (r.state === "error") {
+    return [
+      { name: names.version, pass: false, detail: `daemon IPC unreachable: ${r.detail}`, fix: RESTART_FIX },
+      skipped(names.meshWs, "IPC unreachable — skipped"),
+      skipped(names.sessionWs, "IPC unreachable — skipped"),
+      skipped(names.ghosts, "IPC unreachable — skipped"),
+      logAndUnitCheck(null),
+    ];
+  }
+  if (r.state === "old") {
+    return [
+      {
+        name: names.version, pass: false,
+        detail: `running daemon ${r.version ?? "(unknown)"} predates /v1/diagnostics; CLI is ${VERSION}`,
+        fix: RESTART_FIX,
+      },
+      skipped(names.meshWs, "old daemon — skipped"),
+      skipped(names.sessionWs, "old daemon — skipped"),
+      skipped(names.ghosts, "old daemon — skipped"),
+      logAndUnitCheck(null),
+    ];
+  }
+
+  const d = r.diag;
+  const checks: Check[] = [];
+
+  // (a) version parity — an upgraded CLI with a stale daemon is how a
+  // fix "ships" but never runs.
+  const sameVersion = d.version === VERSION;
+  checks.push({
+    name: names.version,
+    pass: sameVersion,
+    detail: sameVersion ? `v${d.version}, pid ${d.pid}, up ${d.uptime_s}s` : `daemon v${d.version} ≠ CLI v${VERSION}`,
+    fix: sameVersion ? undefined : RESTART_FIX,
+  });
+
+  // (b) member WS per mesh.
+  const badMeshes = Object.entries(d.meshes).filter(([, m]) => m.status !== "open" || !m.isOpen);
+  checks.push({
+    name: names.meshWs,
+    pass: badMeshes.length === 0,
+    detail: badMeshes.length === 0
+      ? `${Object.keys(d.meshes).length} mesh(es) open`
+      : badMeshes.map(([slug, m]) => `${slug}: ${m.status}`).join(", "),
+    fix: badMeshes.length === 0 ? undefined : RESTART_FIX,
+  });
+
+  // (c) session WS per registered session.
+  const badSessions = d.sessions.filter((s) => s.ws.status !== "open" || !s.ws.isOpen);
+  checks.push({
+    name: names.sessionWs,
+    pass: badSessions.length === 0,
+    detail: badSessions.length === 0
+      ? `${d.sessions.length} session(s)`
+      : badSessions.map((s) => `${s.displayName}@${s.mesh}: ${s.ws.status}`).join(", "),
+    fix: badSessions.length === 0 ? undefined : RESTART_FIX,
+  });
+
+  // (d) GHOST DETECTOR — the exact 2026-09-08 signature: the daemon says
+  // the session WS is open, the broker has no presence for it. Ask the
+  // broker (via the daemon's member WS) for each mesh's peer list and
+  // require every registered session pubkey to be in it.
+  checks.push(await ghostCheck(d, names.ghosts));
+
+  // (e) log size + service unit.
+  checks.push(logAndUnitCheck(d));
+  return checks;
+}
+
+async function ghostCheck(d: Diagnostics, name: string): Promise<Check> {
+  const byMesh = new Map<string, DiagSession[]>();
+  for (const s of d.sessions) {
+    if (!s.sessionPubkey) continue;
+    const arr = byMesh.get(s.mesh) ?? [];
+    arr.push(s);
+    byMesh.set(s.mesh, arr);
+  }
+  if (byMesh.size === 0) return { name, pass: true, detail: "no registered sessions" };
+  const { ipc } = await import("~/daemon/ipc/client.js");
+  const missing: string[] = [];
+  const unreachable: string[] = [];
+  let checked = 0;
+  for (const [mesh, sessions] of byMesh) {
+    let pubkeys = new Set<string>();
+    try {
+      const res = await ipc<{ peers?: Array<{ pubkey?: string }>; brokers?: Record<string, string> }>({
+        path: `/v1/peers?mesh=${encodeURIComponent(mesh)}`, timeoutMs: 6_000,
+      });
+      if (res.status !== 200) { unreachable.push(`${mesh}: http ${res.status}`); continue; }
+      if (res.body.brokers && res.body.brokers[mesh] && res.body.brokers[mesh] !== "open") {
+        unreachable.push(`${mesh}: member WS ${res.body.brokers[mesh]}`);
+        continue;
+      }
+      pubkeys = new Set((res.body.peers ?? []).map((p) => String(p.pubkey ?? "").toLowerCase()));
+    } catch (e) {
+      unreachable.push(`${mesh}: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+    for (const s of sessions) {
+      checked++;
+      if (!pubkeys.has(s.sessionPubkey!.toLowerCase())) {
+        missing.push(`${s.displayName}@${mesh} (${s.sessionPubkeyPrefix}…)`);
+      }
+    }
+  }
+  if (missing.length === 0 && unreachable.length === 0) {
+    return { name, pass: true, detail: `${checked} session(s) visible on the mesh` };
+  }
+  const parts: string[] = [];
+  if (missing.length) parts.push(`GHOST — registered but not in peer list: ${missing.join(", ")}`);
+  if (unreachable.length) parts.push(`could not verify: ${unreachable.join(", ")}`);
+  return { name, pass: false, detail: parts.join(" · "), fix: RESTART_FIX };
+}
+
+function logAndUnitCheck(d: Diagnostics | null): Check {
+  const name = "daemon.log bounded + service unit current";
+  const problems: string[] = [];
+  const fixes: string[] = [];
+  let bytes = d?.log.bytes ?? 0;
+  if (!d) { try { bytes = statSync(DAEMON_PATHS.LOG_FILE).size; } catch { bytes = 0; } }
+  if (bytes >= LOG_SIZE_LIMIT) {
+    problems.push(`daemon.log is ${fmtBytes(bytes)} (limit ${fmtBytes(LOG_SIZE_LIMIT)})`);
+    fixes.push(`${RESTART_FIX}  (1.37.1+ daemon rotates it at 20 MB)`);
+  }
+  if (d && !d.log.rotating) {
+    problems.push("running daemon is not rotating its log");
+  }
+  try {
+    const st = isInstalledUnitStale();
+    if (st.stale) {
+      problems.push(`service unit stale: ${st.reason}`);
+      fixes.push(REINSTALL_FIX);
+    }
+  } catch { /* no unit / unsupported platform */ }
+  return {
+    name,
+    pass: problems.length === 0,
+    detail: problems.length === 0 ? `daemon.log ${fmtBytes(bytes)}${d?.log.rotating ? ", rotating" : ""}` : problems.join(" · "),
+    fix: problems.length === 0 ? undefined : [...new Set(fixes)].join("  ;  "),
+  };
+}
+
 export async function runDoctor(): Promise<void> {
   const useColor =
     !process.env.NO_COLOR && process.env.TERM !== "dumb" && process.stdout.isTTY;
@@ -258,6 +481,7 @@ export async function runDoctor(): Promise<void> {
     checkKeypairs(),
     await checkBrokerWs(),
     await checkNpmLatest(),
+    ...(await daemonChecks()),
   ];
 
   for (const c of checks) {

@@ -111,7 +111,15 @@ function projectFields(record: PeerRecord, fields: string[]): Record<string, unk
   return out;
 }
 
-async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
+/** 1.37.1: what listPeersForMesh learned about the daemon's broker link. */
+interface PeersResult {
+  peers: PeerRecord[];
+  /** Daemon-reported member-WS status for this mesh; null on the cold
+   *  path or with a pre-1.37.1 daemon. */
+  brokerStatus: string | null;
+}
+
+async function listPeersForMesh(slug: string): Promise<PeersResult> {
   const config = readConfig();
   const joined = config.meshes.find((m) => m.slug === slug);
   const selfMemberPubkey = joined?.pubkey ?? null;
@@ -144,10 +152,13 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
   // `meshFromCtx` already does the right scoping when the slug is
   // passed; the CLI just wasn't passing it.
   try {
-    const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
-    const dr = await tryListPeersViaDaemon(slug);
+    const { tryListPeersViaDaemonDetailed } = await import("~/services/bridge/daemon-route.js");
+    const dr = await tryListPeersViaDaemonDetailed(slug);
     if (dr !== null) {
-      return dr.map((p) => annotateSelf(p as PeerRecord, selfMemberPubkey, selfSessionPubkey));
+      return {
+        peers: dr.peers.map((p) => annotateSelf(p as PeerRecord, selfMemberPubkey, selfSessionPubkey)),
+        brokerStatus: typeof dr.brokers[slug] === "string" ? dr.brokers[slug]! : null,
+      };
     }
   } catch { /* daemon route helper not available; fall through */ }
 
@@ -161,7 +172,7 @@ async function listPeersForMesh(slug: string): Promise<PeerRecord[]> {
       annotateSelf(p, selfMemberPubkey, selfSessionPubkey),
     );
   });
-  return result;
+  return { peers: result, brokerStatus: null };
 }
 
 /**
@@ -235,11 +246,24 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
       : null;
   const wantsJson = flags.json !== undefined && flags.json !== false;
 
-  const allJson: Array<{ mesh: string; peers: unknown[] }> = [];
+  const allJson: Array<{ mesh: string; peers: unknown[]; brokerStatus?: string | null }> = [];
 
   for (const slug of slugs) {
     try {
-      const peers = await listPeersForMesh(slug);
+      const { peers, brokerStatus } = await listPeersForMesh(slug);
+
+      // 1.37.1: a daemon whose member-WS for this mesh is not open cannot
+      // ask the broker, so its peer list is empty by construction — not
+      // because the mesh is empty. Say so instead of printing a silent
+      // empty list (the 2026-09-08 blackout looked exactly like "0 peers
+      // on every mesh" for 40 min with 8 live sessions).
+      const brokerDegraded = brokerStatus !== null && brokerStatus !== "open";
+      if (brokerDegraded && !wantsJson) {
+        process.stderr.write(
+          `⚠ daemon is not connected to the broker for ${slug} (status: ${brokerStatus}) — ` +
+          `peer list may be incomplete; run \`claudemesh doctor\`\n`,
+        );
+      }
 
       // Hide control-plane rows by default — they're infrastructure
       // (daemon-WS member-keyed presence), not interactive peers, and
@@ -262,7 +286,7 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
         const projected = fieldList
           ? visible.map((p) => projectFields(p, fieldList))
           : visible;
-        allJson.push({ mesh: slug, peers: projected });
+        allJson.push({ mesh: slug, peers: projected, ...(brokerStatus !== null ? { brokerStatus } : {}) });
         continue;
       }
 

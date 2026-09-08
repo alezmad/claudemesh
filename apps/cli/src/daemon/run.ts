@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { DAEMON_PATHS } from "./paths.js";
 import { acquireSingletonLock, releaseSingletonLock } from "./lock.js";
@@ -15,8 +15,10 @@ import { startInboxPruner, type InboxPrunerHandle } from "./inbox-pruner.js";
 import { handleBrokerPush } from "./inbound.js";
 import { EventBus } from "./events.js";
 import { checkFingerprint, type ClonePolicy } from "./identity.js";
+import { isPidAlive } from "./process-info.js";
 import { readConfig } from "~/services/config/facade.js";
 import { VERSION } from "~/constants/urls.js";
+import { installRotatingLogSink, type LogSinkHandle } from "./log-sink.js";
 
 export interface RunDaemonOptions {
   /** Disable TCP loopback (UDS-only). Defaults true in container envs. */
@@ -24,6 +26,62 @@ export interface RunDaemonOptions {
   publicHealthCheck?: boolean;
   /** Behavior on host_fingerprint mismatch. Defaults 'refuse'. */
   clonePolicy?: ClonePolicy;
+  /**
+   * 1.37.1: route stdout/stderr into a rotating `daemon.log` (20 MB × 5)
+   * instead of relying on the service unit's StandardOutPath, which
+   * never rotates. `daemon up --foreground` sets this when stdout is
+   * not a TTY (launchd / systemd); a human running it in a terminal
+   * keeps the stream on the console.
+   */
+  logSink?: boolean;
+}
+
+/**
+ * 1.37.1: ask whoever is listening on the daemon socket for its pid.
+ * Returns null when nothing answers (absent socket, refused, timeout).
+ */
+async function probeLiveDaemonOnSocket(): Promise<number | null> {
+  if (!existsSync(DAEMON_PATHS.SOCK_FILE)) return null;
+  try {
+    const { ipc } = await import("./ipc/client.js");
+    const res = await ipc<{ pid?: number }>({ path: "/v1/health", timeoutMs: 1_500 });
+    const pid = res.status === 200 && typeof res.body?.pid === "number" ? res.body.pid : null;
+    return pid !== null && isPidAlive(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 1.37.1: keep the pid file truthful for the daemon's whole life. It used
+ * to be written once at boot; anything that unlinked it afterwards (the
+ * CLI stale-probe, a user `rm`) silently disabled the singleton lock and
+ * `daemon status`/`restart`. Every 30 s: missing or pointing at a dead
+ * pid → rewrite ours; pointing at ANOTHER live pid → log the conflict
+ * (two daemons) and leave it — the operator needs to see that.
+ */
+function startPidFileGuard(): NodeJS.Timeout {
+  const tick = () => {
+    try {
+      let raw: string | null = null;
+      try { raw = readFileSync(DAEMON_PATHS.PID_FILE, "utf8").trim(); } catch { raw = null; }
+      if (raw === String(process.pid)) return;
+      const other = raw ? Number.parseInt(raw, 10) : Number.NaN;
+      if (Number.isFinite(other) && other > 0 && other !== process.pid && isPidAlive(other)) {
+        process.stderr.write(JSON.stringify({
+          level: "warn", msg: "daemon_pidfile_conflict", other_pid: other, ts: new Date().toISOString(),
+        }) + "\n");
+        return;
+      }
+      writeFileSync(DAEMON_PATHS.PID_FILE, String(process.pid), { mode: 0o600 });
+      process.stderr.write(JSON.stringify({
+        level: "warn", msg: "daemon_pidfile_restored", was: raw, ts: new Date().toISOString(),
+      }) + "\n");
+    } catch { /* never let the guard throw */ }
+  };
+  const t = setInterval(tick, 30_000);
+  t.unref();
+  return t;
 }
 
 /** Detect a few common container environments to pick UDS-only by default. */
@@ -38,8 +96,75 @@ function detectContainer(): boolean {
   return false;
 }
 
+/** Write one JSON line straight to the log, bypassing anything async.
+ *  Used by the exit/crash forensics — by the time these fire, the event
+ *  loop may be gone, so only synchronous writes are guaranteed. */
+function forensicLine(sink: LogSinkHandle | null, obj: Record<string, unknown>): void {
+  const line = JSON.stringify({ ...obj, pid: process.pid, ts: new Date().toISOString() }) + "\n";
+  try {
+    if (sink) sink.writeLine(line);
+    else process.stderr.write(line);
+  } catch { /* nothing left to do */ }
+}
+
+/**
+ * 1.37.1 forensics: the 2026-09-08 daemon (pid 85205) died after 3 days
+ * without a single log line, and its respawn died within 6 s — also
+ * silently. `shutdown()` only logs on SIGINT/SIGTERM, so an uncaught
+ * exception, an unhandled rejection or a plain `process.exit` from a
+ * library left no trace. These handlers make every exit path leave a
+ * `daemon_exit` line (and `daemon_uncaught` with the stack when the
+ * cause is a throw).
+ */
+function installExitForensics(sink: LogSinkHandle | null, startedAt: number): void {
+  const uptime = () => Math.round((Date.now() - startedAt) / 1000);
+  process.on("uncaughtException", (err, origin) => {
+    forensicLine(sink, {
+      level: "error", msg: "daemon_uncaught", kind: origin,
+      err: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      uptime_s: uptime(),
+    });
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    forensicLine(sink, {
+      level: "error", msg: "daemon_uncaught", kind: "unhandledRejection",
+      err: reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason),
+      stack: reason instanceof Error ? reason.stack : undefined,
+      uptime_s: uptime(),
+    });
+    process.exit(1);
+  });
+  process.on("exit", (code) => {
+    forensicLine(sink, { level: "info", msg: "daemon_exit", code, uptime_s: uptime() });
+  });
+}
+
 export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
   mkdirSync(DAEMON_PATHS.DAEMON_DIR, { recursive: true, mode: 0o700 });
+  const startedAt = Date.now();
+
+  // 1.37.1: take over stdio BEFORE anything logs so the rotating sink
+  // sees every line (boot included). Must never throw — fall back to
+  // plain stdio if the file can't be opened.
+  let logSink: LogSinkHandle | null = null;
+  if (opts.logSink) {
+    try { logSink = installRotatingLogSink({ path: DAEMON_PATHS.LOG_FILE }); }
+    catch (e) { process.stderr.write(`log sink install failed, logging to stdio: ${String(e)}\n`); }
+  }
+  installExitForensics(logSink, startedAt);
+
+  // 1.37.1: belt-and-braces singleton. The pid file alone is not enough —
+  // a CLI stale-probe used to unlink it under a live daemon (fixed in
+  // services/daemon/lifecycle.ts), which let a second daemon start and
+  // fight the first over every session. If the socket answers /v1/health
+  // with a different live pid, that daemon owns this directory.
+  const livePeer = await probeLiveDaemonOnSocket();
+  if (livePeer !== null && livePeer !== process.pid) {
+    process.stderr.write(`daemon already running (pid ${livePeer}, answering on ${DAEMON_PATHS.SOCK_FILE})\n`);
+    return 1;
+  }
 
   const lock = acquireSingletonLock();
   if (lock.result === "already-running") {
@@ -49,6 +174,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
   if (lock.result === "stale") {
     process.stderr.write(`recovered stale pid file; starting fresh\n`);
   }
+  const pidGuard = startPidFileGuard();
 
   // Accidental-clone detection (spec §2.2). Default policy: refuse.
   const fpCheck = checkFingerprint();
@@ -393,6 +519,12 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
     brokers,
     meshConfigs,
     onPendingInserted: () => drain?.wake(),
+    // 1.37.1: per-session WS clients for `/v1/diagnostics` (the ghost
+    // detector in `claudemesh doctor` reads their status).
+    sessionBrokers,
+    sessionBrokersByPubkey,
+    logSink,
+    startedAt,
   });
 
   try {
@@ -420,6 +552,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
   const shutdown = async (sig: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    clearInterval(pidGuard);
     process.stdout.write(JSON.stringify({ msg: "daemon_shutdown", signal: sig, ts: new Date().toISOString() }) + "\n");
     inboxPruner.stop();
     if (drain) await drain.close();
@@ -430,6 +563,8 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
       try { await b.close(); } catch { /* ignore */ }
     }
     sessionBrokers.clear();
+    // ipc.close() ends every open SSE response (MCP plugins see a clean
+    // `end` and resubscribe to the next daemon) before the listeners go.
     await ipc.close();
     try { outboxDb.close(); } catch { /* ignore */ }
     try { inboxDb.close(); }  catch { /* ignore */ }
@@ -439,6 +574,9 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
 
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+  // 1.37.1: SIGHUP (terminal closed, launchd reload) is a clean shutdown
+  // too — previously it was Node's default (exit 129, no log line).
+  process.on("SIGHUP", () => shutdown("SIGHUP"));
 
   // Hold the event loop open until a signal arrives.
   return new Promise<number>(() => { /* never resolves; signals call process.exit */ });

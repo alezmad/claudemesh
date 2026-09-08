@@ -36,20 +36,40 @@ async function daemonReachable(): Promise<boolean> {
   return res.state === "up" || res.state === "started";
 }
 
+export interface DaemonPeersResult {
+  peers: unknown[];
+  /** 1.37.1: per-mesh member-WS status as reported by the daemon
+   *  (`open` | `connecting` | `reconnecting` | `closed`). Missing on
+   *  pre-1.37.1 daemons. Lets callers tell "no peers" from "daemon not
+   *  connected to the broker" — the latter used to render as a silent
+   *  empty list (2026-09-08 blackout). */
+  brokers: Record<string, string>;
+}
+
+/** 1.37.1: peer list + broker status through the daemon. Returns null
+ *  when the daemon is unreachable so the caller can fall back. */
+export async function tryListPeersViaDaemonDetailed(mesh?: string): Promise<DaemonPeersResult | null> {
+  if (!(await daemonReachable())) return null;
+  try {
+    const res = await ipc<{ peers?: unknown[]; brokers?: Record<string, string> }>({
+      path: `/v1/peers${meshQuery(mesh)}`, timeoutMs: 3_000,
+    });
+    if (res.status !== 200) return null;
+    return {
+      peers: Array.isArray(res.body.peers) ? res.body.peers : [],
+      brokers: res.body.brokers && typeof res.body.brokers === "object" ? res.body.brokers : {},
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Try fetching the peer list through the daemon (~1ms warm IPC).
  *  Returns null when the daemon socket isn't present so the caller can
  *  fall back to bridge / cold paths. */
 export async function tryListPeersViaDaemon(mesh?: string): Promise<unknown[] | null> {
-  if (!(await daemonReachable())) return null;
-  try {
-    const res = await ipc<{ peers?: unknown[] }>({ path: `/v1/peers${meshQuery(mesh)}`, timeoutMs: 3_000 });
-    if (res.status !== 200) return null;
-    return Array.isArray(res.body.peers) ? res.body.peers : [];
-  } catch (err) {
-    const msg = String(err);
-    if (/ENOENT|ECONNREFUSED|ipc_timeout/.test(msg)) return null;
-    return null;
-  }
+  const r = await tryListPeersViaDaemonDetailed(mesh);
+  return r ? r.peers : null;
 }
 
 /**

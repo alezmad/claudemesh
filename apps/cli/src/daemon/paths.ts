@@ -31,6 +31,15 @@ export const DAEMON_PATHS = {
   get OUTBOX_DB()   { return join(this.DAEMON_DIR, "outbox.db"); },
   get INBOX_DB()    { return join(this.DAEMON_DIR, "inbox.db"); },
   get LOG_FILE()    { return join(this.DAEMON_DIR, "daemon.log"); },
+  /** 1.37.1: launchd/systemd StandardOut/Err target. Only receives
+   *  writes from BEFORE the in-process rotating sink is installed
+   *  (boot crashes, `node` startup errors) — the daemon's own log
+   *  lines go to LOG_FILE via `installRotatingLogSink`, which rotates.
+   *  Pre-1.37.1 units pointed StandardOutPath at LOG_FILE directly,
+   *  which is how daemon.log reached 1 GB with no rotation. */
+  get LAUNCHD_LOG_FILE() { return join(this.DAEMON_DIR, "daemon.launchd.log"); },
+  /** Rotated archive name for LOG_FILE: daemon.log.1 … daemon.log.N. */
+  rotatedLogFile(n: number): string { return `${join(this.DAEMON_DIR, "daemon.log")}.${n}`; },
   /** Persisted session→mesh bindings. Rehydrated on daemon restart so a
    *  restart never orphans a live session's mesh context (the bug where
    *  a peer looked "disconnected" after the daemon bounced). Holds no

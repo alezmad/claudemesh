@@ -22,6 +22,10 @@ export interface DaemonOptions {
    *  auto-spawn path always pass --foreground because their parents
    *  (launchd / the launch helper) own the lifecycle. */
   foreground?: boolean;
+  /** 1.37.1: route stdout/stderr into the rotating daemon.log (20 MB × 5).
+   *  Set by the launchd/systemd unit and by the detached spawn; a human
+   *  running `up --foreground` in a terminal leaves it off. */
+  logSink?: boolean;
   /** outbox-list status filter, set from boolean flags --failed/--pending/etc. */
   outboxStatus?: "pending" | "inflight" | "done" | "dead" | "aborted";
   /** outbox requeue: optional id to mint a fresh client_message_id with. */
@@ -73,6 +77,9 @@ export async function runDaemonCommand(
       return runDaemon({
         tcpEnabled: !opts.noTcp,
         publicHealthCheck: opts.publicHealth,
+        // 1.37.1: under launchd/systemd (no TTY) own the log file with a
+        // rotating sink; in a terminal keep streaming to the console.
+        logSink: !!opts.logSink,
       });
 
     case "help":
@@ -89,6 +96,9 @@ export async function runDaemonCommand(
     case "down":
     case "stop":
       return runStop(opts);
+
+    case "restart":
+      return runRestart(opts);
 
     case "accept-host":
       return runAcceptHost(opts);
@@ -117,9 +127,10 @@ USAGE
 
 COMMANDS
   up | start                   start the daemon (detached by default)
-  status                       show running pid + IPC health
+  status                       pid, per-mesh broker WS, per-session WS, log size (1.37.1)
   version                      ipc + schema version of the running daemon
   down | stop                  stop the running daemon (SIGTERM, then wait)
+  restart                      stop, then relaunch via launchd/systemd (or detached) (1.37.1)
   accept-host                  pin the current host fingerprint
   outbox list                  list local outbox rows (newest first)
   outbox requeue <id>          re-enqueue an aborted / dead outbox row
@@ -128,6 +139,7 @@ COMMANDS
 
 OPTIONS
   --foreground                 keep daemon attached to terminal, JSON logs to stdout (1.34.12+)
+  --log-sink                   write logs to ~/.claudemesh/daemon/daemon.log with rotation (20 MB × 5); set by service units (1.37.1+)
   --no-tcp                     disable the loopback TCP listener (UDS only)
   --public-health              expose /v1/health unauthenticated on TCP
   --json                       machine-readable output where supported
@@ -293,6 +305,26 @@ async function runAcceptHost(opts: DaemonOptions): Promise<number> {
   return 0;
 }
 
+interface DiagnosticsBody {
+  pid: number;
+  version: string;
+  uptime_s: number;
+  log: { path: string; bytes: number; rotating: boolean };
+  meshes: Record<string, { status: string; isOpen: boolean; lastAckAt: string | null; reconnects: number }>;
+  sessions: Array<{
+    sessionId: string; mesh: string; displayName: string; pid: number; cwd: string | null;
+    sessionPubkey: string | null; sessionPubkeyPrefix: string | null; registeredAt: string;
+    ws: { status: string; isOpen: boolean; lastAckAt: string | null; reconnects: number };
+  }>;
+}
+
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024 * 1024) return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${n} B`;
+}
+
 async function runStatus(opts: DaemonOptions): Promise<number> {
   const pid = readRunningPid();
   if (!pid) {
@@ -300,13 +332,54 @@ async function runStatus(opts: DaemonOptions): Promise<number> {
     else process.stdout.write("daemon: not running\n");
     return 1;
   }
+  // 1.37.1: prefer /v1/diagnostics (per-mesh + per-session WS state).
+  // Older daemons 404 it → fall back to /v1/health.
   try {
-    const res = await ipc<{ ok: boolean; pid: number }>({ path: "/v1/health" });
+    const diag = await ipc<DiagnosticsBody | { error?: string }>({ path: "/v1/diagnostics" });
+    if (diag.status === 200 && diag.body && "meshes" in diag.body) {
+      const d = diag.body as DiagnosticsBody;
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ running: true, pid, diagnostics: d }) + "\n");
+        return 0;
+      }
+      const mark = (ok: boolean) => (ok ? "✔" : "✘");
+      process.stdout.write(`daemon: running (pid ${pid}, v${d.version}, up ${d.uptime_s}s)\n`);
+      process.stdout.write(`socket: ${DAEMON_PATHS.SOCK_FILE}\n`);
+      process.stdout.write(`log:    ${d.log.path} (${fmtBytes(d.log.bytes)}${d.log.rotating ? ", rotating" : ", NOT rotating — reinstall service"})\n`);
+      process.stdout.write(`meshes (member WS):\n`);
+      const meshSlugs = Object.keys(d.meshes);
+      if (meshSlugs.length === 0) process.stdout.write(`  (none)\n`);
+      for (const slug of meshSlugs) {
+        const m = d.meshes[slug]!;
+        const extra = m.reconnects ? `, reconnects=${m.reconnects}` : "";
+        process.stdout.write(`  ${mark(m.status === "open" && m.isOpen)} ${slug.padEnd(16)} ${m.status}${extra}\n`);
+      }
+      process.stdout.write(`sessions (session WS):\n`);
+      if (d.sessions.length === 0) process.stdout.write(`  (none registered)\n`);
+      for (const sess of d.sessions) {
+        const ok = sess.ws.status === "open" && sess.ws.isOpen;
+        process.stdout.write(
+          `  ${mark(ok)} ${sess.displayName.padEnd(24)} ${sess.mesh.padEnd(12)} ${sess.ws.status.padEnd(12)} ` +
+          `${sess.sessionPubkeyPrefix ?? "(no pubkey)"}… pid ${sess.pid}\n`,
+        );
+      }
+      const degraded = meshSlugs.some((m) => d.meshes[m]!.status !== "open")
+        || d.sessions.some((x) => x.ws.status !== "open");
+      if (degraded) process.stdout.write(`\n⚠ degraded — run \`claudemesh doctor\` (fix is usually \`claudemesh daemon restart\`)\n`);
+      return degraded ? 1 : 0;
+    }
+  } catch { /* fall through to /v1/health */ }
+  try {
+    const res = await ipc<{ ok: boolean; pid: number; brokers?: Record<string, string> }>({ path: "/v1/health" });
     if (opts.json) {
       process.stdout.write(JSON.stringify({ running: true, pid, health: res.body }) + "\n");
     } else {
       process.stdout.write(`daemon: running (pid ${pid})\n`);
       process.stdout.write(`socket: ${DAEMON_PATHS.SOCK_FILE}\n`);
+      if (res.body.brokers) {
+        for (const [slug, st] of Object.entries(res.body.brokers)) process.stdout.write(`  ${slug}: ${st}\n`);
+      }
+      process.stdout.write(`(daemon predates /v1/diagnostics — run \`claudemesh daemon restart\` after upgrading)\n`);
     }
     return 0;
   } catch (err) {
@@ -314,6 +387,56 @@ async function runStatus(opts: DaemonOptions): Promise<number> {
     else process.stdout.write(`daemon: pid ${pid} alive but IPC unreachable (${String(err)})\n`);
     return 1;
   }
+}
+
+/**
+ * 1.37.1: `claudemesh daemon restart` — the one-command fix `doctor`
+ * points at. Stops the running daemon, then relaunches through the
+ * service manager when a unit is installed (so launchd/systemd keep
+ * owning the lifecycle) or as a detached process otherwise.
+ */
+async function runRestart(opts: DaemonOptions): Promise<number> {
+  const { readInstalledUnit } = await import("~/daemon/service-install.js");
+  const unit = readInstalledUnit();
+  const stopCode = await runStop({ ...opts, json: false });
+  if (stopCode !== 0 && readRunningPid()) {
+    process.stderr.write(`restart: previous daemon did not stop; aborting\n`);
+    return 1;
+  }
+  const { execSync } = await import("node:child_process");
+  if (unit.platform === "darwin" && unit.path) {
+    try {
+      // kickstart -k: kill if running, then start. Idempotent whether or
+      // not the unit is currently loaded (bootstrap first if needed).
+      try { execSync(`launchctl bootstrap gui/$(id -u) '${unit.path}'`, { stdio: "ignore" }); } catch { /* already loaded */ }
+      execSync(`launchctl kickstart -k gui/$(id -u)/com.claudemesh.daemon`, { stdio: "ignore" });
+    } catch (err) {
+      process.stderr.write(`launchctl kickstart failed: ${String(err)}\n`);
+      return 1;
+    }
+  } else if (unit.platform === "linux" && unit.path) {
+    try { execSync(`systemctl --user restart claudemesh-daemon.service`, { stdio: "ignore" }); }
+    catch (err) { process.stderr.write(`systemctl restart failed: ${String(err)}\n`); return 1; }
+  } else {
+    return spawnDetachedDaemon(opts);
+  }
+  // Wait for the new daemon's socket + a live IPC answer.
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 8_000) {
+    if (existsSync(DAEMON_PATHS.SOCK_FILE)) {
+      try {
+        const res = await ipc<{ ok: boolean; pid: number }>({ path: "/v1/health", timeoutMs: 1_000 });
+        if (res.status === 200) {
+          if (opts.json) process.stdout.write(JSON.stringify({ restarted: true, pid: res.body.pid, via: unit.platform }) + "\n");
+          else process.stdout.write(`daemon: restarted via ${unit.platform} (pid ${res.body.pid})\n`);
+          return 0;
+        }
+      } catch { /* not up yet */ }
+    }
+    await new Promise<void>((r) => setTimeout(r, 200));
+  }
+  process.stderr.write(`restart: service did not come back within 8s — check ${DAEMON_PATHS.LAUNCHD_LOG_FILE} and ${DAEMON_PATHS.LOG_FILE}\n`);
+  return 1;
 }
 
 async function runVersion(opts: DaemonOptions): Promise<number> {
@@ -385,7 +508,7 @@ async function spawnDetachedDaemon(opts: DaemonOptions): Promise<number> {
   // .../bin/claudemesh, for `bun run` dev that's the local dist file.
   // Either way it's the right thing to re-exec.
   const binary = process.argv[1] ?? "claudemesh";
-  const args = ["daemon", "up", "--foreground"];
+  const args = ["daemon", "up", "--foreground", "--log-sink"];
   if (opts.noTcp) args.push("--no-tcp");
   if (opts.publicHealth) args.push("--public-health");
 
