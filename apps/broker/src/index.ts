@@ -128,6 +128,7 @@ import {
   shouldEvictOnGraceExpiry,
   dedupTargets,
   findZombieSockets,
+  reattachLease,
   CLOSE_CODE_PRESENCE_EVICTED,
   CLOSE_CODE_NO_PRESENCE,
 } from "./lease";
@@ -2273,8 +2274,6 @@ async function handleSessionHello(
     // it differs, swap in the new WS, restore online. This is the "one
     // presence per session pubkey" invariant — it kills the same-name
     // ghost that used to win queued-DM claim races.
-    const wasState = oldConn.leaseState;
-    const replacedWs = oldConn.ws !== ws ? oldConn.ws : null;
     // ORDER MATTERS (2026-09-08, RC-C): swap the lease onto the new socket
     // and mark it online BEFORE closing the old socket. Under Bun (the
     // production runtime) the `ws` shim emits the old socket's `close`
@@ -2282,25 +2281,11 @@ async function handleSessionHello(
     // 20-line repro; Node emits it on a later tick. With the old order the
     // close handler ran while `conn.ws` was still the old socket, saw an
     // online lease, and put THIS lease into grace with a 90 s eviction
-    // timer that the swap below never cleared — the reattached session was
-    // evicted 90 s later while its new socket stayed open (ghost). Swapping
-    // first makes that handler see `conn.ws !== closingWs` → ignored.
-    oldConn.ws = ws;
-    oldConn.leaseState = "online";
-    oldConn.leaseUntil = 0;
-    oldConn.lastPongAt = Date.now();
-    if (replacedWs) {
-      try { replacedWs.close(1000, "session_replaced"); } catch { /* already dead */ }
-    }
-    // Clear any grace timer — including one a synchronous close event may
-    // have just armed — AFTER the close call, and restore online state in
-    // case that handler flipped it.
-    if (oldConn.evictionTimer) {
-      clearTimeout(oldConn.evictionTimer);
-      oldConn.evictionTimer = null;
-    }
-    oldConn.leaseState = "online";
-    oldConn.leaseUntil = 0;
+    // timer that the swap never cleared — the reattached session was
+    // evicted 90 s later while its new socket stayed open (ghost; prod
+    // 20:40:33 reattach → 20:40:35 grace → 20:42:05 evict, ×4). The
+    // ordering lives in lease.ts#reattachLease so it is unit-tested.
+    const wasState = reattachLease(oldConn, ws, (old) => old.close(1000, "session_replaced"));
     // Refresh mutable fields from the new hello.
     oldConn.sessionId = hello.sessionId;
     oldConn.cwd = hello.cwd;

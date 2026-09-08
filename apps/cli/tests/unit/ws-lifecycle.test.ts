@@ -187,3 +187,23 @@ describe("createWsLifecycle — session_replaced is terminal (spec addendum 6)",
     await handle.close();
   });
 });
+
+describe("createWsLifecycle — close() flushes the close handshake (spec addendum 7)", () => {
+  let broker: FakeBroker | null = null;
+  afterEach(async () => { if (broker) { await broker.close(); broker = null; } });
+
+  it("resolves only after the broker has observed the close (so process.exit right after is safe)", async () => {
+    const serverCloses: number[] = [];
+    broker = await startFakeBroker((sock) => {
+      sock.on("close", (code) => serverCloses.push(code));
+      sock.send(JSON.stringify({ type: "hello_ack" }));
+    });
+    const { handle } = makeClient(broker.url);
+    await handle.ready;
+    await handle.close();
+    // The broker side has already seen the close frame when close() resolves.
+    expect(serverCloses).toHaveLength(1);
+    expect(serverCloses[0]).toBe(1005); // close() without a code → no status
+    expect(handle.status).toBe("closed");
+  });
+});

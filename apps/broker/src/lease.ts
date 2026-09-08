@@ -133,3 +133,47 @@ export function findZombieSockets<WS extends ZombieSocketView>(
 /** Close codes the broker uses when it is the one ending a socket. */
 export const CLOSE_CODE_PRESENCE_EVICTED = 4004;
 export const CLOSE_CODE_NO_PRESENCE = 4005;
+
+export interface SwappableLease<WS> extends LeaseConnView<WS> {
+  leaseUntil: number;
+  evictionTimer: ReturnType<typeof setTimeout> | null;
+  lastPongAt: number;
+}
+
+/**
+ * Reattach a lease onto a fresh socket (RC-C-safe ordering).
+ *
+ * 1. Swap `conn.ws`, mark the lease online and refresh the pong clock.
+ * 2. THEN close the replaced socket via `closeOld` — which under Bun runs
+ *    the old socket's `close` handler synchronously; that handler now sees
+ *    `conn.ws !== closingWs` and ignores the event.
+ * 3. THEN clear any grace timer (including one a mis-behaving handler may
+ *    have just armed) and force the lease online again.
+ *
+ * Returns the previous lease state (for logging). Pure apart from the
+ * injected `closeOld`, so the ordering contract is unit-testable under
+ * Node even though the hazard only manifests under Bun.
+ */
+export function reattachLease<WS>(
+  conn: SwappableLease<WS>,
+  newWs: WS,
+  closeOld: (oldWs: WS) => void,
+  now: number = Date.now(),
+): LeaseState {
+  const wasState = conn.leaseState;
+  const replaced = conn.ws !== newWs ? conn.ws : null;
+  conn.ws = newWs;
+  conn.leaseState = "online";
+  conn.leaseUntil = 0;
+  conn.lastPongAt = now;
+  if (replaced !== null) {
+    try { closeOld(replaced); } catch { /* already dead */ }
+  }
+  if (conn.evictionTimer) {
+    clearTimeout(conn.evictionTimer);
+    conn.evictionTimer = null;
+  }
+  conn.leaseState = "online";
+  conn.leaseUntil = 0;
+  return wasState;
+}

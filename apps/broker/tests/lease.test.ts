@@ -13,6 +13,7 @@ import {
   shouldEvictOnGraceExpiry,
   dedupTargets,
   findZombieSockets,
+  reattachLease,
   type DedupConnView,
 } from "../src/lease";
 
@@ -124,5 +125,61 @@ describe("findZombieSockets", () => {
   test("socket with unknown open time (pre-existing) → treated as old", () => {
     const z = mk(OPEN);
     expect(findZombieSockets([z], new Set(), () => undefined, now, 60_000)).toEqual([z]);
+  });
+});
+
+describe("reattachLease (RC-C ordering: swap before close)", () => {
+  const OPEN = 1;
+  type Sock = { id: string; readyState: number; OPEN: number };
+  const mk = (id: string): Sock => ({ id, readyState: OPEN, OPEN });
+
+  test("a close handler that fires SYNCHRONOUSLY inside closeOld() sees the NEW socket and an online lease", () => {
+    const oldWs = mk("old");
+    const newWs = mk("new");
+    const conn = { ws: oldWs, leaseState: "online" as const, leaseUntil: 0, evictionTimer: null as ReturnType<typeof setTimeout> | null, lastPongAt: 0 };
+    let seenAction: string | null = null;
+    // Emulate Bun: closing the old socket runs its close handler right away.
+    const closeOld = (ws: Sock) => {
+      seenAction = decideCloseAction(conn, ws);
+      if (seenAction === "enter_grace") {
+        // what the real handler would do if the ordering were wrong
+        conn.leaseState = "offline";
+        conn.evictionTimer = setTimeout(() => { /* would evict */ }, 90_000);
+      }
+    };
+    const was = reattachLease(conn, newWs, closeOld, 123);
+    expect(was).toBe("online");
+    expect(seenAction).toBe("ignore_replaced");
+    expect(conn.ws).toBe(newWs);
+    expect(conn.leaseState).toBe("online");
+    expect(conn.evictionTimer).toBeNull();
+    expect(conn.lastPongAt).toBe(123);
+  });
+
+  test("even if a handler wrongly arms a grace timer during closeOld(), the lease ends online with no timer (the prod 20:40Z recurrence)", () => {
+    const oldWs = mk("old");
+    const newWs = mk("new");
+    const conn = { ws: oldWs, leaseState: "online" as const, leaseUntil: 0, evictionTimer: null as ReturnType<typeof setTimeout> | null, lastPongAt: 0 };
+    let fired = false;
+    reattachLease(conn, newWs, () => {
+      conn.leaseState = "offline";
+      conn.leaseUntil = Date.now() + 90_000;
+      conn.evictionTimer = setTimeout(() => { fired = true; }, 5);
+    });
+    expect(conn.leaseState).toBe("online");
+    expect(conn.leaseUntil).toBe(0);
+    expect(conn.evictionTimer).toBeNull();
+    return new Promise<void>((r) => setTimeout(() => { expect(fired).toBe(false); r(); }, 20));
+  });
+
+  test("reattach of an offline (grace) lease clears its eviction timer and never calls closeOld on the same socket", () => {
+    const ws = mk("same");
+    let closed = 0;
+    const conn = { ws, leaseState: "offline" as const, leaseUntil: 99, evictionTimer: setTimeout(() => {}, 90_000), lastPongAt: 0 };
+    const was = reattachLease(conn, ws, () => { closed++; });
+    expect(was).toBe("offline");
+    expect(closed).toBe(0);
+    expect(conn.evictionTimer).toBeNull();
+    expect(conn.leaseState).toBe("online");
   });
 });

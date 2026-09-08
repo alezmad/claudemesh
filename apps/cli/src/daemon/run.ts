@@ -556,12 +556,14 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
     process.stdout.write(JSON.stringify({ msg: "daemon_shutdown", signal: sig, ts: new Date().toISOString() }) + "\n");
     inboxPruner.stop();
     if (drain) await drain.close();
-    for (const b of brokers.values()) {
-      try { await b.close(); } catch { /* ignore */ }
-    }
-    for (const b of sessionBrokers.values()) {
-      try { await b.close(); } catch { /* ignore */ }
-    }
+    // 1.37.1: close every broker socket IN PARALLEL and wait for the close
+    // frames to flush (each close() is bounded to ~1 s). Sequential awaits
+    // + an unflushed exit left the broker seeing no close at all on a
+    // clean restart — see WsLifecycle.close().
+    await Promise.allSettled([
+      ...[...brokers.values()].map((b) => b.close()),
+      ...[...sessionBrokers.values()].map((b) => b.close()),
+    ]);
     sessionBrokers.clear();
     // ipc.close() ends every open SSE response (MCP plugins see a clean
     // `end` and resubscribe to the next daemon) before the listeners go.

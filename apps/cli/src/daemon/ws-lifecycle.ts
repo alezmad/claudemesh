@@ -130,6 +130,8 @@ export interface WsLifecycle {
 }
 
 export const DEFAULT_HELLO_ACK_TIMEOUT_MS = 15_000;
+/** Upper bound `close()` waits for the close handshake to reach the wire. */
+export const CLOSE_FLUSH_MS = 1_000;
 const DEFAULT_BACKOFF_CAPS_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 
 const defaultLog: WsLog = (level, msg, meta) => {
@@ -347,6 +349,23 @@ export function createWsLifecycle(opts: WsLifecycleOptions): WsLifecycle {
           if (sock.readyState === sock.CONNECTING) sock.terminate();
           else sock.close();
         } catch { /* ignore */ }
+        // 1.37.1: wait (bounded) for the close handshake to actually reach
+        // the wire. `shutdown()` calls close() on every client and then
+        // `process.exit()`; without this the close frames were still in
+        // the kernel buffer when the process died, so the broker saw no
+        // close at all, kept the leases "online" for 75–90 s until its
+        // stale-pong watchdog killed them, and the NEXT daemon's hellos
+        // reattached onto still-"online" leases — the exact precondition
+        // for the RC-C eviction (2026-09-08 20:40Z clean restart: 4
+        // reattached presences evicted at 20:42:05). A flushed close makes
+        // the broker start grace immediately and the reattach lands on an
+        // `offline` lease — the safe path, even on pre-fix brokers.
+        if (sock.readyState !== sock.CLOSED) {
+          await new Promise<void>((resolve) => {
+            const t = setTimeout(resolve, CLOSE_FLUSH_MS);
+            sock.once("close", () => { clearTimeout(t); resolve(); });
+          });
+        }
       }
       setStatus("closed");
       if (!readySettled) {
