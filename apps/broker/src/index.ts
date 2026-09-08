@@ -5826,7 +5826,7 @@ async function main(): Promise<void> {
           session_pubkey: conn?.sessionPubkey?.slice(0, 12) ?? "(member-WS)",
           last_pong_ago_ms: conn ? Date.now() - conn.lastPongAt : -1,
         });
-        void evictPresenceFully(pid);
+        void evictPresenceFully(pid, "stale_sweep_flipped_live_lease");
       }
     },
   });
