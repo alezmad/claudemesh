@@ -123,6 +123,25 @@ import { canonicalInvite, canonicalInviteV2, claimInviteV2Core as _claimInviteV2
 const claimInviteV2Core = _claimInviteV2Core;
 import { handleWebhook } from "./webhooks";
 import { audit, loadLastHashes, ensureAuditLogTable, verifyChain, queryAuditLog } from "./audit";
+import {
+  decideCloseAction,
+  shouldEvictOnGraceExpiry,
+  dedupTargets,
+  findZombieSockets,
+  CLOSE_CODE_PRESENCE_EVICTED,
+  CLOSE_CODE_NO_PRESENCE,
+} from "./lease";
+
+/**
+ * When each raw WS socket was accepted. Used by the zombie sweeper to
+ * leave a grace period for sockets that are still mid-hello. WeakMap so
+ * closed sockets are GC'd without bookkeeping.
+ */
+const socketOpenedAt = new WeakMap<WebSocket, number>();
+/** A socket must have been open this long with no presence before the
+ *  zombie sweeper closes it. Hello + auth + DB work never takes this long
+ *  even under the 2026-09-08 storm (worst observed: ~5s). */
+const ZOMBIE_MIN_AGE_MS = 60_000;
 
 const PORT = env.BROKER_PORT;
 const WS_PATH = "/ws";
@@ -583,7 +602,7 @@ function sendToPeer(presenceId: string, msg: WSServerMessage): void {
  * Idempotent: re-entering when the connections entry is already gone
  * is a no-op.
  */
-async function evictPresenceFully(presenceId: string): Promise<void> {
+async function evictPresenceFully(presenceId: string, reason = "unspecified"): Promise<void> {
   const conn = connections.get(presenceId);
   if (!conn) return; // already evicted
   if (conn.evictionTimer) {
@@ -592,6 +611,17 @@ async function evictPresenceFully(presenceId: string): Promise<void> {
   }
   connections.delete(presenceId);
   decMeshCount(conn.meshId);
+
+  // 2026-09-08 (Addendum 2/5): if the lease's socket is still OPEN, the
+  // client believes it is connected while the broker has just forgotten
+  // it — a zombie that can neither be discovered nor receive pushes, and
+  // whose pings the `ws` library keeps answering. Close it with a
+  // distinct code so the client's reconnect path re-hellos and recreates
+  // the presence. Never leave an evicted lease's socket open.
+  if (conn.ws.readyState === conn.ws.OPEN || conn.ws.readyState === conn.ws.CONNECTING) {
+    try { conn.ws.close(CLOSE_CODE_PRESENCE_EVICTED, "presence_evicted"); } catch { /* already dead */ }
+    log.warn("ws evict: closed still-open socket", { presence_id: presenceId, reason });
+  }
 
   const leaveMsg: WSPushMessage = {
     type: "push",
@@ -656,7 +686,7 @@ async function evictPresenceFully(presenceId: string): Promise<void> {
       log.info("clock auto-paused (mesh empty)", { mesh_id: conn.meshId });
     }
   }
-  log.info("ws evict full", { presence_id: presenceId });
+  log.info("ws evict full", { presence_id: presenceId, reason });
 }
 
 async function maybePushQueuedMessages(
@@ -1824,6 +1854,7 @@ async function handleHello(
    *  augmentation. The session was never visibly absent from peers. */
   silent?: boolean;
 } | null> {
+  const helloStartedAt = Date.now();
   // Validate sessionPubkey shape — it becomes a routable identity in
   // listPeers/drainForMember, so arbitrary strings let a client claim
   // nonsense pubkeys. Required-if-present: empty is allowed (falls back
@@ -1970,17 +2001,27 @@ async function handleHello(
     };
   }
 
-  // Session-id dedup: if this session_id already has an active presence,
-  // disconnect the ghost. Happens when a client reconnects after a
-  // network blip or broker restart before the 90s stale sweeper runs.
-  // One Claude Code instance = one session_id = one presence, always.
-  for (const [oldPid, oldConn] of connections) {
-    if (oldConn.meshId === hello.meshId && oldConn.sessionId === hello.sessionId) {
-      log.info("hello dedup", { old_presence: oldPid, session_id: hello.sessionId });
-      try { oldConn.ws.close(1000, "session_replaced"); } catch { /* already dead */ }
-      dropConnection(oldPid);
-      void disconnectPresence(oldPid);
-    }
+  // Session-id dedup: if this session_id already has an active presence
+  // OF THE SAME ROLE, disconnect the ghost. Happens when a client
+  // reconnects after a network blip or broker restart before the 90s
+  // stale sweeper runs. One control-plane connection per session_id.
+  //
+  // 2026-09-08 (Addendum 2/5, item 4): scoped by role. The launch
+  // wrapper's member-level `hello` carries the Claude session UUID as
+  // session_id — the same value the daemon's `session_hello` uses — so an
+  // unscoped dedup kicked the live session presence, whose re-hello then
+  // kicked the wrapper's presence, and so on (2 evictions + 2 DB
+  // disconnects + a forced close per relaunch). A control-plane presence
+  // and a session presence for one session must coexist.
+  for (const oldPid of dedupTargets(connections, hello, "control-plane")) {
+    const oldConn = connections.get(oldPid);
+    if (!oldConn) continue;
+    log.info("hello dedup", { old_presence: oldPid, session_id: hello.sessionId, role: "control-plane" });
+    // Drop the entry BEFORE closing: under Bun `close()` fires the close
+    // handler synchronously (RC-C), and with the entry gone it is a no-op.
+    dropConnection(oldPid);
+    try { oldConn.ws.close(1000, "session_replaced"); } catch { /* already dead */ }
+    void disconnectPresence(oldPid);
   }
 
   const presenceId = await connectPresence({
@@ -2033,6 +2074,10 @@ async function handleHello(
     presence_id: presenceId,
     session_id: hello.sessionId,
     restored: !!saved,
+    // Hello processing latency. The 2026-09-08 storm pushed this to ~5s
+    // (DB full scans on an unindexed 2.5M-row presence table), tripping
+    // the daemon's ack timeout. Watch this number.
+    latency_ms: Date.now() - helloStartedAt,
   });
   // Drain any queued messages in the background. The hello_ack is
   // sent by the CALLER after it assigns presenceId — sending it here
@@ -2080,6 +2125,7 @@ async function handleSessionHello(
    *  absent from peers. */
   silent?: boolean;
 } | null> {
+  const helloStartedAt = Date.now();
   // Shape checks. The crypto helpers also enforce these but bailing
   // early gives a clearer error code on the wire.
   if (!/^[0-9a-f]{64}$/.test(hello.sessionPubkey ?? "")) {
@@ -2228,17 +2274,33 @@ async function handleSessionHello(
     // presence per session pubkey" invariant — it kills the same-name
     // ghost that used to win queued-DM claim races.
     const wasState = oldConn.leaseState;
-    if (oldConn.evictionTimer) {
-      clearTimeout(oldConn.evictionTimer);
-      oldConn.evictionTimer = null;
-    }
-    if (oldConn.ws !== ws) {
-      try { oldConn.ws.close(1000, "session_replaced"); } catch { /* already dead */ }
-    }
+    const replacedWs = oldConn.ws !== ws ? oldConn.ws : null;
+    // ORDER MATTERS (2026-09-08, RC-C): swap the lease onto the new socket
+    // and mark it online BEFORE closing the old socket. Under Bun (the
+    // production runtime) the `ws` shim emits the old socket's `close`
+    // event SYNCHRONOUSLY inside `close()` — verified 2026-09-08 with a
+    // 20-line repro; Node emits it on a later tick. With the old order the
+    // close handler ran while `conn.ws` was still the old socket, saw an
+    // online lease, and put THIS lease into grace with a 90 s eviction
+    // timer that the swap below never cleared — the reattached session was
+    // evicted 90 s later while its new socket stayed open (ghost). Swapping
+    // first makes that handler see `conn.ws !== closingWs` → ignored.
     oldConn.ws = ws;
     oldConn.leaseState = "online";
     oldConn.leaseUntil = 0;
     oldConn.lastPongAt = Date.now();
+    if (replacedWs) {
+      try { replacedWs.close(1000, "session_replaced"); } catch { /* already dead */ }
+    }
+    // Clear any grace timer — including one a synchronous close event may
+    // have just armed — AFTER the close call, and restore online state in
+    // case that handler flipped it.
+    if (oldConn.evictionTimer) {
+      clearTimeout(oldConn.evictionTimer);
+      oldConn.evictionTimer = null;
+    }
+    oldConn.leaseState = "online";
+    oldConn.leaseUntil = 0;
     // Refresh mutable fields from the new hello.
     oldConn.sessionId = hello.sessionId;
     oldConn.cwd = hello.cwd;
@@ -2259,15 +2321,19 @@ async function handleSessionHello(
     };
   }
 
-  // Session-id dedup: if the same session_id is already connected, kick
-  // the ghost. Reconnect after a network blip lands here cleanly.
-  for (const [oldPid, oldConn] of connections) {
-    if (oldConn.meshId === hello.meshId && oldConn.sessionId === hello.sessionId) {
-      log.info("session_hello dedup", { old_presence: oldPid, session_id: hello.sessionId });
-      try { oldConn.ws.close(1000, "session_replaced"); } catch { /* already dead */ }
-      dropConnection(oldPid);
-      void disconnectPresence(oldPid);
-    }
+  // Session-id dedup: if the same session_id already has a SESSION-role
+  // presence (different pubkey — e.g. keypair rotated), kick the ghost.
+  // Reconnect after a network blip lands here cleanly. Scoped by role
+  // (see the matching comment in handleHello): the wrapper's
+  // control-plane presence for this session_id is left alone.
+  for (const oldPid of dedupTargets(connections, hello, "session")) {
+    const oldConn = connections.get(oldPid);
+    if (!oldConn) continue;
+    log.info("session_hello dedup", { old_presence: oldPid, session_id: hello.sessionId, role: "session" });
+    // Drop the entry BEFORE closing (RC-C: Bun fires `close` synchronously).
+    dropConnection(oldPid);
+    try { oldConn.ws.close(1000, "session_replaced"); } catch { /* already dead */ }
+    void disconnectPresence(oldPid);
   }
 
   const presenceId = await connectPresence({
@@ -2319,6 +2385,7 @@ async function handleSessionHello(
     presence_id: presenceId,
     session_id: hello.sessionId,
     session_pubkey: hello.sessionPubkey.slice(0, 12),
+    latency_ms: Date.now() - helloStartedAt,
   });
   // Drain any DMs queued for this session pubkey (or the parent member).
   void maybePushQueuedMessages(presenceId);
@@ -2679,6 +2746,7 @@ async function handleSend(
 
 function handleConnection(ws: WebSocket): void {
   metrics.connectionsTotal.inc();
+  socketOpenedAt.set(ws, Date.now());
   let presenceId: string | null = null;
   ws.on("message", async (raw) => {
     try {
@@ -5432,32 +5500,46 @@ function handleConnection(ws: WebSocket): void {
       });
     }
   });
-  ws.on("close", async () => {
+  ws.on("close", (code, reasonBuf) => {
     if (!presenceId) return;
-    const conn = connections.get(presenceId);
-    if (!conn) return; // already evicted
-
-    // If the conn's `ws` is no longer THIS ws, the close belongs to an
-    // older socket that was already replaced by a reattach. Ignore — the
-    // lease is healthy with the new WS, no eviction needed.
-    if (conn.ws !== ws) {
-      log.debug("ws close on replaced socket — ignoring", { presence_id: presenceId });
-      return;
-    }
-
-    await savePeerState(conn, conn.memberId, conn.meshId);
-
-    // If lease is currently online, enter grace. Other peers see the
-    // session as still online; DMs queue (sendToPeer no-ops on dead
-    // WS, drain on reattach). After GRACE_MS without a reattach, the
-    // timer fires evictPresenceFully and cleanup runs as before.
     const pid = presenceId;
-    if (conn.leaseState === "online") {
-      conn.leaseState = "offline";
-      conn.leaseUntil = Date.now() + GRACE_MS;
-      conn.evictionTimer = setTimeout(() => {
+    const conn = connections.get(pid);
+    const reason = reasonBuf.toString("utf8");
+
+    // 2026-09-08 (RC-A): the decision MUST be taken synchronously, at the
+    // instant the close fires. The previous handler checked `conn.ws !==
+    // ws` here, then `await savePeerState(...)`, then mutated the lease.
+    // Under DB latency the close of the DEAD daemon's socket resumed after
+    // the NEW daemon had reattached (conn.ws swapped, lease online) and put
+    // the healthy lease into grace / evicted it — while the new socket
+    // stayed open as a zombie. No await may sit between the identity check
+    // and the state transition.
+    const action = decideCloseAction(conn, ws);
+    log.info("ws close", { presence_id: pid, code, reason, action });
+    if (action === "no_conn") return; // already evicted
+    if (action === "ignore_replaced") return; // older socket of a reattached lease
+
+    // Persist peer state best-effort, AFTER the decision, off the hot path.
+    void savePeerState(conn!, conn!.memberId, conn!.meshId).catch((e) =>
+      log.warn("savePeerState on close failed", { presence_id: pid, error: e instanceof Error ? e.message : String(e) }),
+    );
+
+    if (action === "enter_grace") {
+      // Other peers see the session as still online; DMs queue (sendToPeer
+      // no-ops on dead WS, drain on reattach). After GRACE_MS without a
+      // reattach, the timer fires evictPresenceFully and cleanup runs.
+      conn!.leaseState = "offline";
+      conn!.leaseUntil = Date.now() + GRACE_MS;
+      conn!.evictionTimer = setTimeout(() => {
+        const cur = connections.get(pid);
+        if (!shouldEvictOnGraceExpiry(cur)) {
+          // A reattach landed and restored the lease after this timer was
+          // armed (clearTimeout raced the firing). Never evict a live lease.
+          log.info("lease grace timer fired on online lease — skipped", { presence_id: pid });
+          return;
+        }
         log.info("lease grace expired — evicting", { presence_id: pid });
-        void evictPresenceFully(pid);
+        void evictPresenceFully(pid, "grace_expired");
       }, GRACE_MS);
       log.info("ws close — lease grace started", {
         presence_id: pid,
@@ -5466,9 +5548,9 @@ function handleConnection(ws: WebSocket): void {
       return;
     }
 
-    // Not online (already in grace from an earlier close, or odd state).
-    // Run full eviction immediately.
-    await evictPresenceFully(pid);
+    // "evict_now": already offline (second close while in grace, or odd
+    // state). Run full eviction immediately.
+    void evictPresenceFully(pid, "close_while_offline");
   });
   ws.on("error", (err) => {
     log.warn("ws error", { error: err.message });
@@ -5678,6 +5760,31 @@ async function main(): Promise<void> {
   const STALE_PONG_THRESHOLD_MS = 75_000;
   const pingInterval = setInterval(() => {
     const now = Date.now();
+
+    // 2026-09-08 zombie sweeper (Addendum 5, item 3): a socket that is OPEN
+    // but referenced by no lease can neither be discovered nor pushed to,
+    // yet its owner thinks it is connected (the `ws` lib auto-pongs). Any
+    // eviction path that forgets to close the socket, or any future bug of
+    // the same family, is healed here: closing forces the client to
+    // reconnect and re-hello. Sockets younger than ZOMBIE_MIN_AGE_MS are
+    // skipped (they may be mid-hello).
+    const liveSockets = new Set<WebSocket>();
+    for (const [, conn] of connections) liveSockets.add(conn.ws);
+    const zombies = findZombieSockets(
+      wss.clients as Set<WebSocket>,
+      liveSockets,
+      (s) => socketOpenedAt.get(s),
+      now,
+      ZOMBIE_MIN_AGE_MS,
+    );
+    for (const z of zombies) {
+      log.warn("ws zombie socket closed (open, no presence)", {
+        age_ms: now - (socketOpenedAt.get(z) ?? now),
+      });
+      try { z.close(CLOSE_CODE_NO_PRESENCE, "no_presence"); } catch { /* already gone */ }
+    }
+    for (let i = 0; i < zombies.length; i++) metrics.zombieSocketsClosed.inc();
+
     for (const [pid, conn] of connections) {
       // Skip offline-leased entries: their WS is intentionally dead
       // during grace; the eviction timer handles their lifecycle.

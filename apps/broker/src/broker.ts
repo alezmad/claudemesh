@@ -311,15 +311,62 @@ export async function sweepStalePresences(): Promise<void> {
  */
 export async function sweepOrphanMessages(): Promise<number> {
   const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-  const result = await db.execute(sql`
-    DELETE FROM mesh.message_queue
-    WHERE delivered_at IS NULL
-      AND created_at < ${cutoff}
-    RETURNING id
-  `);
-  const rows = (result as unknown as { rows?: unknown[]; length?: number }).rows ?? result;
-  const count = Array.isArray(rows) ? rows.length : 0;
-  return count;
+  // 2026-09-08: rewritten with the query builder. The previous raw
+  // `sql\`… created_at < ${cutoff}\`` threw on every hourly run
+  // (`DrizzleQueryError … The "string" argument must be of type string …
+  // Received an instance of Date`) — the Date param was never serialized
+  // for the raw path, so orphan rows were never swept. The builder path
+  // (same shape as sweepPendingStatuses) serializes timestamps correctly.
+  const deleted = await db
+    .delete(messageQueue)
+    .where(and(isNull(messageQueue.deliveredAt), lt(messageQueue.createdAt, cutoff)))
+    .returning({ id: messageQueue.id });
+  return deleted.length;
+}
+
+/** Presence rows are retained this long after disconnect, then deleted. */
+export const PRESENCE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** Rows deleted per statement; bounded so the delete never holds a long
+ *  lock on the hot presence table. */
+export const PRESENCE_PRUNE_BATCH = 20_000;
+
+/**
+ * Retention sweep for `mesh.presence` (2026-09-08, RC-B).
+ *
+ * Every connect inserts a presence row; nothing ever deleted them. Prod
+ * had 2,491,950 rows (2,488,046 disconnected > 30 d ago) and no index
+ * beyond the PK, so `sweepStalePresences` (every 30 s), `listPeersInMesh`
+ * and the hook status lookup were full-scanning 2.5 M rows. Under a
+ * reconnect storm those scans pushed hello latency to ~5 s, which tripped
+ * client ack timeouts and widened the close-handler race window. Indexes
+ * (migration 0030) make the hot queries O(online rows); this sweep keeps
+ * the table from growing without bound so it stays that way.
+ *
+ * Batched (`PRESENCE_PRUNE_BATCH` per statement, up to `maxBatches` per
+ * call) so a first run against a huge backlog does not hold locks for
+ * minutes. Returns the number of rows deleted.
+ */
+export async function sweepOldPresenceRows(maxBatches = 25): Promise<number> {
+  const cutoff = new Date(Date.now() - PRESENCE_RETENTION_MS);
+  let total = 0;
+  for (let i = 0; i < maxBatches; i++) {
+    const result = await db.execute(sql`
+      DELETE FROM mesh.presence
+      WHERE id IN (
+        SELECT id FROM mesh.presence
+        WHERE disconnected_at IS NOT NULL
+          AND disconnected_at < ${cutoff.toISOString()}::timestamp
+        LIMIT ${PRESENCE_PRUNE_BATCH}
+      )
+      RETURNING id
+    `);
+    const rows = ((result as unknown as { rows?: unknown[] }).rows ?? (result as unknown as unknown[])) as unknown[];
+    const n = Array.isArray(rows) ? rows.length : 0;
+    total += n;
+    if (n < PRESENCE_PRUNE_BATCH) break;
+  }
+  if (total > 0) metrics.presenceRowsPruned.inc({}, total);
+  return total;
 }
 
 /** Sweep expired pending_status entries. */
@@ -2621,6 +2668,15 @@ export function startSweepers(): void {
       .then((n) => { if (n > 0) console.log(`[broker] orphan msgs swept: ${n}`); })
       .catch((e) => console.error("[broker] orphan msg sweep:", e));
   }, 60 * 60_000).unref();
+  // Presence retention: first pass 60s after boot (let the reconnect
+  // storm that follows a deploy settle first), then hourly.
+  const runPresencePrune = () => {
+    sweepOldPresenceRows()
+      .then((n) => { if (n > 0) console.log(`[broker] presence rows pruned: ${n}`); })
+      .catch((e) => console.error("[broker] presence prune:", e));
+  };
+  setTimeout(runPresencePrune, 60_000).unref();
+  setInterval(runPresencePrune, 60 * 60_000).unref();
 }
 
 /** Stop background sweepers and mark all active presences disconnected. */

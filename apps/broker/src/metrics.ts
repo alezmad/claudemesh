@@ -106,6 +106,14 @@ export const metrics = {
     "broker_ttl_sweeps_total",
     "TTL sweeper runs completed",
   ),
+  zombieSocketsClosed: new Counter(
+    "broker_zombie_sockets_closed_total",
+    "Open WS sockets with no presence closed by the zombie sweeper (2026-09-08 blackout fix)",
+  ),
+  presenceRowsPruned: new Counter(
+    "broker_presence_rows_pruned_total",
+    "Old disconnected presence rows deleted by the retention sweep",
+  ),
   hookRequestsTotal: new Counter(
     "broker_hook_requests_total",
     "POST /hook/set-status requests received",
