@@ -978,6 +978,14 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   // session-token registration could include it. Reuse here.
 
   const claudeArgs = [
+    // `filtered` va DELANTE de todo a propósito. Algunos flags de Claude Code
+    // solo se reconocen en la PRIMERA posición de argv: `--computer-use-mcp`
+    // parsea bien como primer argumento y da `unknown option` con CUALQUIER
+    // flag por delante —dev-channels, --dangerously-skip-permissions o
+    // --resume, da igual cuál— (comprobado 2026-09-23 contra claude 2.1.280,
+    // matriz de 8 combinaciones). Mientras el passthrough del usuario fuese al
+    // final, computer-use era inalcanzable desde claudemesh.
+    ...filtered,
     "--dangerously-load-development-channels",
     "server:claudemesh",
     ...(passSessionIdFlag && claudeSessionId ? ["--session-id", claudeSessionId] : []),
@@ -985,7 +993,6 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     ...(args.continueSession ? ["--continue"] : []),
     ...(args.skipPermConfirm ? ["--dangerously-skip-permissions"] : []),
     ...(args.systemPrompt ? ["--system-prompt", args.systemPrompt] : []),
-    ...filtered,
   ];
 
   // Resolve the full path to `claude` — when launched from a non-interactive
