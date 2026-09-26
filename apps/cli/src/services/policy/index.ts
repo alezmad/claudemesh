@@ -314,6 +314,16 @@ export async function gate(ctx: CheckContext, opts?: { policyPath?: string }): P
   }
   // prompt
   if (ctx.yes) return true;
+  // bug7 (2026-09-26): with no TTY there's no one to ask. It used to print a
+  // bare "cancelled." — which read like the command ran and did nothing.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    process.stderr.write(
+      `\n  ✘ ${ctx.resource} ${ctx.verb} needs confirmation and there's no terminal to ask on.` +
+      `\n  re-run with --yes (or --approval-mode yolo, or a \`decision: allow\` rule in ${USER_POLICY_PATH}).\n`,
+    );
+    audit({ ...ctx, decision: "cancelled-no-tty" });
+    return false;
+  }
   const reason = result.reason ? ` — ${result.reason}` : "";
   const confirmed = await confirmPrompt(
     `\n  ⚠ ${ctx.resource} ${ctx.verb}${reason}. Continue?`,
