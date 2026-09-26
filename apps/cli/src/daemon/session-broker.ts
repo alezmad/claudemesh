@@ -63,7 +63,7 @@ const SEND_ACK_TIMEOUT_MS = 15_000;
  *  daemon-WS classifier so behavior is identical regardless of which
  *  socket the row went out on. */
 function classifyPermanent(error: string): boolean {
-  return /unknown|invalid|forbidden|not_authorized|target_not_found/i.test(error);
+  return /unknown|invalid|forbidden|not_authorized|target_not_found|member_target_requires_session/i.test(error);
 }
 
 export interface ParentAttestation {

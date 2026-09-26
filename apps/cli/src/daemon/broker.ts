@@ -524,5 +524,5 @@ function defaultLog(level: "info" | "warn" | "error", msg: string, meta?: Record
 
 /** Heuristic: which broker errors are unrecoverable for this id. */
 function classifyPermanent(err: string): boolean {
-  return /payload_too_large|forbidden|not_found|invalid|schema|auth|signature/i.test(err);
+  return /payload_too_large|forbidden|not_found|invalid|schema|auth|signature|member_target_requires_session/i.test(err);
 }

@@ -2509,13 +2509,20 @@ async function handleSend(
     // so on the wire this only comes from older clients. Policy:
     // CLAUDEMESH_MEMBER_DM_POLICY=warn (default: log + count) | reject.
     {
-      const liveSessionsOfTarget = [...connections.values()].filter(
-        (peer) =>
-          peer.meshId === conn.meshId &&
-          peer.memberPubkey === msg.targetSpec &&
-          !!peer.sessionPubkey &&
-          peer.sessionPubkey !== msg.targetSpec,
-      ).length;
+      // Distinct session keys — a reattaching session can briefly hold
+      // two sockets, and the daemon's control-plane socket isn't a session.
+      const liveSessionsOfTarget = new Set(
+        [...connections.values()]
+          .filter(
+            (peer) =>
+              peer.meshId === conn.meshId &&
+              peer.memberPubkey === msg.targetSpec &&
+              peer.peerRole !== "control-plane" &&
+              !!peer.sessionPubkey &&
+              peer.sessionPubkey !== msg.targetSpec,
+          )
+          .map((peer) => peer.sessionPubkey),
+      ).size;
       if (liveSessionsOfTarget > 0) {
         const policy = process.env.CLAUDEMESH_MEMBER_DM_POLICY === "reject" ? "reject" : "warn";
         log.warn("member_target_dm", {
