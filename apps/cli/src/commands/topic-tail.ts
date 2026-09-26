@@ -16,6 +16,7 @@ import {
 import { render } from "~/ui/render.js";
 import { bold, clay, dim, yellow } from "~/ui/styles.js";
 import { EXIT } from "~/constants/exit-codes.js";
+import { decodeBase64Utf8 } from "~/utils/text.js";
 
 export interface TopicTailFlags {
   mesh?: string;
@@ -25,7 +26,7 @@ export interface TopicTailFlags {
   forwardOnly?: boolean;
 }
 
-interface TopicMessage {
+export interface TopicMessage {
   id: string;
   senderMemberId?: string;
   senderPubkey: string;
@@ -38,7 +39,7 @@ interface TopicMessage {
 }
 
 /** Bounded recent-message cache used to render reply-context lines. */
-type RenderedSnippet = { name: string; snippet: string };
+export type RenderedSnippet = { name: string; snippet: string };
 const RECENT_CACHE_MAX = 256;
 function rememberRendered(
   cache: Map<string, RenderedSnippet>,
@@ -66,14 +67,12 @@ interface HistoryResponse {
  * the topic key separately — see decryptForRender below.
  */
 function decodeV1(b64: string): string {
-  try {
-    return Buffer.from(b64, "base64").toString("utf-8");
-  } catch {
-    return "[decode failed]";
-  }
+  // Buffer#toString never throws, so the old catch was dead code and
+  // binary rendered as U+FFFD garbage (spec 2026-09-26 §1).
+  return decodeBase64Utf8(b64) ?? "[not text]";
 }
 
-async function decryptForRender(
+export async function decryptForRender(
   m: TopicMessage,
   topicKey: Uint8Array | null,
 ): Promise<string> {
@@ -95,7 +94,7 @@ function fmtTime(iso: string): string {
   }
 }
 
-async function printMessage(
+export async function printMessage(
   m: TopicMessage,
   topicKey: Uint8Array | null,
   json: boolean,

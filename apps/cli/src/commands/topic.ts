@@ -18,6 +18,7 @@
  */
 
 import { withMesh } from "./connect.js";
+import type { RenderedSnippet, TopicMessage } from "./topic-tail.js";
 import { render } from "~/ui/render.js";
 import { bold, clay, dim, green } from "~/ui/styles.js";
 import { EXIT } from "~/constants/exit-codes.js";
@@ -135,32 +136,39 @@ export async function runTopicHistory(topic: string, flags: TopicFlags): Promise
     render.err("Usage: claudemesh topic history <topic> [--limit N] [--before <id>]");
     return EXIT.INVALID_ARGS;
   }
-  return await withMesh({ meshSlug: flags.mesh ?? null }, async (client) => {
-    const limit = flags.limit ? Number(flags.limit) : undefined;
-    const messages = await client.topicHistory({
-      topic,
-      limit,
-      beforeId: flags.before,
-    });
-    if (flags.json) {
-      console.log(JSON.stringify(messages, null, 2));
+  // bug5 (2026-09-26): history printed «(encrypted, Nb)» for every message
+  // while `topic tail` decrypted the same ones. Same path as tail now: REST
+  // /messages with a read-scoped key, the topic key, the shared renderer.
+  const cleanName = topic.replace(/^#/, "");
+  const limit = flags.limit ? Number(flags.limit) : 50;
+  const { withRestKey } = await import("~/services/api/with-rest-key.js");
+  const { request } = await import("~/services/api/client.js");
+  const { getTopicKey } = await import("~/services/crypto/topic-key.js");
+  const { printMessage } = await import("./topic-tail.js");
+  return withRestKey(
+    { meshSlug: flags.mesh ?? null, purpose: `history-${cleanName}`, capabilities: ["read"], topicScopes: [cleanName] },
+    async ({ secret, mesh }) => {
+      const keyResult = await getTopicKey({ apiKeySecret: secret, memberSecretKeyHex: mesh.secretKey, topicName: cleanName });
+      const topicKey = keyResult.ok ? keyResult.topicKey ?? null : null;
+      const qs = new URLSearchParams({ limit: String(limit) });
+      if (flags.before) qs.set("before", flags.before);
+      const history = await request<{ messages: TopicMessage[] }>({
+        path: `/api/v1/topics/${encodeURIComponent(cleanName)}/messages?${qs.toString()}`,
+        token: secret,
+      });
+      const ordered = history.messages.slice().reverse(); // newest-first → chronological
+      if (!flags.json) {
+        if (ordered.length === 0) {
+          render.info(dim(`no messages in ${clay("#" + cleanName)}.`));
+          return EXIT.SUCCESS;
+        }
+        render.section(`${clay("#" + cleanName)} history (${ordered.length})`);
+      }
+      const cache = new Map<string, RenderedSnippet>();
+      for (const m of ordered) await printMessage(m, topicKey, !!flags.json, cache);
       return EXIT.SUCCESS;
-    }
-    if (messages.length === 0) {
-      render.info(dim(`no messages in ${clay("#" + topic)}.`));
-      return EXIT.SUCCESS;
-    }
-    // History returns newest-first; render oldest-first for chat UX.
-    const ordered = [...messages].reverse();
-    render.section(`${clay("#" + topic)} history (${ordered.length})`);
-    for (const m of ordered) {
-      const t = new Date(m.createdAt).toLocaleString();
-      process.stdout.write(
-        `  ${dim(t)}  ${bold(m.senderPubkey.slice(0, 8))}  ${dim("(encrypted, " + m.ciphertext.length + "b)")}\n`,
-      );
-    }
-    return EXIT.SUCCESS;
-  });
+    },
+  );
 }
 
 export async function runTopicMarkRead(topic: string, flags: TopicFlags): Promise<number> {
