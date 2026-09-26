@@ -134,6 +134,10 @@ export async function runTopicPost(
         }
       }
 
+      // bug6 (2026-09-26): label the post with THIS session, not the member.
+      // The API honours it only when the key's member owns that session.
+      const { getSessionInfo } = await import("~/services/session/resolve.js");
+      const sessionPubkey = (await getSessionInfo())?.presence?.sessionPubkey;
       const result = await request<PostResponse>({
         path: "/api/v1/messages",
         method: "POST",
@@ -145,6 +149,7 @@ export async function runTopicPost(
           bodyVersion,
           ...(mentions.length > 0 ? { mentions } : {}),
           ...(replyToId ? { replyToId } : {}),
+          ...(sessionPubkey ? { sessionPubkey } : {}),
         },
       });
 

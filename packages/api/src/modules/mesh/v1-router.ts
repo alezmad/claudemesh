@@ -54,6 +54,21 @@ import {
 
 type Env = { Variables: { apiKey: AuthedApiKey } };
 
+/**
+ * bug6 (2026-09-26): a topic post is labelled with the SESSION that wrote
+ * it, not the member — three sessions of one member all showed as
+ * «Intra-Back». The session name comes from its latest presence row;
+ * member identity is the fallback (REST posts from the dashboard, old CLIs).
+ */
+const topicSenderPubkey = sql<string>`COALESCE(${meshTopicMessage.senderSessionPubkey}, ${meshMember.peerPubkey})`;
+const topicSenderName = sql<string>`COALESCE(
+  (SELECT p.display_name FROM mesh.presence p
+    WHERE ${meshTopicMessage.senderSessionPubkey} IS NOT NULL
+      AND p.session_pubkey = ${meshTopicMessage.senderSessionPubkey}
+      AND p.display_name IS NOT NULL
+    ORDER BY p.connected_at DESC LIMIT 1),
+  ${meshMember.displayName})`;
+
 const sendMessageSchema = z.object({
   topic: z.string().min(1),
   /** base64-encoded ciphertext; client encrypts before sending. */
@@ -86,6 +101,12 @@ const sendMessageSchema = z.object({
    * drops the reference (treated as a top-level post).
    */
   replyToId: z.string().min(1).max(128).optional(),
+  /**
+   * bug6 (2026-09-26): the posting session's pubkey. Only honoured when a
+   * presence row proves the key's member owns that session — a member can
+   * label a post with its own sessions, never someone else's.
+   */
+  sessionPubkey: z.string().regex(/^[0-9a-f]{64}$/i).optional(),
 });
 
 /**
@@ -182,6 +203,16 @@ export const v1Router = new Hono<Env>()
       }
     }
 
+    let senderSessionPubkey: string | null = null;
+    if (body.sessionPubkey) {
+      const [owned] = await db
+        .select({ id: presence.id })
+        .from(presence)
+        .where(and(eq(presence.memberId, senderMemberId), eq(presence.sessionPubkey, body.sessionPubkey.toLowerCase())))
+        .limit(1);
+      if (owned) senderSessionPubkey = body.sessionPubkey.toLowerCase();
+    }
+
     // Persist to history (topic_message) + ephemeral queue (message_queue).
     // Broker's drain loop picks up the queue entry and pushes to live peers.
     const [historyRow] = await db
@@ -189,6 +220,7 @@ export const v1Router = new Hono<Env>()
       .values({
         topicId: topic.id,
         senderMemberId,
+        senderSessionPubkey,
         nonce: body.nonce,
         ciphertext: body.ciphertext,
         bodyVersion: body.bodyVersion,
@@ -201,6 +233,7 @@ export const v1Router = new Hono<Env>()
       .values({
         meshId: key.meshId,
         senderMemberId,
+        senderSessionPubkey,
         targetSpec: "#" + topic.id,
         priority: body.priority,
         nonce: body.nonce,
@@ -1477,8 +1510,8 @@ export const v1Router = new Hono<Env>()
         .select({
           id: meshTopicMessage.id,
           senderMemberId: meshTopicMessage.senderMemberId,
-          senderPubkey: meshMember.peerPubkey,
-          senderName: meshMember.displayName,
+          senderPubkey: topicSenderPubkey,
+          senderName: topicSenderName,
           nonce: meshTopicMessage.nonce,
           ciphertext: meshTopicMessage.ciphertext,
           bodyVersion: meshTopicMessage.bodyVersion,
@@ -1581,8 +1614,8 @@ export const v1Router = new Hono<Env>()
             .select({
               id: meshTopicMessage.id,
               senderMemberId: meshTopicMessage.senderMemberId,
-              senderPubkey: meshMember.peerPubkey,
-              senderName: meshMember.displayName,
+              senderPubkey: topicSenderPubkey,
+              senderName: topicSenderName,
               nonce: meshTopicMessage.nonce,
               ciphertext: meshTopicMessage.ciphertext,
               bodyVersion: meshTopicMessage.bodyVersion,

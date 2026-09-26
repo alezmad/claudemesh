@@ -1110,7 +1110,15 @@ export async function topicHistory(args: {
   }>(sql`
     SELECT tm.id, tm.sender_member_id,
            COALESCE(tm.sender_session_pubkey, m.peer_pubkey) AS sender_pubkey,
-           m.display_name AS sender_name,
+           -- bug6 (2026-09-26): the writing session's name, else the member's.
+           COALESCE(
+             (SELECT p.display_name FROM mesh.presence p
+               WHERE tm.sender_session_pubkey IS NOT NULL
+                 AND p.session_pubkey = tm.sender_session_pubkey
+                 AND p.display_name IS NOT NULL
+               ORDER BY p.connected_at DESC LIMIT 1),
+             m.display_name
+           ) AS sender_name,
            tm.nonce, tm.ciphertext, tm.body_version, tm.reply_to_id,
            tm.created_at
     FROM mesh.topic_message tm

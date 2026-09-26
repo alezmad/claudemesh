@@ -12,7 +12,7 @@
 import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { db } from "../src/db";
-import { meshTopic, meshTopicMember, presence, pendingStatus } from "@turbostarter/db/schema/mesh";
+import { meshTopic, meshTopicMember, meshTopicMessage, presence, pendingStatus } from "@turbostarter/db/schema/mesh";
 import {
   applyPendingHookStatus,
   connectPresence,
@@ -22,6 +22,7 @@ import {
   queueMessage,
   refreshStatusFromJsonl,
   sweepStuckWorking,
+  topicHistory,
   writeStatus,
 } from "../src/broker";
 import { cleanupAllTestMeshes, setupTestMesh, type TestMesh } from "./helpers";
@@ -445,6 +446,26 @@ describe("targetSpec routing", () => {
       senderMemberPubkey: m.peerA.pubkey,
       senderName: "peer-a-drain-member-name",
     });
+  });
+
+  // bug6 (2026-09-26): history labels each post with the session that
+  // wrote it — three sessions of one member all read «Intra-Back» before.
+  test("topic history labels posts by writing session, member as fallback", async () => {
+    m = await setupTestMesh("history-session-name");
+    const [t] = await db.insert(meshTopic).values({ meshId: m.meshId, name: "orq" }).returning({ id: meshTopic.id });
+    const s1 = "d".repeat(64);
+    await db.insert(presence).values({
+      memberId: m.peerA.memberId, sessionId: "s-1", sessionPubkey: s1,
+      displayName: "front-session", pid: 1, cwd: "/tmp",
+    });
+    await db.insert(meshTopicMessage).values([
+      { topicId: t!.id, senderMemberId: m.peerA.memberId, senderSessionPubkey: s1, nonce: "n", ciphertext: "c1" },
+      { topicId: t!.id, senderMemberId: m.peerA.memberId, nonce: "n", ciphertext: "c2" },
+    ]);
+    const rows = await topicHistory({ topicId: t!.id });
+    const byCt = Object.fromEntries(rows.map((r) => [r.ciphertext, r]));
+    expect(byCt.c1).toMatchObject({ senderPubkey: s1, senderName: "front-session" });
+    expect(byCt.c2).toMatchObject({ senderPubkey: m.peerA.pubkey, senderName: "peer-a-history-session-name" });
   });
 
   test("pubkey mismatch → message not drained", async () => {
