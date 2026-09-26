@@ -2501,6 +2501,45 @@ async function handleSend(
         // Soft-fail; the rejection below still fires if no candidate.
       }
     }
+    // 1.38.0 (spec 2026-09-26 §3): a DM addressed to a MEMBER key whose
+    // member has live session connections is claimed by whichever of them
+    // drains first — and the member's daemon shows it to every session.
+    // That is the "messages land on the wrong peers" noise. New CLIs
+    // resolve member keys to one session (or expand --fanout client-side),
+    // so on the wire this only comes from older clients. Policy:
+    // CLAUDEMESH_MEMBER_DM_POLICY=warn (default: log + count) | reject.
+    {
+      const liveSessionsOfTarget = [...connections.values()].filter(
+        (peer) =>
+          peer.meshId === conn.meshId &&
+          peer.memberPubkey === msg.targetSpec &&
+          !!peer.sessionPubkey &&
+          peer.sessionPubkey !== msg.targetSpec,
+      ).length;
+      if (liveSessionsOfTarget > 0) {
+        const policy = process.env.CLAUDEMESH_MEMBER_DM_POLICY === "reject" ? "reject" : "warn";
+        log.warn("member_target_dm", {
+          mesh_id: conn.meshId,
+          sender: (conn.sessionPubkey ?? conn.memberPubkey).slice(0, 16),
+          target: msg.targetSpec.slice(0, 16),
+          live_sessions: liveSessionsOfTarget,
+          policy,
+        });
+        if (policy === "reject") {
+          metrics.messagesRejectedTotal.inc({ reason: "member_target_requires_session" });
+          const errAck: WSServerMessage = {
+            type: "ack",
+            id: msg.id ?? "",
+            messageId: "",
+            queued: false,
+            error: `member_target_requires_session: that member has ${liveSessionsOfTarget} live session(s) — address one session pubkey (claudemesh ≥1.38 does this for you)`,
+          };
+          conn.ws.send(JSON.stringify(errAck));
+          return;
+        }
+      }
+    }
+
     if (candidateMemberIds.length === 0) {
       metrics.messagesRejectedTotal.inc({ reason: "no_recipient" });
       const errAck: WSServerMessage = {

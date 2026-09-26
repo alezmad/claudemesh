@@ -73,8 +73,11 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
   const isFullPubkey = /^[0-9a-f]{64}$/i.test(to);
   const isPrefix = /^[0-9a-f]{4,63}$/i.test(to);
   const isName = isDirect && !isFullPubkey && !isPrefix;
+  // --fanout to a member key: expanded here to one DM per live session,
+  // each sealed to that session — no member-key DM goes on the wire.
+  let fanoutTargets: Array<{ pubkey: string; displayName: string }> | null = null;
 
-  if (isDirect && (isPrefix || isName || (isFullPubkey && !meshSlug))) {
+  if (isDirect && (isPrefix || isName || (isFullPubkey && (!meshSlug || flags.fanout)))) {
     const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
     const searchSlugs = meshSlug ? [meshSlug] : config.meshes.map((m) => m.slug);
     const lower = to.toLowerCase();
@@ -122,6 +125,7 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
         // A full MEMBER pubkey with several live sessions. Fan-out only on
         // request; otherwise make the caller pick the session.
         meshSlug = meshesHit[0]!;
+        if (flags.fanout) fanoutTargets = uniq.map((m) => ({ pubkey: m.pubkey, displayName: m.displayName }));
         if (!flags.fanout) {
           render.err(`${to.slice(0, 16)}… is a member key with ${uniq.length} live sessions — a DM to it reaches all of them.`);
           render.hint(`sessions: ${uniq.map((m) => `${m.displayName} ${m.pubkey.slice(0, 16)}…`).join(", ")}`);
@@ -316,6 +320,20 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
       }
       if (!flags.json) render.info(dim("re-attached this session to the daemon"));
     }
+  }
+
+  if (fanoutTargets) {
+    const results: Array<{ pubkey: string; ok: boolean; error?: string }> = [];
+    for (const t of fanoutTargets) {
+      const dr = await trySendViaDaemon({ to: t.pubkey, message, priority, expectedMesh: meshSlug ?? undefined });
+      results.push(dr === null ? { pubkey: t.pubkey, ok: false, error: "daemon path unavailable" }
+        : dr.ok ? { pubkey: t.pubkey, ok: true } : { pubkey: t.pubkey, ok: false, error: dr.error });
+    }
+    const okCount = results.filter((r) => r.ok).length;
+    if (flags.json) console.log(JSON.stringify({ ok: okCount === results.length, fanout: results }));
+    else render.ok(`sent to ${okCount}/${results.length} sessions of ${to.slice(0, 16)}… (--fanout)`);
+    if (okCount < results.length) process.exit(1);
+    return;
   }
 
   // Daemon path — preferred when a long-lived daemon is local. UDS at
