@@ -78,7 +78,6 @@ export interface RegistryHooks {
   onDeregister?: (info: SessionInfo) => void;
 }
 
-const TTL_MS = 24 * 60 * 60 * 1000;
 const REAPER_INTERVAL_MS = 5 * 1000;
 
 const byToken = new Map<string, SessionInfo>();
@@ -168,6 +167,28 @@ export function setRegistryHooks(next: RegistryHooks): void {
 }
 
 export function registerSession(info: Omit<SessionInfo, "registeredAt">): SessionInfo {
+  // 1.38.0 (spec 2026-09-26 §2): a re-attach from the SAME session (same
+  // token, same session key) — e.g. its MCP starting inside a resumed
+  // claude — only moves the liveness anchor to the new pid. Firing the
+  // hooks here would close and reopen the session's broker WS, which the
+  // broker sees as a replacement (the churn behind bug3).
+  const same = byToken.get(info.token);
+  if (
+    same && same.sessionId === info.sessionId &&
+    (same.presence?.sessionPubkey ?? null) === (info.presence?.sessionPubkey ?? null)
+  ) {
+    const pidChanged = same.pid !== info.pid;
+    same.pid = info.pid;
+    if (info.cwd) same.cwd = info.cwd;
+    same.displayName = info.displayName;
+    if (pidChanged) {
+      same.startTime = info.startTime;
+      if (same.startTime === undefined) void captureStartTimeAsync(info.token, info.pid);
+    }
+    persist();
+    return same;
+  }
+
   // Replace any prior entry under the same sessionId.
   const priorToken = bySessionId.get(info.sessionId);
   if (priorToken && priorToken !== info.token) {
@@ -216,13 +237,10 @@ export function deregisterByToken(token: string): boolean {
 }
 
 export function resolveToken(token: string): SessionInfo | null {
-  const entry = byToken.get(token);
-  if (!entry) return null;
-  if (Date.now() - entry.registeredAt > TTL_MS) {
-    deregisterByToken(token);
-    return null;
-  }
-  return entry;
+  // 1.38.0: no absolute TTL. Liveness is the reaper's job (pid + start
+  // time); the old 24 h cap dropped long-running sessions whose pid was
+  // alive, and they silently fell back to the member key.
+  return byToken.get(token) ?? null;
 }
 
 export function listSessions(): SessionInfo[] {
@@ -238,7 +256,6 @@ async function reapDead(): Promise<void> {
   const dead: string[] = [];
   const survivors: Array<[string, SessionInfo]> = [];
   for (const [token, info] of entries) {
-    if (Date.now() - info.registeredAt > TTL_MS) { dead.push(token); continue; }
     if (!isPidAlive(info.pid)) { dead.push(token); continue; }
     survivors.push([token, info]);
   }

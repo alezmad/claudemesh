@@ -16,9 +16,9 @@
 
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, writeFileSync, rmSync, readdirSync, statSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, statSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir, hostname, homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { readConfig, getConfigPath } from "~/services/config/facade.js";
 import type { Config, JoinedMesh, GroupEntry } from "~/services/config/facade.js";
@@ -815,9 +815,25 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
   const passSessionIdFlag = !isResume;
   let sessionTokenFilePath: string | null = null;
   let sessionTokenForCleanup: string | null = null;
+  // 1.38.0 (spec 2026-09-26 §2/§4): ONE id drives the keypair, the
+  // registration and the token path. It used to register a random UUID
+  // while keying the keypair on another id (or a throwaway), so a daemon
+  // restart re-keyed the session.
+  const sessionIdForRegister = claudeSessionId ?? randomUUID();
   try {
     const { mintSessionToken, TOKEN_FILE_ENV } = await import("~/services/session/token.js");
-    const minted = mintSessionToken(tmpDir);
+    const { sessionTokenPath } = await import("~/services/session/keypair-store.js");
+    // The token lives next to the session's keypair, not in the launch
+    // tmpdir: a claude that outlives this wrapper (restart, re-exec,
+    // resume) must still find it — the tmpdir is shredded on our exit.
+    const stablePath = sessionTokenPath(mesh.slug, sessionIdForRegister);
+    let minted: { token: string; filePath: string };
+    if (stablePath) {
+      mkdirSync(dirname(stablePath), { recursive: true, mode: 0o700 });
+      minted = mintSessionToken(dirname(stablePath), basename(stablePath));
+    } else {
+      minted = mintSessionToken(tmpDir);
+    }
     sessionTokenFilePath = minted.filePath;
     sessionTokenForCleanup = minted.token;
 
@@ -835,15 +851,12 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
       };
     } | undefined;
     try {
-      const { generateKeypair } = await import("~/services/crypto/facade.js");
       const { signParentAttestation } = await import("~/services/broker/session-hello-sig.js");
-      // Persisted, UUID-anchored keypair so relaunch/--resume reuse the
-      // same sessionPubkey (queued DMs route AND decrypt). Falls back to
-      // an ephemeral keypair when we couldn't resolve a stable UUID
-      // (e.g. --continue with no prior session in this cwd).
-      const sessionKp = claudeSessionId
-        ? await (await import("~/services/session/keypair-store.js")).loadOrCreateSessionKeypair(mesh.slug, claudeSessionId)
-        : await generateKeypair();
+      // Persisted keypair anchored on the registered session id, so
+      // relaunch/--resume reuse the same sessionPubkey (queued DMs route
+      // AND decrypt) and a daemon restart reloads that same key.
+      const sessionKp = await (await import("~/services/session/keypair-store.js"))
+        .loadOrCreateSessionKeypair(mesh.slug, sessionIdForRegister);
       const att = await signParentAttestation({
         parentMemberPubkey: mesh.pubkey,
         parentSecretKey: mesh.secretKey,
@@ -868,7 +881,6 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
     // Register with the daemon. Best-effort: a daemon failure here
     // means the session falls back to user-level scope, which is fine.
     const { ipc } = await import("~/daemon/ipc/client.js");
-    const sessionIdForRegister = claudeSessionId ?? randomUUID();
     await ipc({
       method: "POST",
       path: "/v1/sessions/register",
@@ -1027,13 +1039,10 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
         writeFileSync(claudeConfigPath, JSON.stringify(claudeConfig, null, 2) + "\n", "utf-8");
       } catch { /* best effort */ }
     }
-    // The token's session-token file lives inside tmpDir; rmSync below
-    // shreds the secret. The daemon's session reaper notices the
-    // launched session's pid is gone within 30s and drops the registry
-    // entry. Explicit DELETE on /v1/sessions is feasible only from an
-    // async exit hook, which adds complexity for ~30s of memory the
-    // reaper will reclaim anyway. Leaving as-is; revisit if the
-    // registry ever grows persistence.
+    // 1.38.0: the session token lives next to the session keypair (not
+    // in tmpDir) and is deliberately kept — a claude that outlives this
+    // wrapper re-attaches with it. The daemon's reaper drops the registry
+    // entry once the registered pid (claude's, set by its MCP) is gone.
     // Ephemeral config dir (also drops the session-token file)
     try {
       rmSync(tmpDir, { recursive: true, force: true });
@@ -1095,7 +1104,8 @@ export async function runLaunch(flags: LaunchFlags, rawArgs: string[]): Promise<
       ...process.env,
       CLAUDEMESH_CONFIG_DIR: tmpDir,
       CLAUDEMESH_DISPLAY_NAME: displayName,
-      ...(claudeSessionId ? { CLAUDEMESH_SESSION_ID: claudeSessionId } : {}),
+      CLAUDEMESH_SESSION_ID: sessionIdForRegister,
+      CLAUDEMESH_MESH_SLUG: mesh.slug,
       ...(sessionTokenFilePath ? { CLAUDEMESH_IPC_TOKEN_FILE: sessionTokenFilePath } : {}),
       MCP_TIMEOUT: process.env.MCP_TIMEOUT ?? "30000",
       MAX_MCP_OUTPUT_TOKENS: process.env.MAX_MCP_OUTPUT_TOKENS ?? "50000",

@@ -91,11 +91,17 @@ Peer (resource form, recommended)
   claudemesh peer bans             list banned members        (alias: bans)
   claudemesh peer verify [p]       safety numbers             (alias: verify)
 
+Session
+  claudemesh session reattach      restore this session's registration after a claude
+                                   restart/resume (keeps its pubkey) [--mesh <slug>]
+
 Message  (resource form)
   claudemesh message send <to> <m> send a message            (alias: send)
                                    flags: [--priority now|next|low] [--mesh <slug>]
                                           [--self] (allow targeting your own member/session pubkey;
                                           fans out to every sibling session of your member)
+                                          [--fanout] (a member-key target reaches ALL its sessions)
+                                          [--as-member] (send as the member from an unregistered session)
                                           [--json] (machine-readable result)
   claudemesh message inbox         read persisted inbox       (alias: inbox)
                                    flags: [--mesh <slug>] [--limit N] [--unread] [--json]
@@ -403,7 +409,7 @@ async function main(): Promise<void> {
 
     // Messaging
     case "peers": { const { runPeers } = await import("~/commands/peers.js"); await runPeers({ mesh: flags.mesh as string, json: flags.json as boolean | string | undefined, all: !!flags.all }); break; }
-    case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self, fanout: !!flags.fanout }, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
+    case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self, fanout: !!flags.fanout, asMember: !!flags["as-member"] }, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
     case "inbox": {
       const sub = positionals[0];
       if (sub === "flush") {
@@ -554,6 +560,17 @@ async function main(): Promise<void> {
     // The legacy verbs (`send`, `peers`, `kick`, `remember`, ...) keep
     // working so old scripts never break. Spec: 2026-05-02 commitment #2.
 
+    case "session": {
+      const sub = positionals[0];
+      if (sub === "reattach") {
+        const { runSessionReattach } = await import("~/commands/session-reattach.js");
+        process.exit(await runSessionReattach({ mesh: flags.mesh as string | undefined, json: !!flags.json }));
+      }
+      console.error("Usage: claudemesh session reattach [--mesh <slug>] [--json]");
+      process.exit(2);
+      break;
+    }
+
     case "peer": {
       const sub = positionals[0];
       const f = { mesh: flags.mesh as string, json: flags.json as boolean | string | undefined, all: !!flags.all };
@@ -571,7 +588,7 @@ async function main(): Promise<void> {
 
     case "message": {
       const sub = positionals[0];
-      if (sub === "send") { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self, fanout: !!flags.fanout }, positionals[1] ?? "", positionals.slice(2).join(" ")); }
+      if (sub === "send") { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self, fanout: !!flags.fanout, asMember: !!flags["as-member"] }, positionals[1] ?? "", positionals.slice(2).join(" ")); }
       else if (sub === "inbox") {
         const sub2 = positionals[1];
         if (sub2 === "flush") {

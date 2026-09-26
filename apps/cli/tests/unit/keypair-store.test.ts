@@ -18,7 +18,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 import {
+  findSessionMesh,
   loadOrCreateSessionKeypair,
+  loadSessionKeypair,
   sessionsDir,
 } from "../../src/services/session/keypair-store.js";
 
@@ -65,13 +67,29 @@ describe("loadOrCreateSessionKeypair", () => {
     expect(a.publicKey).not.toBe(b.publicKey);
   });
 
-  test("malformed uuid falls back to ephemeral, writes nothing", async () => {
+  // 1.38.0 (spec 2026-09-26 §4): a non-UUID id (e.g. a claude session
+  // name) persists under a hashed stem instead of getting a throwaway key
+  // on every call — the throwaway re-keyed live sessions on daemon restart.
+  test("non-uuid id persists under a hashed stem, stable across calls", async () => {
     const a = await loadOrCreateSessionKeypair("flexicar", "not-a-uuid");
     const b = await loadOrCreateSessionKeypair("flexicar", "not-a-uuid");
     expect(a.publicKey).toMatch(/^[0-9a-f]{64}$/);
-    // Ephemeral → not persisted → each call is fresh.
+    expect(a.publicKey).toBe(b.publicKey);
+    expect(readdirSync(join(dir, "flexicar"))).toEqual([expect.stringMatching(/^id-[0-9a-f]{32}\.json$/)]);
+  });
+
+  test("an unusable id (control chars / oversize) still falls back to ephemeral", async () => {
+    const a = await loadOrCreateSessionKeypair("flexicar", "bad\nid");
+    const b = await loadOrCreateSessionKeypair("flexicar", "x".repeat(201));
     expect(a.publicKey).not.toBe(b.publicKey);
     expect(existsSync(join(dir, "flexicar"))).toBe(false);
+  });
+
+  test("loadSessionKeypair never mints", async () => {
+    expect(loadSessionKeypair("flexicar", UUID_A)).toBeNull();
+    const kp = await loadOrCreateSessionKeypair("flexicar", UUID_A);
+    expect(loadSessionKeypair("flexicar", UUID_A)).toEqual(kp);
+    expect(findSessionMesh(UUID_A)).toBe("flexicar");
   });
 
   test("path-traversal slug is rejected (ephemeral, no escape)", async () => {

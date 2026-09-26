@@ -32,6 +32,9 @@ export interface SendFlags {
    *  (spec 2026-09-26 §3) — the default fan-out was the "messages land on
    *  the wrong peers" noise. */
   fanout?: boolean;
+  /** 1.38.0: send as the member (not a session) on purpose, from inside a
+   *  launched session whose registration can't be restored. */
+  asMember?: boolean;
 }
 
 export async function runSend(flags: SendFlags, to: string, message: string): Promise<void> {
@@ -293,6 +296,27 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
   }
   const offlineHint =
     "It's queued and delivers when that session reconnects. If the session was relaunched it has a new key — re-fetch a live target with `claudemesh peer list --json`.";
+
+  // 1.38.0 (spec 2026-09-26 §2, bug1): inside a launched session, never
+  // send silently under the member key. A session that lost its daemon
+  // registration (claude restarted/resumed after the wrapper exited) used
+  // to do exactly that — and every reply to the member key fanned out to
+  // all of the member's sessions. Re-attach first; refuse if that fails.
+  if (process.env.CLAUDEMESH_SESSION_ID && !flags.asMember) {
+    const { getSessionInfo, resetSessionInfoCache } = await import("~/services/session/resolve.js");
+    const { daemonReachable } = await import("~/services/bridge/daemon-route.js");
+    if (await daemonReachable() && !(await getSessionInfo())) {
+      const { ensureSessionRegistered, findClaudeAncestorPid } = await import("~/services/session/reattach.js");
+      const outcome = await ensureSessionRegistered({ pid: findClaudeAncestorPid() ?? process.ppid });
+      resetSessionInfoCache();
+      if (outcome.kind === "failed" || !(await getSessionInfo())) {
+        render.err("This session isn't registered with the daemon, so this message would go out as your member key.");
+        render.hint(`${outcome.kind === "failed" ? outcome.reason + " — " : ""}run \`claudemesh session reattach\`, or pass --as-member to send as the member on purpose.`);
+        process.exit(1);
+      }
+      if (!flags.json) render.info(dim("re-attached this session to the daemon"));
+    }
+  }
 
   // Daemon path — preferred when a long-lived daemon is local. UDS at
   // ~/.claudemesh/daemon/daemon.sock; ~1ms round-trip; persists outbox

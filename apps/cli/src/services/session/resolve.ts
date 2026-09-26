@@ -62,3 +62,8 @@ export async function getSessionInfo(): Promise<ResolvedSession | null> {
 export function _resetSessionCache(): void {
   cached = undefined;
 }
+
+/** Drop the per-invocation cache — after a re-attach the answer changes. */
+export function resetSessionInfoCache(): void {
+  cached = undefined;
+}

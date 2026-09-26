@@ -14,6 +14,7 @@ export interface ParsedArgs { command: string; positionals: string[]; flags: Rec
 const BOOLEAN_FLAGS = new Set([
   "self",
   "fanout",
+  "as-member",
   "json",            // also accepts --json=a,b,c form below
   "all",
   "yes", "y",

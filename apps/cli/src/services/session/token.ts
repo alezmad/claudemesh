@@ -18,6 +18,8 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
+import { findSessionMesh, sessionTokenPath } from "./keypair-store.js";
+
 const ENV_TOKEN_FILE = "CLAUDEMESH_IPC_TOKEN_FILE";
 
 export interface MintedToken {
@@ -40,7 +42,24 @@ export function mintSessionToken(dir: string, fileName = "session-token"): Minte
 export function readSessionTokenFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
   const direct = env.CLAUDEMESH_IPC_TOKEN;
   if (direct && /^[0-9a-f]{64}$/i.test(direct)) return direct.toLowerCase();
-  const path = env[ENV_TOKEN_FILE];
+  const fromEnvPath = readTokenFile(env[ENV_TOKEN_FILE]);
+  if (fromEnvPath) return fromEnvPath;
+  // 1.38.0 (spec 2026-09-26 §2): the env path pointed into a launch tmpdir
+  // that is gone once the wrapper exits (claude restart / re-exec). Fall
+  // back to the session's stable token next to its keypair.
+  return readTokenFile(stableTokenPathFromEnv(env));
+}
+
+/** `~/.claudemesh/sessions/<mesh>/<stem>.token` for the session this
+ *  process belongs to, from CLAUDEMESH_SESSION_ID (+ mesh when known). */
+export function stableTokenPathFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
+  const sessionId = env.CLAUDEMESH_SESSION_ID;
+  if (!sessionId) return null;
+  const mesh = env.CLAUDEMESH_MESH_SLUG || findSessionMesh(sessionId);
+  return mesh ? sessionTokenPath(mesh, sessionId) : null;
+}
+
+function readTokenFile(path: string | null | undefined): string | null {
   if (!path) return null;
   try {
     if (!existsSync(path)) return null;

@@ -239,10 +239,14 @@ function makeHandler(opts: {
     // it to a SessionInfo that downstream routes use for default-mesh
     // scoping and attribution.
     let session: SessionInfo | null = null;
+    let sessionHeaderUnresolved = false;
     {
       const authz = req.headers.authorization ?? "";
       const sm = /^ClaudeMesh-Session\s+([0-9a-f]{64})$/i.exec(authz.trim());
-      if (sm && sm[1]) session = resolveToken(sm[1].toLowerCase());
+      if (sm && sm[1]) {
+        session = resolveToken(sm[1].toLowerCase());
+        sessionHeaderUnresolved = session === null;
+      }
     }
     /** Pick mesh from explicit body/query first, then session default. */
     const meshFromCtx = (explicit?: string | null): string | null =>
@@ -887,6 +891,15 @@ function makeHandler(opts: {
     if (req.method === "POST" && url.pathname === "/v1/send") {
       if (!opts.outboxDb) {
         respond(res, 503, { error: "outbox not initialised" });
+        return;
+      }
+      // 1.38.0 (spec 2026-09-26 §2): a caller that presents a session token
+      // the registry doesn't know must not be sent as the member key.
+      if (sessionHeaderUnresolved) {
+        respond(res, 401, {
+          error: "session_unknown",
+          detail: "this session's token isn't registered with the daemon — run `claudemesh session reattach`",
+        });
         return;
       }
       try {

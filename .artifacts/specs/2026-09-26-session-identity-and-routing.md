@@ -30,11 +30,16 @@ Result: replies fan out to sibling sessions → noise. Fix all three; each alone
   (not a silent `session=null`).
 - `send`: when the process is inside a launched session (`CLAUDEMESH_SESSION_ID` set) but the
   daemon doesn't know the session → error with fix hint, unless `--as-member`.
-- Re-attach: `POST /v1/sessions/reattach {session_id, mesh, display_name, pid}` — daemon loads the
-  persisted keypair (never mints), signs the attestation (same as boot reload), registers with the
-  caller's pid. Called by the MCP server at startup when its token is missing/unknown.
-- Token lives in a stable per-session path (`~/.claudemesh/sessions/<mesh>/<uuid>.token`), not the
-  launch tmpdir, so a resumed claude finds it.
+- Re-attach (implemented client-side over the existing `POST /v1/sessions/register`, no new route):
+  `services/session/reattach.ts ensureSessionRegistered` loads the session's persisted keypair,
+  signs a fresh attestation with the member key and registers with **claude's pid** (nearest
+  `claude` ancestor). Called by the MCP at startup (always, to move the anchor off the wrapper),
+  by `claudemesh send` when the session is unknown (auto-heal), and by `claudemesh session reattach`.
+- `send` inside a session (`CLAUDEMESH_SESSION_ID` set) that can't be re-attached refuses unless
+  `--as-member`; the daemon answers 401 `session_unknown` to a send whose session token it doesn't know.
+- Token lives in a stable per-session path (`~/.claudemesh/sessions/<mesh>/<stem>.token`), not the
+  launch tmpdir, so a resumed claude finds it; token readers fall back to it via
+  `CLAUDEMESH_SESSION_ID` (+ new `CLAUDEMESH_MESH_SLUG`, or the mesh holding the keypair file).
 - The 24 h absolute cap is removed for entries whose pid+start-time still match.
 - Tokenless MCP subscribes to **no** message events (today: all of them).
 
@@ -54,7 +59,13 @@ Result: replies fan out to sibling sessions → noise. Fix all three; each alone
 - `launch`: mint the UUID first; the same id drives keypair + registration; no throwaway keypair
   when a session id exists (non-UUID ids persisted under sha256).
 - Boot reload: load-only; a missing key file → skip + log, never mint.
-- Supervisor: a session client that ends `replaced`/closed while its registry entry is alive is rebuilt.
+- ~~Supervisor that rebuilds a `replaced` session client~~ — **dropped during implementation.**
+  1.37.1 made `session_replaced` terminal on purpose (two daemons holding one identity kicked each
+  other at 1 s, 2026-09-08 drill). With keys no longer re-minted (reload is load-only, one id per
+  launch, non-UUID ids persisted) the only replacer is the session's own re-register, which already
+  swaps the client. A supervisor would re-open that ping-pong for no gain.
+- Same-token + same-key re-register only moves the pid anchor (no hooks → no WS close/reopen).
+- The registry's absolute 24 h TTL is removed; liveness = pid + start time.
 
 ### §5 bug4 — shipped in `dd351a7` (1.37.1, unpublished) — releases with 1.38.0.
 

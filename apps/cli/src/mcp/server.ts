@@ -427,6 +427,21 @@ export async function startMcpServer(): Promise<void> {
   // resolve mesh scoping if it ever needs to. We read it once here and
   // capture it in the closure since the MCP runs for the lifetime of
   // the session; the env var doesn't rotate mid-process.
+  // 1.38.0 (spec 2026-09-26 §2, bug1): (re)attach this session before
+  // reading its token. The MCP runs inside claude, so this anchors the
+  // registry on claude's pid — not the launch wrapper's, which may be
+  // gone (restart / re-exec / resume) — and restores a dropped
+  // registration with the session's persisted key.
+  try {
+    const { ensureSessionRegistered, findClaudeAncestorPid } = await import("~/services/session/reattach.js");
+    const outcome = await ensureSessionRegistered({
+      pid: findClaudeAncestorPid(process.ppid) ?? process.ppid,
+      refreshPid: true,
+    });
+    mcpLog("session_attach", { outcome: outcome.kind, ...(outcome.kind === "failed" ? { reason: outcome.reason } : {}) });
+  } catch (e) {
+    mcpLog("session_attach", { outcome: "error", err: String(e) });
+  }
   const { readSessionTokenFromEnv } = await import("~/services/session/token.js");
   const sessionTokenForSeen = readSessionTokenFromEnv();
 

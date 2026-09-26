@@ -28,8 +28,8 @@
  * delivery. `CLAUDEMESH_SESSIONS_DIR` overrides the root for tests.
  */
 
-import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -57,8 +57,48 @@ export function sessionsDir(): string {
   );
 }
 
+/** Printable, bounded ids (claude session names) that aren't UUIDs. */
+const SAFE_ID_RE = /^[\x21-\x7e]{1,200}$/;
+
+/** File stem for a session id. UUIDs map to themselves; any other usable
+ *  id maps to `id-<sha256/32>` so it persists too. 1.38.0 (spec 2026-09-26
+ *  §4): a non-UUID id used to get a throwaway keypair on EVERY call, so a
+ *  daemon restart re-keyed the session behind its back (bug3). */
+export function sessionFileStem(sessionId: string): string | null {
+  if (UUID_RE.test(sessionId)) return sessionId;
+  if (SAFE_ID_RE.test(sessionId)) return `id-${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}`;
+  return null;
+}
+
 function keyFilePath(meshSlug: string, sessionId: string): string {
-  return join(sessionsDir(), meshSlug, `${sessionId}.json`);
+  return join(sessionsDir(), meshSlug, `${sessionFileStem(sessionId) ?? "invalid"}.json`);
+}
+
+/** Load-only: the persisted keypair, or null. Never mints — callers that
+ *  must not change a live session's identity (daemon boot reload) use this. */
+export function loadSessionKeypair(meshSlug: string, sessionId: string): Ed25519Keypair | null {
+  if (!SLUG_RE.test(meshSlug) || !sessionFileStem(sessionId)) return null;
+  return readValidKeypair(keyFilePath(meshSlug, sessionId));
+}
+
+/** Stable per-session IPC token path, next to the keypair. Outlives the
+ *  launch wrapper's tmpdir so a resumed claude can still authenticate. */
+export function sessionTokenPath(meshSlug: string, sessionId: string): string | null {
+  const stem = sessionFileStem(sessionId);
+  if (!SLUG_RE.test(meshSlug) || !stem) return null;
+  return join(sessionsDir(), meshSlug, `${stem}.token`);
+}
+
+/** Which joined mesh holds a persisted keypair for this session id. */
+export function findSessionMesh(sessionId: string): string | null {
+  const stem = sessionFileStem(sessionId);
+  if (!stem) return null;
+  try {
+    for (const slug of readdirSync(sessionsDir())) {
+      if (SLUG_RE.test(slug) && existsSync(join(sessionsDir(), slug, `${stem}.json`))) return slug;
+    }
+  } catch { /* no sessions dir yet */ }
+  return null;
 }
 
 /** Read a persisted keypair, returning null (never throwing) when the
@@ -98,7 +138,7 @@ export async function loadOrCreateSessionKeypair(
 ): Promise<Ed25519Keypair> {
   // Defensive validation: these compose into a filesystem path, so a
   // malformed slug/uuid must never escape the sessions dir.
-  if (!SLUG_RE.test(meshSlug) || !UUID_RE.test(sessionId)) {
+  if (!SLUG_RE.test(meshSlug) || !sessionFileStem(sessionId)) {
     return generateKeypair();
   }
 

@@ -28,7 +28,7 @@ function meshQuery(mesh?: string): string {
  *  --no-daemon short-circuits to false; --strict's enforcement lives at
  *  the cold-path entry point (`withMesh` in commands/connect.ts) so a
  *  single chokepoint covers every verb. */
-async function daemonReachable(): Promise<boolean> {
+export async function daemonReachable(): Promise<boolean> {
   const policy = getDaemonPolicy();
   if (policy.mode === "no-daemon") return false;
   const res = await ensureDaemonReady({ noAutoSpawn: false });

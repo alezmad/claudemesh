@@ -445,7 +445,7 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
   try {
     const persisted = readPersistedSessions(DAEMON_PATHS.SESSIONS_FILE);
     if (persisted.length > 0) {
-      const { loadOrCreateSessionKeypair } = await import("~/services/session/keypair-store.js");
+      const { loadSessionKeypair } = await import("~/services/session/keypair-store.js");
       const { signParentAttestation } = await import("~/services/broker/session-hello-sig.js");
       const { isPidAlive, getProcessStartTimes } = await import("./process-info.js");
       const liveStartTimes = await getProcessStartTimes(persisted.map((p) => p.pid)).catch(() => new Map<number, string>());
@@ -459,7 +459,20 @@ export async function runDaemon(opts: RunDaemonOptions = {}): Promise<number> {
         const meshConfig = meshConfigs.get(s.mesh);
         if (!meshConfig) continue; // mesh no longer joined
         try {
-          const kp = await loadOrCreateSessionKeypair(meshConfig.slug, s.sessionId);
+          // 1.38.0 (spec 2026-09-26 §4): load-only. Minting here gave a
+          // live session a key it never had — it reappeared under a new
+          // pubkey and holders of the old one couldn't reach it (bug3).
+          // Without its key file the session re-attaches itself (MCP
+          // startup / `claudemesh session reattach`).
+          const kp = loadSessionKeypair(meshConfig.slug, s.sessionId);
+          if (!kp) {
+            process.stderr.write(JSON.stringify({
+              level: "warn", msg: "session_rehydrate_no_keypair",
+              token: s.token.slice(0, 8), mesh: s.mesh, session_id: s.sessionId,
+              ts: new Date().toISOString(),
+            }) + "\n");
+            continue;
+          }
           const att = await signParentAttestation({
             parentMemberPubkey: meshConfig.pubkey,
             parentSecretKey: meshConfig.secretKey,
