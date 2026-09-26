@@ -36,6 +36,7 @@ import { join } from "node:path";
 
 import { DAEMON_PATHS } from "~/daemon/paths.js";
 import { VERSION } from "~/constants/urls.js";
+import { isRenderableText } from "~/utils/text.js";
 import { readConfig } from "~/services/config/facade.js";
 import { BrokerClient } from "~/services/broker/facade.js";
 
@@ -439,7 +440,14 @@ export async function startMcpServer(): Promise<void> {
       const d = ev.data;
       const fromName = String(d.sender_name ?? "unknown");
       const fromMember = String(d.sender_member_pubkey ?? d.sender_pubkey ?? "");
-      const body = String(d.body ?? "(decrypt failed)");
+      const rawBody = typeof d.body === "string" ? d.body : null;
+      // 1.38.0 (spec 2026-09-26 §1): second guard — never hand Claude
+      // binary garbage, whatever the daemon's inbox holds.
+      if (rawBody === null || !isRenderableText(rawBody)) {
+        mcpLog("channel_dropped_unrenderable", { mesh: String(d.mesh ?? ""), id: String(d.id ?? "") });
+        return;
+      }
+      const body = rawBody;
       const priority = String(d.priority ?? "next");
       const prioBadge = priority === "now" ? "[URGENT] " : priority === "low" ? "[low] " : "";
       const topicTag = d.topic ? ` (#${d.topic})` : "";

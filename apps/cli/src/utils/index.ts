@@ -4,3 +4,4 @@ export { isInviteUrl, extractInviteCode } from "./url.js";
 export { formatBytes, formatDuration } from "./format.js";
 export { isNewer } from "./semver.js";
 export { retry } from "./retry.js";
+export { isRenderableText, decodeBase64Utf8 } from "./text.js";

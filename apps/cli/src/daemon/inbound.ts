@@ -8,6 +8,7 @@ import type { SqliteDb } from "./db/sqlite.js";
 import { insertIfNew } from "./db/inbox.js";
 import type { EventBus } from "./events.js";
 import { decryptDirect } from "~/services/crypto/facade.js";
+import { decodeBase64Utf8 } from "~/utils/text.js";
 
 export interface InboundContext {
   db: SqliteDb;
@@ -96,9 +97,26 @@ export async function handleBrokerPush(msg: Record<string, unknown>, ctx: Inboun
   const subtype         = stringOrNull(msg.subtype);
   // Forward-compat: Sprint 7 brokers will send client_message_id alongside.
   const clientMessageId = stringOrNull(msg.client_message_id) ?? brokerMessageId ?? randomUUID();
-  const body            = await decryptOrFallback({
+  const decrypted       = await decryptOrFallback({
     ciphertext, nonce, senderPubkey, ctx,
   });
+  // 1.38.0 (spec 2026-09-26 §1): an undecryptable payload is never
+  // rendered. Topic posts we can't open yet get an honest placeholder;
+  // anything else is dropped (acked so the broker stops redelivering).
+  let body: string | null = decrypted;
+  if (decrypted === null && ciphertext) {
+    if (topic) {
+      body = `[encrypted #${topic} message — read it with: claudemesh topic tail ${topic}]`;
+    } else {
+      ctx.log?.("warn", "inbound_decrypt_failed", {
+        broker_message_id: brokerMessageId,
+        sender: senderPubkey.slice(0, 16),
+        has_nonce: Boolean(nonce),
+      });
+      ctx.ackClientMessage?.(clientMessageId, brokerMessageId);
+      return;
+    }
+  }
 
   const id = randomUUID();
   const inserted = insertIfNew(ctx.db, {
@@ -178,11 +196,11 @@ async function decryptOrFallback(args: {
     }
   }
 
-  // Fallback: broadcast/topic posts are base64 plaintext (existing CLI
-  // pre-encryption convention for `*` and `@topic`). Sprint 7+ adds per-
-  // topic symmetric keys.
-  try { return Buffer.from(ciphertext, "base64").toString("utf8"); }
-  catch (e) { ctx.log?.("warn", "inbound_b64_decode_failed", { err: String(e) }); return null; }
+  // A sealed payload (nonce + sender) that no key opened is NOT base64
+  // plaintext — decoding it produced the raw-binary injection of the
+  // 2026-09-26 report. Only unsealed v1 broadcasts take the fallback.
+  if (nonce && senderPubkey) return null;
+  return decodeBase64Utf8(ciphertext);
 }
 
 function stringOrNull(v: unknown): string | null {
