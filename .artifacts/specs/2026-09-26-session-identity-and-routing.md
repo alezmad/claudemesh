@@ -77,11 +77,14 @@ Result: replies fan out to sibling sessions → noise. Fix all three; each alone
 - bug9 `send` to a control-plane row says so (not "ephemeral"); `peer list --all` tags control-plane.
 
 ## Smoke tests
-| case | expected |
-|---|---|
-| push with sealed DM + wrong key | no inbox row, no channel event, `inbound_decrypt_failed` logged, acked |
-| broadcast base64 of invalid UTF-8 | dropped, not rendered |
-| resumed session (`claude --resume`) | same session pubkey, sends signed by session key |
-| DM to a member pubkey (policy reject) | broker error `member_target_requires_fanout` |
-| reply via channel `from_pubkey` | lands in exactly one session |
-| `message status <8 chars printed by send>` | resolves |
+Local E2E drill: `.artifacts/test-runs/2026-09-26-session-routing-drill.md`.
+
+| case | expected | result |
+|---|---|---|
+| push with sealed DM + wrong key | no inbox row, no channel event, `inbound_decrypt_failed` logged, acked | ✅ unit (inbound-undecryptable) |
+| broadcast base64 of invalid UTF-8 | dropped, not rendered | ✅ unit |
+| resumed session (lost registration) | same session pubkey, sends signed by session key | ✅ drill #3, #8 |
+| DM to a member pubkey with >1 session | refused with candidates (CLI/daemon); broker warn/reject | ✅ drill #1, #6, #7 |
+| reply via channel `from_pubkey` | lands in exactly one session | ✅ drill #2 (routing); ⬜ MCP meta in a real Claude session |
+| `message status <8 chars printed by send>` | resolves | ✅ drill #4 |
+| broadcast seen once by every session | whichever copy lands first | ✅ unit (inbound-multicast) |
