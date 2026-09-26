@@ -98,6 +98,8 @@ export function shouldDeliver(e: DaemonEvent, f: SseFilterOptions): boolean {
     return !!f.sessionPubkey && f.sessionPubkey.toLowerCase() === recipientPubkey;
   }
   if (recipientKind === "member") {
+    const excluded = typeof e.data.exclude_session_pubkey === "string" ? e.data.exclude_session_pubkey.toLowerCase() : null;
+    if (excluded && f.sessionPubkey && f.sessionPubkey.toLowerCase() === excluded) return false;
     return !!f.memberPubkey && f.memberPubkey.toLowerCase() === recipientPubkey;
   }
   return true;

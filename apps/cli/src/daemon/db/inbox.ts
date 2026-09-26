@@ -111,6 +111,21 @@ export function insertIfNew(
   return after?.id === row.id ? row.id : null;
 }
 
+/** 1.38.0: the row a client_message_id already landed as, if any. */
+export function findByClientMessageId(
+  db: SqliteDb,
+  clientMessageId: string,
+): Pick<InboxRow, "id" | "body" | "recipient_pubkey" | "recipient_kind"> | null {
+  return db.prepare(
+    `SELECT id, body, recipient_pubkey, recipient_kind FROM inbox WHERE client_message_id = ?`,
+  ).get<Pick<InboxRow, "id" | "body" | "recipient_pubkey" | "recipient_kind">>(clientMessageId) ?? null;
+}
+
+/** 1.38.0: widen a session-scoped row to the whole member (multicast). */
+export function promoteToMember(db: SqliteDb, id: string, memberPubkey: string): void {
+  db.prepare(`UPDATE inbox SET recipient_kind = 'member', recipient_pubkey = ? WHERE id = ?`).run(memberPubkey, id);
+}
+
 export interface ListInboxParams {
   since?: number;        // received_at >= since
   topic?: string;

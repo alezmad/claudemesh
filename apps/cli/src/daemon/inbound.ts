@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { SqliteDb } from "./db/sqlite.js";
-import { insertIfNew } from "./db/inbox.js";
+import { findByClientMessageId, insertIfNew, promoteToMember } from "./db/inbox.js";
 import type { EventBus } from "./events.js";
 import { decryptDirect } from "~/services/crypto/facade.js";
 import { decodeBase64Utf8 } from "~/utils/text.js";
@@ -116,6 +116,41 @@ export async function handleBrokerPush(msg: Record<string, unknown>, ctx: Inboun
       ctx.ackClientMessage?.(clientMessageId, brokerMessageId);
       return;
     }
+  }
+
+  // 1.38.0 (spec 2026-09-26 §3): a multicast (broadcast / group / topic)
+  // reaches this daemon twice — on the member-WS (visible to every session)
+  // and on a session-WS (visible to that session). Dedupe used to keep
+  // whichever landed first, so a session copy winning hid the message from
+  // every other session. Converge on the member-wide row instead.
+  const existing = ctx.recipientKind
+    ? findByClientMessageId(ctx.db, clientMessageId)
+    : null;
+  if (existing && existing.recipient_kind && existing.recipient_kind !== ctx.recipientKind) {
+    ctx.ackClientMessage?.(clientMessageId, brokerMessageId);
+    if (ctx.recipientKind === "member" && existing.recipient_kind === "session" && ctx.recipientPubkey) {
+      promoteToMember(ctx.db, existing.id, ctx.recipientPubkey);
+      ctx.bus.publish("message", {
+        id: existing.id,
+        mesh: ctx.meshSlug,
+        client_message_id: clientMessageId,
+        broker_message_id: brokerMessageId,
+        sender_pubkey: senderPubkey,
+        sender_member_pubkey: senderMemberPk,
+        sender_name: senderName,
+        topic,
+        reply_to_id: replyToId,
+        priority,
+        ...(subtype ? { subtype } : {}),
+        body: existing.body,
+        created_at: createdAt,
+        recipient_pubkey: ctx.recipientPubkey,
+        recipient_kind: "member",
+        // the session that already rendered it must not see it twice
+        ...(existing.recipient_pubkey ? { exclude_session_pubkey: existing.recipient_pubkey } : {}),
+      });
+    }
+    return;
   }
 
   const id = randomUUID();
