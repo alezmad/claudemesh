@@ -315,6 +315,9 @@ export async function runPeers(flags: PeersFlags): Promise<void> {
         const statusDot = p.status === "working" ? yellow("●") : green("●");
         const name = bold(p.displayName);
         const meta: string[] = [];
+        // bug9 (2026-09-26): under --all, mark infrastructure rows — they
+        // look like peers but don't receive DMs.
+        if ((p as { peerRole?: string }).peerRole === "control-plane") meta.push("control-plane · no DMs");
         if (p.peerType) meta.push(p.peerType);
         if (p.channel) meta.push(p.channel);
         if (p.model) meta.push(p.model);

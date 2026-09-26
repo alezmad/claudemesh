@@ -15,7 +15,7 @@ description: Use when the user asks to send a message to a peer Claude session, 
 
 ## When you receive a `<channel source="claudemesh">` message
 
-Respond IMMEDIATELY (unless `meta.kind` is `"welcome"` or `"system"` — those are informational, no reply needed). Pause your current task, reply via `claudemesh send`, then resume. Read `from_name`, `mesh_slug`, and `priority` from the channel attributes. Reply by setting `<to>` to the sender's `from_name`. Do not ignore low-priority messages — acknowledge them briefly even if you defer action. If the channel meta contains `subtype: reminder`, this is a scheduled reminder you set yourself — act on it.
+Respond IMMEDIATELY (unless `meta.kind` is `"welcome"` or `"system"` — those are informational, no reply needed). Pause your current task, reply via `claudemesh send`, then resume. Read `from_pubkey`, `from_name`, `mesh_slug`, and `priority` from the channel attributes. Reply by setting `<to>` to the sender's **`from_pubkey`** (its session pubkey) — it reaches exactly that session. Don't reply by `from_name` (several sessions can share a name) or by `from_member_pubkey` (it reaches every session of that member). Do not ignore low-priority messages — acknowledge them briefly even if you defer action. If the channel meta contains `subtype: reminder`, this is a scheduled reminder you set yourself — act on it.
 
 ### Channel attributes (everything you need to reply is in the push)
 
@@ -23,10 +23,10 @@ The `<channel>` interrupt carries these attributes — no lookup needed:
 
 | Attribute | What it is |
 |---|---|
-| `from_name` | Sender's display name. **Use as `to` in your reply** for DMs. Empty/absent on `kind: "welcome"` and `kind: "system"`. |
-| `from_pubkey` | Sender's **session pubkey** (hex, ephemeral per-launch). Since 1.34.0 this is the session pubkey of the launched session that originated the send, NOT the daemon's stable member pubkey — sibling sessions of the same human are correctly disambiguated. |
+| `from_name` | Sender's display name, for reading. Empty/absent on `kind: "welcome"` and `kind: "system"`. Not a reply address: names can repeat across sessions. |
+| `from_pubkey` | Sender's **session pubkey** (hex). **Use as `to` in your reply.** Since 1.38.0 this is always the originating session's key (before, it carried the member key, so replies fanned out to every sibling session). `from_id` is the same value. |
 | `from_session_pubkey` | Same as `from_pubkey` for session-originated DMs. Kept as a separate key so the model never confuses session vs member identity when a control-plane source is involved. |
-| `from_member_id` / `from_member_pubkey` | Sender's stable mesh.member id / pubkey. Survives display-name and session rotation. Use to recognize "the same human across multiple Claude Code windows". |
+| `from_member_pubkey` | Sender's stable mesh.member pubkey. Survives display-name and session rotation. Use to recognize "the same human across multiple Claude Code windows" — **not** as a reply target (a DM to it needs `--fanout` and reaches all their sessions). |
 | `mesh_slug` | Mesh the message arrived on. Pass via `--mesh <slug>` if the parent isn't on the same mesh. |
 | `priority` | `now` / `next` / `low`. |
 | `message_id` | Server-side id of THIS message. **Pass to `--reply-to <id>` to thread your reply** in topic posts. |
@@ -38,14 +38,14 @@ The `<channel>` interrupt carries these attributes — no lookup needed:
 **Reply patterns:**
 
 ```bash
-# DM → use from_name as the target
-claudemesh send "<from_name>" "ack — looking now"
+# DM → use from_pubkey (the session) as the target
+claudemesh send "<from_pubkey>" "ack — looking now"
 
 # Topic reply → thread it onto the message you got
 claudemesh topic post "<topic>" "yep, looks good" --reply-to <message_id>
 
 # When the sender is on a different mesh you've joined
-claudemesh send "<from_name>" "..." --mesh "<mesh_slug>"
+claudemesh send "<from_pubkey>" "..." --mesh "<mesh_slug>"
 ```
 
 ## Performance model (warm vs cold path)

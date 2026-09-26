@@ -37,7 +37,7 @@ interface Fake {
 function startFakeDaemon(opts: { keepalive?: boolean } = {}): Promise<Fake> {
   const fake: Fake = { connections: 0, responses: [] };
   server = createServer((req, res) => {
-    if (req.url !== "/v1/events") { res.statusCode = 404; res.end(); return; }
+    if ((req.url ?? "").split("?")[0] !== "/v1/events") { res.statusCode = 404; res.end(); return; }
     fake.connections++;
     fake.responses.push(res);
     res.statusCode = 200;

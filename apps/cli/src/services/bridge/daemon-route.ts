@@ -308,7 +308,7 @@ export type DaemonSendOk = {
   duplicate?: boolean;
   status?: "queued" | "inflight";
 };
-export type DaemonSendErr = { ok: false; error: string };
+export type DaemonSendErr = { ok: false; error: string; candidates?: Array<{ pubkey: string; displayName: string }> };
 export type DaemonSendResult = DaemonSendOk | DaemonSendErr;
 
 export async function trySendViaDaemon(args: {
@@ -322,6 +322,8 @@ export async function trySendViaDaemon(args: {
    *  so for v0.9.0 this is informational; the caller already picked the
    *  right mesh by either flag or single-mesh-default. */
   expectedMesh?: string;
+  /** 1.38.0: deliver a member-key DM to every live session of that member. */
+  fanout?: boolean;
 }): Promise<DaemonSendResult | null> {
   if (!(await daemonReachable())) return null;
 
@@ -332,6 +334,8 @@ export async function trySendViaDaemon(args: {
       broker_message_id?: string;
       duplicate?: boolean;
       error?: string;
+      detail?: string;
+      candidates?: Array<{ pubkey: string; displayName: string }>;
     }>({
       method: "POST",
       path: "/v1/send",
@@ -346,6 +350,7 @@ export async function trySendViaDaemon(args: {
         // daemon still works (auto-pick); omitting it on a multi-mesh
         // daemon returns 400 with the attached list.
         ...(args.expectedMesh ? { mesh: args.expectedMesh } : {}),
+        ...(args.fanout ? { fanout: true } : {}),
       },
     });
 
@@ -357,7 +362,11 @@ export async function trySendViaDaemon(args: {
         status: res.body.status,
       };
     }
-    return { ok: false, error: res.body.error ?? `daemon http ${res.status}` };
+    return {
+      ok: false,
+      error: res.body.detail ?? res.body.error ?? `daemon http ${res.status}`,
+      ...(res.body.candidates?.length ? { candidates: res.body.candidates } : {}),
+    };
   } catch (err) {
     // Connection errors → daemon went away mid-call. Treat as "not present"
     // so the caller falls back rather than failing.

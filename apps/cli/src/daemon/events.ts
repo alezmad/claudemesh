@@ -62,9 +62,13 @@ export interface SseFilterOptions {
    *  When set, system events (peer_join etc.) are filtered to this
    *  mesh; without it every system event surfaces. */
   meshSlug?: string;
+  /** 1.38.0: the subscriber is a session's MCP. Without a resolved
+   *  session it gets no message events at all (spec 2026-09-26 §2). */
+  requireSession?: boolean;
 }
 
-function shouldDeliver(e: DaemonEvent, f: SseFilterOptions): boolean {
+export function shouldDeliver(e: DaemonEvent, f: SseFilterOptions): boolean {
+  if (f.requireSession && !f.sessionPubkey && e.kind === "message") return false;
   // No filter set → legacy behavior: deliver everything (used by
   // diagnostic tooling like `claudemesh daemon events`).
   if (!f.sessionPubkey && !f.memberPubkey && !f.meshSlug) return true;

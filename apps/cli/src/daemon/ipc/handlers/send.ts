@@ -45,6 +45,9 @@ export interface SendRequest {
    *  broker fan-out attributes the push to the session pubkey instead
    *  of the daemon's member pubkey. */
   sender_session_pubkey?: string;
+  /** 1.38.0: the caller explicitly wants a member-key DM delivered to every
+   *  live session of that member (spec 2026-09-26 §3). Off by default. */
+  fanout?: boolean;
 }
 
 export type AcceptOutcome =

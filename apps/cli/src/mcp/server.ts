@@ -218,7 +218,7 @@ export function subscribeEvents(
     // receives every event.
     const headers: Record<string, string> = { Accept: "text/event-stream" };
     if (opts.sessionToken) headers.Authorization = `ClaudeMesh-Session ${opts.sessionToken}`;
-    const thisReq = httpRequest({ socketPath, path: "/v1/events", method: "GET", headers });
+    const thisReq = httpRequest({ socketPath, path: "/v1/events?scope=session", method: "GET", headers });
     req = thisReq;
     let buffer = "";
 
@@ -439,6 +439,11 @@ export async function startMcpServer(): Promise<void> {
     if (ev.kind === "message") {
       const d = ev.data;
       const fromName = String(d.sender_name ?? "unknown");
+      // 1.38.0 (spec 2026-09-26 §3): from_pubkey / from_id are the sender's
+      // SESSION pubkey — the only key a reply reaches exactly one session
+      // with. They used to carry the member key, so replying fanned out to
+      // every session of that member. The member key moves to its own field.
+      const fromSession = String(d.sender_pubkey ?? "");
       const fromMember = String(d.sender_member_pubkey ?? d.sender_pubkey ?? "");
       const rawBody = typeof d.body === "string" ? d.body : null;
       // 1.38.0 (spec 2026-09-26 §1): second guard — never hand Claude
@@ -458,9 +463,10 @@ export async function startMcpServer(): Promise<void> {
           params: {
             content,
             meta: {
-              from_id: fromMember,
-              from_pubkey: fromMember,
-              from_session_pubkey: String(d.sender_pubkey ?? ""),
+              from_id: fromSession || fromMember,
+              from_pubkey: fromSession || fromMember,
+              from_session_pubkey: fromSession,
+              from_member_pubkey: fromMember,
               from_name: fromName,
               mesh_slug: String(d.mesh ?? ""),
               priority,

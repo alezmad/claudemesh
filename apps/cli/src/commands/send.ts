@@ -27,6 +27,11 @@ export interface SendFlags {
    * sibling session is almost always an accident (copying a hex
    * pubkey from `peer list` without realizing it was your own row). */
   self?: boolean;
+  /** 1.38.0: a member-pubkey target reaches every live session of that
+   *  member. Without it such a target must resolve to exactly one session
+   *  (spec 2026-09-26 §3) — the default fan-out was the "messages land on
+   *  the wrong peers" noise. */
+  fanout?: boolean;
 }
 
 export async function runSend(flags: SendFlags, to: string, message: string): Promise<void> {
@@ -109,6 +114,17 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
           render.hint("Check `claudemesh peer list` (add --mesh <slug> to scope).");
           process.exit(1);
         }
+      } else if (uniq.length > 1 && isFullPubkey && meshesHit.length === 1
+                 && !uniq.some((m) => m.pubkey.toLowerCase() === lower)) {
+        // A full MEMBER pubkey with several live sessions. Fan-out only on
+        // request; otherwise make the caller pick the session.
+        meshSlug = meshesHit[0]!;
+        if (!flags.fanout) {
+          render.err(`${to.slice(0, 16)}… is a member key with ${uniq.length} live sessions — a DM to it reaches all of them.`);
+          render.hint(`sessions: ${uniq.map((m) => `${m.displayName} ${m.pubkey.slice(0, 16)}…`).join(", ")}`);
+          render.hint("Send to one session pubkey, or pass --fanout to reach every session on purpose.");
+          process.exit(1);
+        }
       } else if (uniq.length > 1) {
         if (meshesHit.length > 1 && !meshSlug) {
           // Target lives on several meshes — disambiguate by mesh, not prefix.
@@ -166,9 +182,16 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
       try {
         const { tryListPeersViaDaemon } = await import("~/services/bridge/daemon-route.js");
         const { getSessionInfo } = await import("~/services/session/resolve.js");
-        const peers = (await tryListPeersViaDaemon()) ?? [];
+        const peers = (await tryListPeersViaDaemon(meshSlug)) ?? [];
         const session = await getSessionInfo();
         const ownSessionPk = session?.presence?.sessionPubkey?.toLowerCase();
+        // 1.38.0: without our own session pubkey we can't exclude ourselves
+        // — an unregistered (resumed) session would message its own new row.
+        if (!ownSessionPk) {
+          render.err("--self needs this session to be registered with the daemon, and it isn't.");
+          render.hint("Run `claudemesh session reattach` from this session, then retry.");
+          process.exit(1);
+        }
         const siblings = peers.filter((p) => {
           const r = p as { memberPubkey?: string; pubkey?: string; channel?: string; peerRole?: string };
           if (!r.pubkey) return false;
@@ -250,24 +273,33 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
     const peers = await tryListPeersViaDaemon(meshSlug);
     if (peers !== null) {
       const lower = to.toLowerCase();
-      const match = peers.find((p) => {
-        const r = p as { pubkey?: string; memberPubkey?: string; peerRole?: string };
-        if (r.peerRole === "control-plane") return false;
+      const isKey = (p: unknown) => {
+        const r = p as { pubkey?: string; memberPubkey?: string };
         return r.pubkey?.toLowerCase() === lower || r.memberPubkey?.toLowerCase() === lower;
-      });
+      };
+      const isControlPlane = (p: unknown) => (p as { peerRole?: string }).peerRole === "control-plane";
+      const match = peers.find((p) => !isControlPlane(p) && isKey(p));
+      // bug9 (2026-09-26): the target is a daemon/control-plane row — it's
+      // listed under `peer list --all` but is infrastructure, not a
+      // session. Say so instead of blaming "ephemeral keys".
+      if (!match && peers.some((p) => isControlPlane(p) && (p as { pubkey?: string }).pubkey?.toLowerCase() === lower)) {
+        render.err(`${to.slice(0, 16)}… is a control-plane (daemon) row, not a session — it doesn't receive DMs.`);
+        render.hint("Pick a session pubkey from `claudemesh peer list` (without --all).");
+        process.exit(1);
+      }
       recipientOnline = !!match;
       recipientName = match ? (match as { displayName?: string }).displayName : undefined;
     }
   }
   const offlineHint =
-    "Session pubkeys are ephemeral — a key from an ended session never reconnects, so the message can't be delivered. Re-fetch a live target with `claudemesh peer list --json`.";
+    "It's queued and delivers when that session reconnects. If the session was relaunched it has a new key — re-fetch a live target with `claudemesh peer list --json`.";
 
   // Daemon path — preferred when a long-lived daemon is local. UDS at
   // ~/.claudemesh/daemon/daemon.sock; ~1ms round-trip; persists outbox
   // across CLI invocations so a `claudemesh send` survives a daemon
   // crash via the on-disk outbox.
   {
-    const dr = await trySendViaDaemon({ to, message, priority, expectedMesh: meshSlug ?? undefined });
+    const dr = await trySendViaDaemon({ to, message, priority, expectedMesh: meshSlug ?? undefined, fanout: !!flags.fanout });
     if (dr !== null) {
       if (dr.ok) {
         if (flags.json) {
@@ -286,7 +318,12 @@ export async function runSend(flags: SendFlags, to: string, message: string): Pr
       }
       // Daemon answered but rejected (409 idempotency, 400 schema). Surface; do not fall through.
       if (flags.json) console.log(JSON.stringify({ ok: false, error: dr.error, via: "daemon" }));
-      else render.err(`send failed (daemon): ${dr.error}`);
+      else {
+        render.err(`send failed (daemon): ${dr.error}`);
+        if (dr.candidates?.length) {
+          render.hint(`candidates: ${dr.candidates.map((c) => `${c.displayName} ${c.pubkey.slice(0, 16)}…`).join(", ")}`);
+        }
+      }
       process.exit(1);
     }
     // dr === null → daemon not running and lifecycle couldn't auto-

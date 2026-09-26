@@ -4,6 +4,7 @@ import { timingSafeEqual } from "node:crypto";
 
 import { DAEMON_PATHS, DAEMON_TCP_HOST, DAEMON_TCP_DEFAULT_PORT } from "../paths.js";
 import type { SqliteDb } from "../db/sqlite.js";
+import { resolveDirectTarget } from "../resolve-target.js";
 import { acceptSend, type SendRequest } from "./handlers/send.js";
 import { listInbox, deleteInboxRow, flushInbox, markInboxSeen } from "../db/inbox.js";
 import { listOutbox, requeueDeadOrPending, type OutboxStatus } from "../db/outbox.js";
@@ -420,8 +421,12 @@ function makeHandler(opts: {
       // session token (`claudemesh daemon events`) get the unfiltered
       // legacy stream. The bus itself stays single-shot; demux lives
       // entirely at the SSE bind layer (events.ts shouldDeliver).
-      const filter: Record<string, string> = {};
+      const filter: Record<string, string | boolean> = {};
       if (session?.presence?.sessionPubkey) filter.sessionPubkey = session.presence.sessionPubkey;
+      // 1.38.0: an MCP (scope=session) whose token doesn't resolve — a
+      // resumed session that lost its registration — used to fall into
+      // the unfiltered legacy stream and render every sibling's DMs.
+      if (url.searchParams.get("scope") === "session") filter.requireSession = true;
       if (session?.mesh) {
         filter.meshSlug = session.mesh;
         const meshCfg = opts.meshConfigs?.get(session.mesh);
@@ -932,6 +937,10 @@ function makeHandler(opts: {
               parsed.req.sender_session_pubkey = senderSessionPubkey;
             }
           } catch (e) {
+            if (e instanceof RouteError) {
+              respond(res, e.code === "not_found" ? 404 : 409, { error: e.code, detail: e.detail, candidates: e.candidates });
+              return;
+            }
             respond(res, 502, { error: "route_failed", detail: String(e) });
             return;
           }
@@ -1041,6 +1050,7 @@ function parseSendRequest(body: unknown, idempotencyHeader: string | string[] | 
   const reply_to_id = typeof b.reply_to_id === "string" ? b.reply_to_id : undefined;
 
   const mesh = typeof b.mesh === "string" ? b.mesh.trim() : undefined;
+  const fanout = b.fanout === true;
 
   return {
     req: {
@@ -1053,6 +1063,7 @@ function parseSendRequest(body: unknown, idempotencyHeader: string | string[] | 
       destination_kind,
       destination_ref,
       mesh,
+      ...(fanout ? { fanout } : {}),
     },
   };
 }
@@ -1094,39 +1105,27 @@ async function resolveAndEncrypt(
     return { target_spec: to, ciphertext, nonce, mesh: meshSlug ?? "" };
   }
 
-  // 64-char hex pubkey → DM directly. Encrypt with the daemon's member
-  // secret: recipient decrypts using THEIR session pubkey's matching
-  // secret on their session-WS, so the sender side just needs any
-  // private key whose public counterpart is known to the recipient as
-  // "the sender". Member key is the stable choice and is what the
-  // recipient already trusts via mesh membership.
-  if (/^[0-9a-f]{64}$/i.test(to)) {
-    const env = await encryptDirect(req.message, to, meshSecretKey);
-    return { target_spec: to, ciphertext: env.ciphertext, nonce: env.nonce, mesh: meshSlug ?? "" };
-  }
-
-  // Hex prefix (16+ chars but <64) → resolve via peer list prefix match.
-  // Matches the ergonomics of `claudemesh peer list` which shows 16-char
-  // prefixes, so users naturally paste prefixes back.
+  // Direct target (full pubkey, prefix, or display name). 1.38.0 (spec
+  // 2026-09-26 §3): one resolver for every caller — a member key is mapped
+  // to its single live session (or refused when it has several), and a
+  // name/prefix must match exactly one addressable peer. Before, a member
+  // key went straight out and the recipient's member-WS showed it to every
+  // sibling session; a duplicated name silently picked the first match.
   const peers = await broker.listPeers().catch(() => []);
-  if (/^[0-9a-f]{16,63}$/i.test(to)) {
-    const matches = peers.filter((p) =>
-      p.pubkey.toLowerCase().startsWith(to.toLowerCase()) ||
-      (p.memberPubkey ?? "").toLowerCase().startsWith(to.toLowerCase()),
-    );
-    if (matches.length === 0) throw new Error(`no peer matching prefix "${to}"`);
-    if (matches.length > 1) throw new Error(`prefix "${to}" is ambiguous (${matches.length} matches)`);
-    const recipient = matches[0]!.pubkey;
-    const env = await encryptDirect(req.message, recipient, meshSecretKey);
-    return { target_spec: recipient, ciphertext: env.ciphertext, nonce: env.nonce, mesh: meshSlug ?? "" };
-  }
-
-  // Otherwise — display name.
-  const match = peers.find((p) => p.displayName.toLowerCase() === to.toLowerCase());
-  if (!match) throw new Error(`peer "${to}" not found`);
-  const recipient = match.pubkey;
+  const resolved = resolveDirectTarget(to, peers, { fanout: req.fanout === true });
+  if (!resolved.ok) throw new RouteError(resolved.code, resolved.detail, resolved.candidates);
+  const recipient = resolved.pubkey;
   const env = await encryptDirect(req.message, recipient, meshSecretKey);
   return { target_spec: recipient, ciphertext: env.ciphertext, nonce: env.nonce, mesh: meshSlug ?? "" };
+}
+
+/** A send target that can't be resolved unambiguously — a 4xx, not a 502. */
+export class RouteError extends Error {
+  constructor(
+    readonly code: string,
+    readonly detail: string,
+    readonly candidates: Array<{ pubkey: string; displayName: string }>,
+  ) { super(detail); }
 }
 
 function respond(res: ServerResponse, status: number, body: unknown) {

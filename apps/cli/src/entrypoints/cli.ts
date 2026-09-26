@@ -403,7 +403,7 @@ async function main(): Promise<void> {
 
     // Messaging
     case "peers": { const { runPeers } = await import("~/commands/peers.js"); await runPeers({ mesh: flags.mesh as string, json: flags.json as boolean | string | undefined, all: !!flags.all }); break; }
-    case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self }, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
+    case "send": { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self, fanout: !!flags.fanout }, positionals[0] ?? "", positionals.slice(1).join(" ")); break; }
     case "inbox": {
       const sub = positionals[0];
       if (sub === "flush") {
@@ -571,7 +571,7 @@ async function main(): Promise<void> {
 
     case "message": {
       const sub = positionals[0];
-      if (sub === "send") { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self }, positionals[1] ?? "", positionals.slice(2).join(" ")); }
+      if (sub === "send") { const { runSend } = await import("~/commands/send.js"); await runSend({ mesh: flags.mesh as string, priority: flags.priority as string, json: !!flags.json, self: !!flags.self, fanout: !!flags.fanout }, positionals[1] ?? "", positionals.slice(2).join(" ")); }
       else if (sub === "inbox") {
         const sub2 = positionals[1];
         if (sub2 === "flush") {
