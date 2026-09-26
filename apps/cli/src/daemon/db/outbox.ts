@@ -162,12 +162,19 @@ export function fingerprintsEqual(a: Uint8Array, b: Uint8Array): boolean {
 export interface ListOutboxParams {
   status?: OutboxStatus;
   limit?: number;
+  /** 1.38.0 (bug8): the short id `send` prints is a client_message_id
+   *  prefix; match it with or without the UUID's hyphens. */
+  clientMessageIdPrefix?: string;
 }
 
 export function listOutbox(db: SqliteDb, p: ListOutboxParams = {}): OutboxRow[] {
   const where: string[] = [];
   const args: unknown[] = [];
   if (p.status) { where.push("status = ?"); args.push(p.status); }
+  if (p.clientMessageIdPrefix) {
+    where.push("replace(client_message_id, '-', '') LIKE ?");
+    args.push(`${p.clientMessageIdPrefix.replace(/-/g, "").toLowerCase()}%`);
+  }
   const sql = `
     SELECT id, client_message_id, request_fingerprint, payload, enqueued_at,
            attempts, next_attempt_at, status, last_error, delivered_at,

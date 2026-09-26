@@ -144,6 +144,33 @@ export async function runForget(id: string | undefined, opts: StateFlags): Promi
 // --- msg-status ---
 
 export async function runMsgStatus(id: string | undefined, opts: StateFlags): Promise<number> {
+  // bug8 (2026-09-26): `send` prints the first 8 chars of the daemon's
+  // client_message_id (a UUID) — the broker id doesn't exist yet when the
+  // send is queued. Resolve it through the local outbox first: it maps
+  // client id → broker id once delivered, and knows the local state
+  // (queued / dead + last_error) before the broker ever saw the message.
+  if (id && /^[0-9a-f-]{8,36}$/i.test(id)) {
+    const local = await lookupOutbox(id);
+    if (local === "ambiguous") {
+      render.err(`"${id}" matches several queued messages — paste more characters.`);
+      return EXIT.INVALID_ARGS;
+    }
+    if (local && !local.broker_message_id) {
+      if (opts.json) {
+        console.log(JSON.stringify({ ok: true, source: "daemon_outbox", ...local }, null, 2));
+      } else {
+        render.section(`message ${local.client_message_id.slice(0, 12)}… (local outbox)`);
+        render.kv([
+          ["state", local.status],
+          ["attempts", String(local.attempts)],
+          ...(local.last_error ? [["last error", local.last_error] as [string, string]] : []),
+          ["enqueued", local.enqueued_at],
+        ]);
+      }
+      return EXIT.SUCCESS;
+    }
+    if (local?.broker_message_id) id = local.broker_message_id;
+  }
   // Validate input shape *before* we open a WS connection, so a typo
   // returns a structured error instead of "not found or timed out".
   const v = validateMessageId(id);
@@ -321,4 +348,30 @@ export async function runTaskComplete(id: string | undefined, result: string | u
   }
   render.ok(`completed ${dim(id.slice(0, 8))}`, result);
   return EXIT.SUCCESS;
+}
+
+interface OutboxItem {
+  client_message_id: string;
+  broker_message_id: string | null;
+  status: string;
+  attempts: number;
+  last_error: string | null;
+  enqueued_at: string;
+}
+
+/** Look a client-id prefix up in the local daemon outbox. null = not found
+ *  or no daemon; "ambiguous" = several rows share the prefix. */
+async function lookupOutbox(prefix: string): Promise<OutboxItem | "ambiguous" | null> {
+  try {
+    const { ipc } = await import("~/daemon/ipc/client.js");
+    const res = await ipc<{ items?: OutboxItem[] }>({
+      path: `/v1/outbox?limit=2&client_message_id_prefix=${encodeURIComponent(prefix)}`,
+      timeoutMs: 1_500,
+    });
+    const items = res.status === 200 ? res.body.items ?? [] : [];
+    if (items.length > 1) return "ambiguous";
+    return items[0] ?? null;
+  } catch {
+    return null;
+  }
 }

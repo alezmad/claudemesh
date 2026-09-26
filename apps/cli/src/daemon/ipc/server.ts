@@ -833,9 +833,11 @@ function makeHandler(opts: {
         : undefined;
       const limitRaw = url.searchParams.get("limit");
       const limit = limitRaw ? Number.parseInt(limitRaw, 10) : undefined;
+      const cmidPrefix = url.searchParams.get("client_message_id_prefix") ?? undefined;
       const rows = listOutbox(opts.outboxDb, {
         status,
         limit: Number.isFinite(limit ?? NaN) ? limit : undefined,
+        ...(cmidPrefix && /^[0-9a-f-]{8,36}$/i.test(cmidPrefix) ? { clientMessageIdPrefix: cmidPrefix } : {}),
       });
       respond(res, 200, {
         items: rows.map((r) => ({
