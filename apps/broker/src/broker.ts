@@ -2456,6 +2456,10 @@ export async function drainForMember(
     /** v0.9.0 daemon fields; null for legacy traffic. */
     clientMessageId: string | null;
     requestFingerprint: string | null;
+    /** 1.38.0: identity + topic, mirroring the live push envelope. */
+    senderMemberPubkey: string;
+    senderName: string | null;
+    topic: string | null;
   }>
 > {
   const priorities = deliverablePriorities(status);
@@ -2524,6 +2528,9 @@ export async function drainForMember(
     sender_pubkey: string;
     client_message_id: string | null;
     request_fingerprint: string | null;
+    sender_member_pubkey: string;
+    sender_name: string | null;
+    topic_name: string | null;
   }>(sql`
     WITH claimed AS (
       UPDATE mesh.message_queue AS mq
@@ -2546,7 +2553,22 @@ export async function drainForMember(
       RETURNING mq.id, mq.priority, mq.nonce, mq.ciphertext,
                mq.created_at, mq.sender_member_id,
                mq.client_message_id, mq.request_fingerprint,
-               COALESCE(mq.sender_session_pubkey, m.peer_pubkey) AS sender_pubkey
+               COALESCE(mq.sender_session_pubkey, m.peer_pubkey) AS sender_pubkey,
+               -- 1.38.0 (spec 2026-09-26 §1): same identity fields the live
+               -- push carries, so a drained message renders with the right
+               -- author + topic instead of a bare 8-char pubkey.
+               m.peer_pubkey AS sender_member_pubkey,
+               COALESCE(
+                 (SELECT p.display_name FROM mesh.presence p
+                   WHERE mq.sender_session_pubkey IS NOT NULL
+                     AND p.session_pubkey = mq.sender_session_pubkey
+                     AND p.display_name IS NOT NULL
+                   ORDER BY p.connected_at DESC LIMIT 1),
+                 m.display_name
+               ) AS sender_name,
+               CASE WHEN mq.target_spec LIKE '#%'
+                 THEN (SELECT t.name FROM mesh.topic t WHERE t.id = substring(mq.target_spec from 2))
+               END AS topic_name
     )
     SELECT * FROM claimed ORDER BY created_at ASC, id ASC
   `);
@@ -2561,6 +2583,9 @@ export async function drainForMember(
     sender_pubkey: string;
     client_message_id: string | null;
     request_fingerprint: string | null;
+    sender_member_pubkey: string;
+    sender_name: string | null;
+    topic_name: string | null;
   }>;
   if (!rows || rows.length === 0) return [];
   return rows.map((r) => ({
@@ -2574,6 +2599,9 @@ export async function drainForMember(
     senderPubkey: r.sender_pubkey,
     clientMessageId: r.client_message_id ?? null,
     requestFingerprint: r.request_fingerprint ?? null,
+    senderMemberPubkey: r.sender_member_pubkey,
+    senderName: r.sender_name ?? null,
+    topic: r.topic_name ?? null,
   }));
 }
 

@@ -12,7 +12,7 @@
 import { afterAll, afterEach, describe, expect, test } from "vitest";
 import { and, eq } from "drizzle-orm";
 import { db } from "../src/db";
-import { presence, pendingStatus } from "@turbostarter/db/schema/mesh";
+import { meshTopic, meshTopicMember, presence, pendingStatus } from "@turbostarter/db/schema/mesh";
 import {
   applyPendingHookStatus,
   connectPresence,
@@ -393,6 +393,58 @@ describe("targetSpec routing", () => {
     );
     expect(drained).toHaveLength(1);
     expect(drained[0]!.ciphertext).toBe("hi everyone");
+  });
+
+  // 1.38.0 (spec 2026-09-26 §1): a drained push carries the same identity
+  // + topic fields as a live push. Without them the daemon rendered
+  // «<8-char pubkey>: <binary>» and couldn't tell a topic post from a DM.
+  test("drained topic post carries topic name + sender identity", async () => {
+    m = await setupTestMesh("drain-identity");
+    const [t] = await db
+      .insert(meshTopic)
+      .values({ meshId: m.meshId, name: "compras-orq" })
+      .returning({ id: meshTopic.id });
+    await db.insert(meshTopicMember).values({ topicId: t!.id, memberId: m.peerB.memberId });
+    const sessionPk = "c".repeat(64);
+    await db.insert(presence).values({
+      memberId: m.peerA.memberId, sessionId: "s-a", sessionPubkey: sessionPk,
+      displayName: "Intra-Back-session-1", pid: 1, cwd: "/tmp",
+    });
+    await queueMessage({
+      meshId: m.meshId,
+      senderMemberId: m.peerA.memberId,
+      senderSessionPubkey: sessionPk,
+      targetSpec: `#${t!.id}`,
+      priority: "now",
+      nonce: "nt",
+      ciphertext: "sealed",
+    });
+    const drained = await drainForMember(m.meshId, m.peerB.memberId, m.peerB.pubkey, "idle");
+    expect(drained).toHaveLength(1);
+    expect(drained[0]).toMatchObject({
+      topic: "compras-orq",
+      senderPubkey: sessionPk,
+      senderMemberPubkey: m.peerA.pubkey,
+      senderName: "Intra-Back-session-1",
+    });
+  });
+
+  test("drained DM without session falls back to the member display name", async () => {
+    m = await setupTestMesh("drain-member-name");
+    await queueMessage({
+      meshId: m.meshId,
+      senderMemberId: m.peerA.memberId,
+      targetSpec: m.peerB.pubkey,
+      priority: "now",
+      nonce: "nd",
+      ciphertext: "dm",
+    });
+    const drained = await drainForMember(m.meshId, m.peerB.memberId, m.peerB.pubkey, "idle");
+    expect(drained[0]).toMatchObject({
+      topic: null,
+      senderMemberPubkey: m.peerA.pubkey,
+      senderName: "peer-a-drain-member-name",
+    });
   });
 
   test("pubkey mismatch → message not drained", async () => {
