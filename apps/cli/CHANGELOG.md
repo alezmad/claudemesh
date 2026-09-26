@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.38.0 (2026-09-26) — messages reach the session they're meant for
+
+Source: flexicar-orchestrator report (9 bugs on 1.37.0) + "peers spread
+messages to the wrong peers". Spec:
+`.artifacts/specs/2026-09-26-session-identity-and-routing.md`; E2E drill:
+`.artifacts/test-runs/2026-09-26-session-routing-drill.md`. Includes 1.37.1.
+
+### Wrong-peer noise (the root thread)
+- Channel meta: `from_pubkey`/`from_id` are the sender's **session** key
+  (they carried the member key, so replies fanned out to every sibling
+  session); new `from_member_pubkey`. The skill now says reply to `from_pubkey`.
+- One daemon resolver for every `/v1/send`: a member key maps to its only
+  live session, is refused with candidates when it has several, and needs
+  `--fanout` (expanded client-side to one DM per session). Duplicate names /
+  prefixes are ambiguous instead of first-match; control-plane rows are never
+  addressable.
+- A session MCP without a resolved session no longer receives every sibling's
+  events; a broadcast now reaches each session exactly once.
+- Broker logs member-key DMs from older clients (`member_target_dm`);
+  `CLAUDEMESH_MEMBER_DM_POLICY=reject` refuses them.
+
+### Session identity (bug1, bug3)
+- A resumed/restarted claude re-attaches itself (MCP startup, auto-heal in
+  `send`, new `claudemesh session reattach`) with its persisted key, anchored
+  on claude's pid. The token lives next to the keypair, not the launch tmpdir.
+- `send` never goes out silently as the member from inside a session
+  (`--as-member` to do it on purpose); the daemon answers 401 `session_unknown`.
+- Keys don't change behind a session's back: one id per launch, non-UUID ids
+  persisted, daemon reload is load-only, no 24 h registry TTL.
+
+### Fixes
+- bug2: undecryptable ciphertext is never injected into a session (dropped +
+  logged, or a placeholder for topic posts); drained pushes carry sender +
+  topic like live ones.
+- bug4: outbox caps `session_ws_not_open` (from 1.37.1).
+- bug5: `topic history` decrypts like `topic tail`.
+- bug6: topic posts are labelled by the session that wrote them.
+- bug7: a confirm-gated command without a TTY says why it stopped (`--yes`).
+- bug8: the short id `send` prints resolves in `message status`.
+- bug9: DMs to control-plane rows say so; `peer list --all` tags them.
+
 ## 1.37.1 (2026-09-08) — daemon restart no longer blacks out the mesh
 
 Incident: after the local daemon restarted (launchd respawn), `peer list`
